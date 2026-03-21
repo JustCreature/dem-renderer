@@ -16,7 +16,25 @@ A learning-first, cache-optimized terrain + sunlight renderer in Rust using real
 
 ## Status
 
-The repository is in pre-implementation (planning) phase. No Rust source files exist yet. Implementation follows the phased plan in `docs/planning/global_plan.md`.
+**Current phase: Phase 1** (Phase 0 complete)
+
+Phase 0 artifacts:
+- `crates/profiling/src/lib.rs` — `now()` (cntvct_el0 via inline asm), `timed()`, tests
+- `src/main.rs` — scalar and NEON SIMD benchmarks for seq_read, random_read, seq_write, random_write
+- `docs/lessons/phase-0/long-report.md` — comprehensive Phase 0 student textbook
+- `docs/lessons/phase-0/short-report.md` — comprehensive Phase 0 reference
+- `docs/sessions/phase-0/main-session.md` — session log
+
+Phase 0 baseline numbers (M4 Max, 256 MB):
+- seq_read scalar: 5.7–6.7 GB/s | seq_read SIMD: 21.8–37 GB/s
+- random_read scalar: 0.6 GB/s | random_read SIMD: 1.4 GB/s
+- Sequential/random ratio: 11–16× — this number drives all Phase 1+ tiling decisions
+
+Known open items from Phase 0:
+- `count_gb_per_sec` calls `counter_frequency()` on every invocation (sleeps 100ms) — cache the result
+- `profiling::timed(label, ...)` in `random_read`, `seq_write`, `random_write` uses wrong label `"seq_read"` — fix
+
+Implementation follows the phased plan in `docs/planning/global_plan.md`.
 
 ## Build Commands
 
@@ -121,6 +139,28 @@ Before claiming an optimization works, measure:
 - Apple Silicon: Instruments CPU Counters template
 
 Key counters: `cache-misses`, `L1-dcache-load-misses`, `dTLB-load-misses`, `instructions`, `cycles`, `branches`, `branch-misses`, `resource_stalls.sb` (store buffer stalls), `fp_ret_sse_avx_ops.all`.
+
+## Custom Procedures
+
+### GENERATE_REPORTS{}
+
+When the user types `GENERATE_REPORTS{}`, do the following — no questions, no confirmation:
+
+1. **Determine the current phase** from the Status section above (e.g., "Phase 0").
+
+2. **Read the session log** at `docs/sessions/phase-N/main-session.md` to reconstruct what was covered.
+
+3. **Read the existing reports** at `docs/lessons/phase-N/long-report.md` and `docs/lessons/phase-N/short-report.md` if they exist.
+
+4. **Write `docs/lessons/phase-N/long-report.md`** — a comprehensive student textbook covering every concept from the phase. Structure: numbered parts, every term defined on first use, all hardware reasoning included, all code patterns shown with explanation, all gotchas and errors documented, all benchmark results with analysis. Think: a student who missed the session can learn everything from this document alone.
+
+5. **Write `docs/lessons/phase-N/short-report.md`** — a comprehensive reference document. Structure: numbered sections, every topic covered with brief but self-contained explanations (2–6 sentences per concept), all code patterns included, all tables and numbers. Think: a student who did the session uses this to refresh their full mental model in 10–15 minutes.
+
+6. **Do not update the session log** — that is written during or immediately after the session, not on demand.
+
+The long report is a textbook. The short report is a thorough reference, not a cheatsheet.
+
+---
 
 ## Implementation Phases
 
