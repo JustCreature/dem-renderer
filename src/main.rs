@@ -1,3 +1,5 @@
+use std::path::Path;
+
 
 const N: usize = 64 * 1024 * 1024;
 
@@ -198,4 +200,7 @@ fn main() {
     random_write();
     println!("--------");
     
+
+    let tile_path = Path::new("n47_e011_1arc_v3_bil/n47_e011_1arc_v3.bil");
+    let heightmap = dem_io::parse_bil(tile_path).unwrap();
 }

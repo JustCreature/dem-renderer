@@ -19,3 +19,4 @@ path = "src/main.rs"
 
 [dependencies]
 profiling = { path = "crates/profiling" }
+dem_io = { path = "crates/dem_io" }
