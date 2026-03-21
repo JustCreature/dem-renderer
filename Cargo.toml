@@ -1,0 +1,21 @@
+[workspace]
+members = [
+    "crates/dem_io",
+    "crates/terrain",
+    "crates/render_cpu",
+    "crates/render_gpu",
+    "crates/profiling",
+]
+resolver = "2"
+
+[package]
+name = "dem_renderer"
+version = "0.1.0"
+edition = "2021"
+
+[[bin]]
+name = "dem_renderer"
+path = "src/main.rs"
+
+[dependencies]
+profiling = { path = "crates/profiling" }
