@@ -1,4 +1,3 @@
-
 #[cfg(target_arch = "aarch64")]
 pub fn now() -> u64 {
     let val: u64;
@@ -10,7 +9,7 @@ pub fn now() -> u64 {
 
 #[cfg(target_arch = "x86_64")]
 pub fn now() -> u64 {
-    unsafe {core::arch::x86_64::_rdtsc()}
+    unsafe { core::arch::x86_64::_rdtsc() }
 }
 
 pub fn timed<R, F: FnMut() -> R>(label: &str, mut f: F) -> (u64, R) {
@@ -24,7 +23,7 @@ pub fn timed<R, F: FnMut() -> R>(label: &str, mut f: F) -> (u64, R) {
 
     let wall_secs = t_wall.elapsed().as_secs_f64();
     println!("wall clock: {:.4} seconds", wall_secs);
-    
+
     (elapsed, result)
 }
 
@@ -49,7 +48,9 @@ mod test {
     #[test]
     fn timed_calls_the_closure() {
         let mut called = false;
-        timed("test", || {called = true; });
+        timed("test", || {
+            called = true;
+        });
         assert!(called)
     }
 }

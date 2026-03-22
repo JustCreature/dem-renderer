@@ -3,10 +3,11 @@ use std::path::Path;
 const N: usize = 64 * 1024 * 1024;
 
 fn shuffle(indices: &mut Vec<usize>) {
-    let mut rng = 12345u64;  // seed
+    let mut rng = 12345u64; // seed
     for i in (1..indices.len()).rev() {
-        rng = rng.wrapping_mul(6_364_136_223_846_793_005)
-                    .wrapping_add(1_442_695_040_888_963_407);
+        rng = rng
+            .wrapping_mul(6_364_136_223_846_793_005)
+            .wrapping_add(1_442_695_040_888_963_407);
         let j = (rng >> 33) as usize % (i + 1);
         indices.swap(i, j);
     }
@@ -31,39 +32,35 @@ fn count_gb_per_sec(ticks: u64) -> f64 {
 fn seq_read_simd(data: &[f32]) {
     use core::arch::aarch64::*;
 
-    let (ticks, _) = profiling::timed("seq_read", || {
+    let (ticks, _) = profiling::timed("seq_read", || unsafe {
+        let mut acc0 = vdupq_n_f32(0.0);
+        let mut acc1 = vdupq_n_f32(0.0);
+        let mut acc2 = vdupq_n_f32(0.0);
+        let mut acc3 = vdupq_n_f32(0.0);
 
-        unsafe {
-            let mut acc0 = vdupq_n_f32(0.0);
-            let mut acc1 = vdupq_n_f32(0.0);
-            let mut acc2 = vdupq_n_f32(0.0);
-            let mut acc3 = vdupq_n_f32(0.0);
+        for chunk in data.chunks_exact(16) {
+            let ptr = chunk.as_ptr();
 
-            for chunk in data.chunks_exact(16) {
+            let v0 = vld1q_f32(ptr);
+            let v1 = vld1q_f32(ptr.add(4));
+            let v2 = vld1q_f32(ptr.add(8));
+            let v3 = vld1q_f32(ptr.add(12));
 
-                let ptr = chunk.as_ptr();
-
-                let v0 = vld1q_f32(ptr);
-                let v1 = vld1q_f32(ptr.add(4));
-                let v2 = vld1q_f32(ptr.add(8));
-                let v3 = vld1q_f32(ptr.add(12));
-
-                acc0 = vaddq_f32(acc0, v0);
-                acc1 = vaddq_f32(acc1, v1);
-                acc2 = vaddq_f32(acc2, v2);
-                acc3 = vaddq_f32(acc3, v3);
-            }
-            
-            let sum01 = vaddq_f32(acc0, acc1);
-            let sum23 = vaddq_f32(acc2, acc3);
-            let total = vaddq_f32(sum01, sum23);
-
-            let sum = vaddvq_f32(total);
-
-            let remainder: f32 = data.chunks_exact(16).remainder().iter().sum();
-
-            std::hint::black_box(sum + remainder);
+            acc0 = vaddq_f32(acc0, v0);
+            acc1 = vaddq_f32(acc1, v1);
+            acc2 = vaddq_f32(acc2, v2);
+            acc3 = vaddq_f32(acc3, v3);
         }
+
+        let sum01 = vaddq_f32(acc0, acc1);
+        let sum23 = vaddq_f32(acc2, acc3);
+        let total = vaddq_f32(sum01, sum23);
+
+        let sum = vaddvq_f32(total);
+
+        let remainder: f32 = data.chunks_exact(16).remainder().iter().sum();
+
+        std::hint::black_box(sum + remainder);
     });
 
     let gb_per_sec = count_gb_per_sec(ticks);
@@ -71,39 +68,69 @@ fn seq_read_simd(data: &[f32]) {
 }
 
 fn random_read_simd(data: &[f32]) {
-      use core::arch::aarch64::*;
+    use core::arch::aarch64::*;
 
-      let mut indices: Vec<usize> = (0..N).collect();
-        shuffle(&mut indices);
+    let mut indices: Vec<usize> = (0..N).collect();
+    shuffle(&mut indices);
 
-      let (ticks, _) = profiling::timed("random_read_simd", || {
-          unsafe {
-              let ptr = data.as_ptr();
-              let mut acc0 = vdupq_n_f32(0.0);
-              let mut acc1 = vdupq_n_f32(0.0);
-              let mut acc2 = vdupq_n_f32(0.0);
-              let mut acc3 = vdupq_n_f32(0.0);
+    let (ticks, _) = profiling::timed("random_read_simd", || unsafe {
+        let ptr = data.as_ptr();
+        let mut acc0 = vdupq_n_f32(0.0);
+        let mut acc1 = vdupq_n_f32(0.0);
+        let mut acc2 = vdupq_n_f32(0.0);
+        let mut acc3 = vdupq_n_f32(0.0);
 
-              for chunk in indices.chunks_exact(16) {
-                  let v0 = vld1q_f32([*ptr.add(chunk[0]),  *ptr.add(chunk[1]),  *ptr.add(chunk[2]),  *ptr.add(chunk[3])].as_ptr());
-                  let v1 = vld1q_f32([*ptr.add(chunk[4]),  *ptr.add(chunk[5]),  *ptr.add(chunk[6]),  *ptr.add(chunk[7])].as_ptr());
-                  let v2 = vld1q_f32([*ptr.add(chunk[8]),  *ptr.add(chunk[9]),  *ptr.add(chunk[10]), *ptr.add(chunk[11])].as_ptr());
-                  let v3 = vld1q_f32([*ptr.add(chunk[12]), *ptr.add(chunk[13]), *ptr.add(chunk[14]), *ptr.add(chunk[15])].as_ptr());
+        for chunk in indices.chunks_exact(16) {
+            let v0 = vld1q_f32(
+                [
+                    *ptr.add(chunk[0]),
+                    *ptr.add(chunk[1]),
+                    *ptr.add(chunk[2]),
+                    *ptr.add(chunk[3]),
+                ]
+                .as_ptr(),
+            );
+            let v1 = vld1q_f32(
+                [
+                    *ptr.add(chunk[4]),
+                    *ptr.add(chunk[5]),
+                    *ptr.add(chunk[6]),
+                    *ptr.add(chunk[7]),
+                ]
+                .as_ptr(),
+            );
+            let v2 = vld1q_f32(
+                [
+                    *ptr.add(chunk[8]),
+                    *ptr.add(chunk[9]),
+                    *ptr.add(chunk[10]),
+                    *ptr.add(chunk[11]),
+                ]
+                .as_ptr(),
+            );
+            let v3 = vld1q_f32(
+                [
+                    *ptr.add(chunk[12]),
+                    *ptr.add(chunk[13]),
+                    *ptr.add(chunk[14]),
+                    *ptr.add(chunk[15]),
+                ]
+                .as_ptr(),
+            );
 
-                  acc0 = vaddq_f32(acc0, v0);
-                  acc1 = vaddq_f32(acc1, v1);
-                  acc2 = vaddq_f32(acc2, v2);
-                  acc3 = vaddq_f32(acc3, v3);
-              }
+            acc0 = vaddq_f32(acc0, v0);
+            acc1 = vaddq_f32(acc1, v1);
+            acc2 = vaddq_f32(acc2, v2);
+            acc3 = vaddq_f32(acc3, v3);
+        }
 
-              let total = vaddq_f32(vaddq_f32(acc0, acc1), vaddq_f32(acc2, acc3));
-              std::hint::black_box(vaddvq_f32(total));
-          }
-      });
+        let total = vaddq_f32(vaddq_f32(acc0, acc1), vaddq_f32(acc2, acc3));
+        std::hint::black_box(vaddvq_f32(total));
+    });
 
-      let gb_per_sec = count_gb_per_sec(ticks);
-      println!("random_read_simd: {:.1} GB/s", gb_per_sec);
-  }
+    let gb_per_sec = count_gb_per_sec(ticks);
+    println!("random_read_simd: {:.1} GB/s", gb_per_sec);
+}
 
 fn seq_read(data: &[f32]) {
     let (ticks, _) = profiling::timed("seq_read", || {
@@ -132,7 +159,6 @@ fn random_read(data: &[f32]) {
     let gb_per_sec = count_gb_per_sec(ticks);
     println!("random_read: {:.1} GB/s", gb_per_sec);
 }
-
 
 fn seq_write() {
     let (ticks, _) = profiling::timed("seq_read", || {
@@ -178,8 +204,8 @@ fn main() {
     println!("--------");
     random_write();
     println!("--------");
-    
 
     let tile_path = Path::new("n47_e011_1arc_v3_bil/n47_e011_1arc_v3.bil");
-    let (ticks, heightmap) = profiling::timed("build heightmap", ||  dem_io::parse_bil(tile_path).unwrap());
+    let (ticks, heightmap) =
+        profiling::timed("build heightmap", || dem_io::parse_bil(tile_path).unwrap());
 }
