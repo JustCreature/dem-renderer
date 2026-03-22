@@ -1,6 +1,5 @@
 use std::path::Path;
 
-
 const N: usize = 64 * 1024 * 1024;
 
 fn shuffle(indices: &mut Vec<usize>) {
@@ -32,8 +31,7 @@ fn count_gb_per_sec(ticks: u64) -> f64 {
 fn seq_read_simd(data: &[f32]) {
     use core::arch::aarch64::*;
 
-    let t_wall = std::time::Instant::now();
-    let ticks = profiling::timed("seq_read", || {
+    let (ticks, _) = profiling::timed("seq_read", || {
 
         unsafe {
             let mut acc0 = vdupq_n_f32(0.0);
@@ -66,11 +64,7 @@ fn seq_read_simd(data: &[f32]) {
 
             std::hint::black_box(sum + remainder);
         }
-
-
     });
-    let wall_secs = t_wall.elapsed().as_secs_f64();
-    println!("wall clock: {:.4} seconds", wall_secs);
 
     let gb_per_sec = count_gb_per_sec(ticks);
     println!("seq_read_simd: {:.1} GB/s", gb_per_sec);
@@ -82,8 +76,7 @@ fn random_read_simd(data: &[f32]) {
       let mut indices: Vec<usize> = (0..N).collect();
         shuffle(&mut indices);
 
-      let t_wall = std::time::Instant::now();
-      let ticks = profiling::timed("random_read_simd", || {
+      let (ticks, _) = profiling::timed("random_read_simd", || {
           unsafe {
               let ptr = data.as_ptr();
               let mut acc0 = vdupq_n_f32(0.0);
@@ -108,31 +101,25 @@ fn random_read_simd(data: &[f32]) {
           }
       });
 
-      let wall_secs = t_wall.elapsed().as_secs_f64();                                                                                                            
-      println!("wall clock: {:.4} seconds", wall_secs);                                                                                                          
-      let gb_per_sec = count_gb_per_sec(ticks);                                                                                                                  
-      println!("random_read_simd: {:.1} GB/s", gb_per_sec);                                                                                                      
-  } 
+      let gb_per_sec = count_gb_per_sec(ticks);
+      println!("random_read_simd: {:.1} GB/s", gb_per_sec);
+  }
 
 fn seq_read(data: &[f32]) {
-    let t_wall = std::time::Instant::now();
-    let ticks = profiling::timed("seq_read", || {
+    let (ticks, _) = profiling::timed("seq_read", || {
         let mut sum = 0.0f32;
         for &x in data {
             sum += x;
         }
         std::hint::black_box(sum);
     });
-    let wall_secs = t_wall.elapsed().as_secs_f64();
-    println!("wall clock: {:.4} seconds", wall_secs);
 
     let gb_per_sec = count_gb_per_sec(ticks);
     println!("seq_read: {:.1} GB/s", gb_per_sec);
 }
 
 fn random_read(data: &[f32]) {
-    let t_wall = std::time::Instant::now();
-    let ticks = profiling::timed("seq_read", || {
+    let (ticks, _) = profiling::timed("seq_read", || {
         let mut sum = 0.0f32;
         let mut indices: Vec<usize> = (0..N).collect();
         shuffle(&mut indices);
@@ -141,8 +128,6 @@ fn random_read(data: &[f32]) {
         }
         std::hint::black_box(sum);
     });
-    let wall_secs = t_wall.elapsed().as_secs_f64();
-    println!("wall clock: {:.4} seconds", wall_secs);
 
     let gb_per_sec = count_gb_per_sec(ticks);
     println!("random_read: {:.1} GB/s", gb_per_sec);
@@ -150,24 +135,20 @@ fn random_read(data: &[f32]) {
 
 
 fn seq_write() {
-    let t_wall = std::time::Instant::now();
-    let ticks = profiling::timed("seq_read", || {
+    let (ticks, _) = profiling::timed("seq_read", || {
         let mut output = vec![0.0f32; N];
         for i in 0..N {
             output[i] = i as f32;
         }
         std::hint::black_box(output);
     });
-    let wall_secs = t_wall.elapsed().as_secs_f64();
-    println!("wall clock: {:.4} seconds", wall_secs);
 
     let gb_per_sec = count_gb_per_sec(ticks);
     println!("seq_write: {:.1} GB/s", gb_per_sec);
 }
 
 fn random_write() {
-    let t_wall = std::time::Instant::now();
-    let ticks = profiling::timed("seq_read", || {
+    let (ticks, _) = profiling::timed("seq_read", || {
         let mut output = vec![0.0f32; N];
         let mut indices: Vec<usize> = (0..N).collect();
         shuffle(&mut indices);
@@ -176,8 +157,6 @@ fn random_write() {
         }
         std::hint::black_box(output);
     });
-    let wall_secs = t_wall.elapsed().as_secs_f64();
-    println!("wall clock: {:.4} seconds", wall_secs);
 
     let gb_per_sec = count_gb_per_sec(ticks);
     println!("random_write: {:.1} GB/s", gb_per_sec);
@@ -202,5 +181,5 @@ fn main() {
     
 
     let tile_path = Path::new("n47_e011_1arc_v3_bil/n47_e011_1arc_v3.bil");
-    let heightmap = dem_io::parse_bil(tile_path).unwrap();
+    let (ticks, heightmap) = profiling::timed("build heightmap", ||  dem_io::parse_bil(tile_path).unwrap());
 }

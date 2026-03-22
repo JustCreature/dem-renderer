@@ -13,13 +13,19 @@ pub fn now() -> u64 {
     unsafe {core::arch::x86_64::_rdtsc()}
 }
 
-pub fn timed<F: FnMut()>(label: &str, mut f: F) -> u64 {
+pub fn timed<R, F: FnMut() -> R>(label: &str, mut f: F) -> (u64, R) {
+    let t_wall = std::time::Instant::now();
+
     let t0 = now();
-    f();
+    let result = f();
     let t1 = now();
     let elapsed = t1 - t0;
     println!("{},{}", label, elapsed);
-    elapsed
+
+    let wall_secs = t_wall.elapsed().as_secs_f64();
+    println!("wall clock: {:.4} seconds", wall_secs);
+    
+    (elapsed, result)
 }
 
 #[cfg(test)]
