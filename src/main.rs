@@ -1,6 +1,7 @@
 use std::path::Path;
 
 use dem_io::{Heightmap, TiledHeightmap};
+use terrain::{compute_normals_scalar, NormalMap};
 
 static FREQ: std::sync::OnceLock<f64> = std::sync::OnceLock::new();
 const N: usize = 64 * 1024 * 1024;
@@ -259,6 +260,25 @@ fn bench_neighbours_tiled_walk_tiles_order(hm: &TiledHeightmap) {
     println!("tiled_walk_tiles_order: {:.1} GB/s", gb_per_second);
 }
 
+fn create_cropped_image(heightmap: &Heightmap, normal_map: &NormalMap) {
+    let r_start = 1000;
+    let c_start = 1500;
+    let height = 500;
+    let width = 500;
+
+    let nz = &normal_map.nz;
+    let pixels: Vec<u8> = (r_start..r_start + height)
+        .flat_map(|r| {
+            (c_start..c_start + width).map(move |c| (nz[r * heightmap.cols + c] * 255.0) as u8)
+        })
+        .collect();
+
+    image::GrayImage::from_raw(width as u32, height as u32, pixels)
+        .unwrap()
+        .save("normals_crop.png")
+        .unwrap();
+}
+
 fn main() {
     println!("dem_renderer");
     let data: Vec<f32> = (0..N).map(|i| i as f32).collect();
@@ -320,4 +340,26 @@ fn main() {
     bench_neighbours_tiled_walk_tiles_order(&tiled_heightmap);
 
     assert_eq!(tiled_heightmap.tiles().as_ptr() as usize % 4096, 0);
+
+    println!("--------");
+
+    let (ticks, normal_map) = profiling::timed("build normals map from row-major hm", || {
+        compute_normals_scalar(&heightmap)
+    });
+    let gb_per_second: f64 = count_gb_per_sec(
+        ticks,
+        Some(4 * 2 * heightmap.rows * heightmap.cols + 3 * 4 * heightmap.rows * heightmap.cols),
+    );
+    println!(
+        "compute_normals_scalar_from_row_major_hm: {:.1} GB/s",
+        gb_per_second
+    );
+
+    let pixels: Vec<u8> = normal_map.nz.iter().map(|&v| (v * 255.0) as u8).collect();
+    image::GrayImage::from_raw(heightmap.cols as u32, heightmap.rows as u32, pixels)
+        .unwrap()
+        .save("normals_nz.png")
+        .unwrap();
+
+    create_cropped_image(&heightmap, &normal_map);
 }
