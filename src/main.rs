@@ -275,8 +275,59 @@ fn create_cropped_image(heightmap: &Heightmap, normal_map: &NormalMap) {
 
     image::GrayImage::from_raw(width as u32, height as u32, pixels)
         .unwrap()
-        .save("normals_crop.png")
+        .save("artifacts/normals_crop.png")
         .unwrap();
+}
+
+fn benchmark_normal_map_scalar(heightmap: &Heightmap) -> NormalMap {
+    let (ticks, normal_map) = profiling::timed("build normals map from row-major hm", || {
+        compute_normals_scalar(&heightmap)
+    });
+    let gb_per_second: f64 = count_gb_per_sec(
+        ticks,
+        Some(4 * 2 * heightmap.rows * heightmap.cols + 3 * 4 * heightmap.rows * heightmap.cols),
+    );
+    println!(
+        "compute_normals_scalar_from_row_major_hm: {:.1} GB/s",
+        gb_per_second
+    );
+
+    let pixels: Vec<u8> = normal_map.nz.iter().map(|&v| (v * 255.0) as u8).collect();
+    image::GrayImage::from_raw(heightmap.cols as u32, heightmap.rows as u32, pixels)
+        .unwrap()
+        .save("artifacts/normals_nz.png")
+        .unwrap();
+
+    create_cropped_image(&heightmap, &normal_map);
+
+    normal_map
+}
+
+fn benchmark_normal_map_vectorised(heightmap: &Heightmap) -> NormalMap {
+    let (ticks, normal_map_vec) =
+        profiling::timed("[vectotized] build normals map from row-major hm", || {
+            compute_normals_scalar(&heightmap)
+        });
+    let gb_per_second: f64 = count_gb_per_sec(
+        ticks,
+        Some(4 * 2 * heightmap.rows * heightmap.cols + 3 * 4 * heightmap.rows * heightmap.cols),
+    );
+    println!(
+        "[vectotized]compute_normals_scalar_from_row_major_hm: {:.1} GB/s",
+        gb_per_second
+    );
+
+    let pixels: Vec<u8> = normal_map_vec
+        .nz
+        .iter()
+        .map(|&v| (v * 255.0) as u8)
+        .collect();
+    image::GrayImage::from_raw(heightmap.cols as u32, heightmap.rows as u32, pixels)
+        .unwrap()
+        .save("artifacts/[vectotized]normals_nz.png")
+        .unwrap();
+
+    normal_map_vec
 }
 
 fn main() {
@@ -343,23 +394,6 @@ fn main() {
 
     println!("--------");
 
-    let (ticks, normal_map) = profiling::timed("build normals map from row-major hm", || {
-        compute_normals_scalar(&heightmap)
-    });
-    let gb_per_second: f64 = count_gb_per_sec(
-        ticks,
-        Some(4 * 2 * heightmap.rows * heightmap.cols + 3 * 4 * heightmap.rows * heightmap.cols),
-    );
-    println!(
-        "compute_normals_scalar_from_row_major_hm: {:.1} GB/s",
-        gb_per_second
-    );
-
-    let pixels: Vec<u8> = normal_map.nz.iter().map(|&v| (v * 255.0) as u8).collect();
-    image::GrayImage::from_raw(heightmap.cols as u32, heightmap.rows as u32, pixels)
-        .unwrap()
-        .save("normals_nz.png")
-        .unwrap();
-
-    create_cropped_image(&heightmap, &normal_map);
+    benchmark_normal_map_vectorised(&heightmap);
+    benchmark_normal_map_scalar(&heightmap);
 }

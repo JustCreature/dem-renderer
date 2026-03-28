@@ -161,7 +161,7 @@ fn build_grayscale_png(heightmap: &Heightmap, cols: usize, rows: usize) {
 
     image::GrayImage::from_raw(cols as u32, rows as u32, pixels)
         .unwrap()
-        .save("heightmap.png")
+        .save("artifacts/heightmap.png")
         .unwrap();
 }
 
