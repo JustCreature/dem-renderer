@@ -16,7 +16,7 @@ A learning-first, cache-optimized terrain + sunlight renderer in Rust using real
 
 ## Status
 
-**Current phase: Phase 1** (Phase 0 complete)
+**Current phase: Phase 2** (Phase 0 and Phase 1 complete)
 
 Phase 0 artifacts:
 - `crates/profiling/src/lib.rs` — `now()` (cntvct_el0 via inline asm), `timed()`, tests
@@ -30,9 +30,27 @@ Phase 0 baseline numbers (M4 Max, 256 MB):
 - random_read scalar: 0.6 GB/s | random_read SIMD: 1.4 GB/s
 - Sequential/random ratio: 11–16× — this number drives all Phase 1+ tiling decisions
 
-Known open items from Phase 0:
-- `count_gb_per_sec` calls `counter_frequency()` on every invocation (sleeps 100ms) — cache the result
+Phase 1 artifacts:
+- `crates/dem_io/src/heightmap.rs` — `Heightmap`, `parse_bil`, `fill_nodata`, `parse_hdr`
+- `crates/dem_io/src/tiled.rs` — `TiledHeightmap`, `from_heightmap(&Heightmap, tile_size)`, `get()` with `#[inline(always)]`
+- `crates/dem_io/src/aligned.rs` — `AlignedBuffer`: page-aligned (4096-byte) manual allocation with `Drop`, `Deref`, `DerefMut`
+- `crates/dem_io/src/lib.rs` — module declarations, re-exports
+- `src/main.rs` — neighbour-sum benchmarks (row-major, tiled row-major, tiled tile-order), cold-cache eviction pattern
+- `docs/lessons/phase-1/build_heightmap/` — reports for DEM parsing stage
+- `docs/lessons/phase-1/build_tiled_heightmap/` — reports for tiled layout + aligned allocation stage
+- `docs/sessions/phase-1/` — session logs
+
+Phase 1 key numbers (M4 Max, cold cache, tile_size=128):
+- row-major neighbour sum: 26–46 GB/s (prefetcher detects stride-3601)
+- tiled row-major iteration: 3.7–4.0 GB/s (iteration order mismatch + `get()` overhead)
+- tiled tile-order iteration: 3.0 GB/s (`get()` decomposition overhead dominates)
+- Lesson: `get()` abstraction cannot demonstrate tiling benefit — Phase 2 must use direct tile pointer arithmetic
+
+Known open items from Phase 1:
 - `profiling::timed(label, ...)` in `random_read`, `seq_write`, `random_write` uses wrong label `"seq_read"` — fix
+- `fill_nodata` division-by-zero if all 4 directions hit boundary without finding valid data
+- Drop `bil_bytes` early in `parse_bil` to halve peak memory
+- `AlignedBuffer` is not `Send`/`Sync` — needs `unsafe impl Send/Sync` for rayon in Phase 2
 
 Implementation follows the phased plan in `docs/planning/global_plan.md`.
 

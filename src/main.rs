@@ -1,5 +1,8 @@
 use std::path::Path;
 
+use dem_io::{Heightmap, TiledHeightmap};
+
+static FREQ: std::sync::OnceLock<f64> = std::sync::OnceLock::new();
 const N: usize = 64 * 1024 * 1024;
 
 fn shuffle(indices: &mut Vec<usize>) {
@@ -14,16 +17,18 @@ fn shuffle(indices: &mut Vec<usize>) {
 }
 
 fn counter_frequency() -> f64 {
-    let t0 = profiling::now();
-    std::thread::sleep(std::time::Duration::from_millis(100));
-    let t1 = profiling::now();
-    (t1 - t0) as f64 / 0.1
+    *FREQ.get_or_init(|| {
+        let t0 = profiling::now();
+        std::thread::sleep(std::time::Duration::from_millis(100));
+        let t1 = profiling::now();
+        (t1 - t0) as f64 / 0.1
+    })
 }
 
-fn count_gb_per_sec(ticks: u64) -> f64 {
+fn count_gb_per_sec(ticks: u64, bytes: Option<usize>) -> f64 {
     let freq = counter_frequency();
     let seconds = ticks as f64 / freq;
-    let bytes = N * std::mem::size_of::<f32>();
+    let bytes = bytes.unwrap_or(N * std::mem::size_of::<f32>());
     let gb_per_sec = bytes as f64 / seconds / 1_000_000_000.0;
     gb_per_sec
 }
@@ -63,7 +68,7 @@ fn seq_read_simd(data: &[f32]) {
         std::hint::black_box(sum + remainder);
     });
 
-    let gb_per_sec = count_gb_per_sec(ticks);
+    let gb_per_sec = count_gb_per_sec(ticks, None);
     println!("seq_read_simd: {:.1} GB/s", gb_per_sec);
 }
 
@@ -128,7 +133,7 @@ fn random_read_simd(data: &[f32]) {
         std::hint::black_box(vaddvq_f32(total));
     });
 
-    let gb_per_sec = count_gb_per_sec(ticks);
+    let gb_per_sec = count_gb_per_sec(ticks, None);
     println!("random_read_simd: {:.1} GB/s", gb_per_sec);
 }
 
@@ -141,7 +146,7 @@ fn seq_read(data: &[f32]) {
         std::hint::black_box(sum);
     });
 
-    let gb_per_sec = count_gb_per_sec(ticks);
+    let gb_per_sec = count_gb_per_sec(ticks, None);
     println!("seq_read: {:.1} GB/s", gb_per_sec);
 }
 
@@ -156,7 +161,7 @@ fn random_read(data: &[f32]) {
         std::hint::black_box(sum);
     });
 
-    let gb_per_sec = count_gb_per_sec(ticks);
+    let gb_per_sec = count_gb_per_sec(ticks, None);
     println!("random_read: {:.1} GB/s", gb_per_sec);
 }
 
@@ -169,7 +174,7 @@ fn seq_write() {
         std::hint::black_box(output);
     });
 
-    let gb_per_sec = count_gb_per_sec(ticks);
+    let gb_per_sec = count_gb_per_sec(ticks, None);
     println!("seq_write: {:.1} GB/s", gb_per_sec);
 }
 
@@ -184,8 +189,74 @@ fn random_write() {
         std::hint::black_box(output);
     });
 
-    let gb_per_sec = count_gb_per_sec(ticks);
+    let gb_per_sec = count_gb_per_sec(ticks, None);
     println!("random_write: {:.1} GB/s", gb_per_sec);
+}
+
+fn bench_neighbours_rowmajor(hm: &Heightmap) {
+    let (ticks, _) = profiling::timed("row_major", || {
+        let mut sum: i64 = 0i64;
+        for r in 1..hm.rows - 1 {
+            for c in 1..hm.cols - 1 {
+                sum += hm.data[(r - 1) * hm.cols + c] as i64;
+                sum += hm.data[(r + 1) * hm.cols + c] as i64;
+                sum += hm.data[r * hm.cols + (c - 1)] as i64;
+                sum += hm.data[r * hm.cols + (c + 1)] as i64;
+            }
+        }
+        std::hint::black_box(sum);
+    });
+    let gb_per_second: f64 = count_gb_per_sec(ticks, Some(4 * 2 * (hm.rows - 2) * (hm.cols - 2)));
+    println!("row_major: {:.1} GB/s", gb_per_second);
+}
+
+fn bench_neighbours_tiled(hm: &TiledHeightmap) {
+    let (ticks, _) = profiling::timed("row_major", || {
+        let mut sum: i64 = 0i64;
+        for r in 1..hm.rows - 1 {
+            for c in 1..hm.cols - 1 {
+                sum += hm.get(r - 1, c) as i64;
+                sum += hm.get(r + 1, c) as i64;
+                sum += hm.get(r, c - 1) as i64;
+                sum += hm.get(r, c + 1) as i64;
+            }
+        }
+        std::hint::black_box(sum);
+    });
+    let gb_per_second: f64 = count_gb_per_sec(ticks, Some(4 * 2 * (hm.rows - 2) * (hm.cols - 2)));
+    println!("tiled: {:.1} GB/s", gb_per_second);
+}
+
+fn bench_neighbours_tiled_walk_tiles_order(hm: &TiledHeightmap) {
+    let (ticks, _) = profiling::timed("row_major", || {
+        let mut sum: i64 = 0i64;
+        for tr in 0..hm.tile_rows {
+            for tc in 0..hm.tile_cols {
+                for r in 0..hm.tile_size {
+                    for c in 0..hm.tile_size {
+                        let global_row = tr * hm.tile_size + r;
+                        let global_col = tc * hm.tile_size + c;
+
+                        if global_row == 0
+                            || global_row >= hm.rows - 1
+                            || global_col == 0
+                            || global_col >= hm.cols - 1
+                        {
+                            continue;
+                        }
+
+                        sum += hm.get(global_row - 1, global_col) as i64;
+                        sum += hm.get(global_row + 1, global_col) as i64;
+                        sum += hm.get(global_row, global_col - 1) as i64;
+                        sum += hm.get(global_row, global_col + 1) as i64;
+                    }
+                }
+            }
+        }
+        std::hint::black_box(sum);
+    });
+    let gb_per_second: f64 = count_gb_per_sec(ticks, Some(4 * 2 * (hm.rows - 2) * (hm.cols - 2)));
+    println!("tiled_walk_tiles_order: {:.1} GB/s", gb_per_second);
 }
 
 fn main() {
@@ -206,6 +277,47 @@ fn main() {
     println!("--------");
 
     let tile_path = Path::new("n47_e011_1arc_v3_bil/n47_e011_1arc_v3.bil");
-    let (ticks, heightmap) =
+    let (_, heightmap) =
         profiling::timed("build heightmap", || dem_io::parse_bil(tile_path).unwrap());
+
+    let tiled_heightmap = dem_io::TiledHeightmap::from_heightmap(&heightmap, 128);
+
+    assert_eq!(
+        tiled_heightmap.get(100, 200),
+        heightmap.data[100 * heightmap.cols + 200]
+    );
+    assert_eq!(
+        tiled_heightmap.get(127, 200),
+        heightmap.data[127 * heightmap.cols + 200]
+    );
+    assert_eq!(
+        tiled_heightmap.get(128, 200),
+        heightmap.data[128 * heightmap.cols + 200]
+    );
+    assert_eq!(
+        tiled_heightmap.get(129, 200),
+        heightmap.data[129 * heightmap.cols + 200]
+    );
+
+    println!("--------");
+
+    // evict heightmap from cach
+    let evict: Vec<i32> = (0..16 * 1024 * 1024).map(|i| i as i32).collect();
+    std::hint::black_box(evict);
+
+    bench_neighbours_rowmajor(&heightmap);
+
+    // evict heightmap from cach
+    let evict: Vec<i32> = (0..16 * 1024 * 1024).map(|i| i as i32).collect();
+    std::hint::black_box(evict);
+
+    bench_neighbours_tiled(&tiled_heightmap);
+
+    // evict heightmap from cach
+    let evict: Vec<i32> = (0..16 * 1024 * 1024).map(|i| i as i32).collect();
+    std::hint::black_box(evict);
+
+    bench_neighbours_tiled_walk_tiles_order(&tiled_heightmap);
+
+    assert_eq!(tiled_heightmap.tiles().as_ptr() as usize % 4096, 0);
 }
