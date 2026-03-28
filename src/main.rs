@@ -1,7 +1,11 @@
 use std::path::Path;
 
 use dem_io::{Heightmap, TiledHeightmap};
-use terrain::{compute_normals_scalar, NormalMap};
+use terrain::{
+    compute_normals_neon, compute_normals_neon_8, compute_normals_neon_parallel,
+    compute_normals_neon_tiled, compute_normals_neon_tiled_parallel, compute_normals_scalar,
+    NormalMap,
+};
 
 static FREQ: std::sync::OnceLock<f64> = std::sync::OnceLock::new();
 const N: usize = 64 * 1024 * 1024;
@@ -304,10 +308,10 @@ fn benchmark_normal_map_scalar(heightmap: &Heightmap) -> NormalMap {
 }
 
 fn benchmark_normal_map_vectorised(heightmap: &Heightmap) -> NormalMap {
-    let (ticks, normal_map_vec) =
-        profiling::timed("[vectotized] build normals map from row-major hm", || {
-            compute_normals_scalar(&heightmap)
-        });
+    let (ticks, normal_map_vec) = profiling::timed(
+        "[vectotized] build normals map from row-major hm",
+        || unsafe { compute_normals_neon(&heightmap) },
+    );
     let gb_per_second: f64 = count_gb_per_sec(
         ticks,
         Some(4 * 2 * heightmap.rows * heightmap.cols + 3 * 4 * heightmap.rows * heightmap.cols),
@@ -328,6 +332,65 @@ fn benchmark_normal_map_vectorised(heightmap: &Heightmap) -> NormalMap {
         .unwrap();
 
     normal_map_vec
+}
+
+fn benchmark_normal_map_parallel_vectorised(heightmap: &Heightmap) -> NormalMap {
+    let (ticks, normal_map_vec) = profiling::timed(
+        "[parallel_vectotized] build normals map from row-major hm",
+        || unsafe { compute_normals_neon_parallel(&heightmap) },
+    );
+    let gb_per_second: f64 = count_gb_per_sec(
+        ticks,
+        Some(4 * 2 * heightmap.rows * heightmap.cols + 3 * 4 * heightmap.rows * heightmap.cols),
+    );
+    println!(
+        "[parallel_vectotized]compute_normals_scalar_from_row_major_hm: {:.1} GB/s",
+        gb_per_second
+    );
+
+    let pixels: Vec<u8> = normal_map_vec
+        .nz
+        .iter()
+        .map(|&v| (v * 255.0) as u8)
+        .collect();
+    image::GrayImage::from_raw(heightmap.cols as u32, heightmap.rows as u32, pixels)
+        .unwrap()
+        .save("artifacts/[parallel_vectotized]normals_nz.png")
+        .unwrap();
+
+    normal_map_vec
+}
+
+fn benchmark_normal_map_tiled_vectorised(tiled_hm: &dem_io::TiledHeightmap) -> NormalMap {
+    let (ticks, normal_map) = profiling::timed(
+        "[tiled_vectorised] build normals map from tiled hm",
+        || unsafe { compute_normals_neon_tiled(tiled_hm) },
+    );
+    let gb_per_second: f64 = count_gb_per_sec(
+        ticks,
+        Some(4 * 2 * tiled_hm.rows * tiled_hm.cols + 3 * 4 * tiled_hm.rows * tiled_hm.cols),
+    );
+    println!(
+        "[tiled_vectorised]compute_normals_neon_tiled: {:.1} GB/s",
+        gb_per_second
+    );
+    normal_map
+}
+
+fn benchmark_normal_map_tiled_parallel_vectorised(tiled_hm: &dem_io::TiledHeightmap) -> NormalMap {
+    let (ticks, normal_map) = profiling::timed(
+        "[tiled_parallel_vectorised] build normals map from tiled hm",
+        || unsafe { compute_normals_neon_tiled_parallel(tiled_hm) },
+    );
+    let gb_per_second: f64 = count_gb_per_sec(
+        ticks,
+        Some(4 * 2 * tiled_hm.rows * tiled_hm.cols + 3 * 4 * tiled_hm.rows * tiled_hm.cols),
+    );
+    println!(
+        "[tiled_parallel_vectorised]compute_normals_neon_tiled_parallel: {:.1} GB/s",
+        gb_per_second
+    );
+    normal_map
 }
 
 fn main() {
@@ -394,6 +457,37 @@ fn main() {
 
     println!("--------");
 
-    benchmark_normal_map_vectorised(&heightmap);
+    // evict heightmap from cach
+    let evict: Vec<i32> = (0..100 * 1024 * 1024).map(|i| i as i32).collect();
+    std::hint::black_box(evict);
+
     benchmark_normal_map_scalar(&heightmap);
+
+    // evict heightmap from cach
+    let evict: Vec<i32> = (0..100 * 1024 * 1024).map(|i| i as i32).collect();
+    std::hint::black_box(evict);
+
+    benchmark_normal_map_vectorised(&heightmap);
+
+    // evict heightmap from cach
+    let evict: Vec<i32> = (0..100 * 1024 * 1024).map(|i| i as i32).collect();
+    std::hint::black_box(evict);
+
+    benchmark_normal_map_parallel_vectorised(&heightmap);
+
+    // evict heightmap from cach
+    let evict: Vec<i32> = (0..100 * 1024 * 1024).map(|i| i as i32).collect();
+    std::hint::black_box(evict);
+
+    benchmark_normal_map_tiled_vectorised(&tiled_heightmap);
+
+    // evict heightmap from cach
+    let evict: Vec<i32> = (0..100 * 1024 * 1024).map(|i| i as i32).collect();
+    std::hint::black_box(evict);
+
+    benchmark_normal_map_tiled_parallel_vectorised(&tiled_heightmap);
+
+    // evict heightmap from cach
+    let evict: Vec<i32> = (0..100 * 1024 * 1024).map(|i| i as i32).collect();
+    std::hint::black_box(evict);
 }

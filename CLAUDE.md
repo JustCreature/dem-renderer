@@ -16,7 +16,7 @@ A learning-first, cache-optimized terrain + sunlight renderer in Rust using real
 
 ## Status
 
-**Current phase: Phase 2** (Phase 0 and Phase 1 complete)
+**Current phase: Phase 3** (Phases 0, 1, 2 complete)
 
 Phase 0 artifacts:
 - `crates/profiling/src/lib.rs` — `now()` (cntvct_el0 via inline asm), `timed()`, tests
@@ -33,7 +33,7 @@ Phase 0 baseline numbers (M4 Max, 256 MB):
 Phase 1 artifacts:
 - `crates/dem_io/src/heightmap.rs` — `Heightmap`, `parse_bil`, `fill_nodata`, `parse_hdr`
 - `crates/dem_io/src/tiled.rs` — `TiledHeightmap`, `from_heightmap(&Heightmap, tile_size)`, `get()` with `#[inline(always)]`
-- `crates/dem_io/src/aligned.rs` — `AlignedBuffer`: page-aligned (4096-byte) manual allocation with `Drop`, `Deref`, `DerefMut`
+- `crates/dem_io/src/aligned.rs` — `AlignedBuffer`: page-aligned (4096-byte) manual allocation with `Drop`, `Deref`, `DerefMut`, `unsafe impl Send + Sync`
 - `crates/dem_io/src/lib.rs` — module declarations, re-exports
 - `src/main.rs` — neighbour-sum benchmarks (row-major, tiled row-major, tiled tile-order), cold-cache eviction pattern
 - `docs/lessons/phase-1/build_heightmap/` — reports for DEM parsing stage
@@ -46,11 +46,27 @@ Phase 1 key numbers (M4 Max, cold cache, tile_size=128):
 - tiled tile-order iteration: 3.0 GB/s (`get()` decomposition overhead dominates)
 - Lesson: `get()` abstraction cannot demonstrate tiling benefit — Phase 2 must use direct tile pointer arithmetic
 
-Known open items from Phase 1:
+Phase 2 artifacts:
+- `crates/terrain/src/lib.rs` — `NormalMap` (SoA), `SendPtr`, module declarations
+- `crates/terrain/src/row_major.rs` — `compute_normals_scalar`, `compute_normals_neon`, `compute_normals_neon_8`, `compute_normals_neon_parallel`
+- `crates/terrain/src/tiled.rs` — `compute_normals_neon_tiled`, `compute_normals_neon_tiled_parallel`
+- `src/main.rs` — normal map benchmark functions and PNG output
+- `docs/lessons/phase-2/long-report.md` — comprehensive Phase 2 student textbook
+- `docs/lessons/phase-2/short-report.md` — comprehensive Phase 2 reference
+- `docs/sessions/phase-2/main-session.md` — session log
+
+Phase 2 key numbers (M4 Max, cold cache, isolated runs):
+- Scalar (black_box): 8.1 GB/s | Auto-vectorized scalar: 24.1 GB/s | NEON 4-wide: 28.8 GB/s
+- NEON parallel (10 cores): 42–50 GB/s cold | ~117 GB/s warm
+- Tiled NEON single: 22.9 GB/s | Tiled NEON parallel: 34.0 GB/s (worse than row-major — output is row-major, writes dominate)
+- Lesson: tiling helps input reads but hurts output writes when output layout doesn't match iteration order
+
+Known open items from Phase 2:
 - `profiling::timed(label, ...)` in `random_read`, `seq_write`, `random_write` uses wrong label `"seq_read"` — fix
 - `fill_nodata` division-by-zero if all 4 directions hit boundary without finding valid data
 - Drop `bil_bytes` early in `parse_bil` to halve peak memory
-- `AlignedBuffer` is not `Send`/`Sync` — needs `unsafe impl Send/Sync` for rayon in Phase 2
+- Tiled normal computation leaves cross-tile boundary pixel rows as zero (incorrect) — halo exchange needed to fix
+- Phase 3 shadow sweep will also be write-heavy — same DRAM bandwidth ceiling applies
 
 Implementation follows the phased plan in `docs/planning/global_plan.md`.
 

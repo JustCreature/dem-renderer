@@ -857,6 +857,7 @@ name = "terrain"
 version = "0.1.0"
 dependencies = [
  "dem_io",
+ "rayon",
 ]
 
 [[package]]
