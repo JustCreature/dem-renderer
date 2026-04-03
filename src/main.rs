@@ -781,15 +781,60 @@ fn main() {
     // Camera above the terrain, looking at Olperer
     // pixel space: origin at (col=2388, row=3341), z = terrain_height + 1800m
     // look_at: Olperer at (col=2527, row=3467), z = 3476m
+    let dx = heightmap.dx_meters as f32;
+    let dy = heightmap.dy_meters as f32;
+
+    let pic_width = 2000;
+    let pic_height = 900;
+
+    // // look at tux
+    // let cam = render_cpu::Camera::new(
+    //     [
+    //         2388.0 * dx,
+    //         3341.0 * dy,
+    //         heightmap.data[3341 * heightmap.cols + 2388] as f32 + 1000.0,
+    //     ],
+    //     [2371.0 * dx, 3409.0 * dy, 3449.0],
+    //     70.0,
+    //     pic_width as f32 / pic_height as f32,
+    // );
+
+    // // look at valley 180
+    // let cam = render_cpu::Camera::new(
+    //     [
+    //         2388.0 * dx,
+    //         3341.0 * dy,
+    //         heightmap.data[3341 * heightmap.cols + 2388] as f32 + 1000.0,
+    //     ],
+    //     [2371.0 * dx, 3409.0 * dy, 3449.0],
+    //     90.0,
+    //     1.0, // square image for now
+    // );
+
+    // // look at 90 deg west
+    // let cam = render_cpu::Camera::new(
+    //     [
+    //         2388.0 * dx,
+    //         3341.0 * dy,
+    //         heightmap.data[3341 * heightmap.cols + 2388] as f32 + 1000.0,
+    //     ],
+    //     [2371.0 * dx - 20_000.0, 3409.0 * dy, 2000.0],
+    //     60.0,
+    //     1.0, // square image for now
+    // );
+
+    // benchmark with google earth
+    let cam_col = 2457.0f32;
+    let cam_row = 3328.0f32;
+
+    // let pic_width = 2000;
+    // let pic_height = 900;
+
     let cam = render_cpu::Camera::new(
-        [
-            2388.0 * 21.06,
-            3341.0 * 30.87,
-            heightmap.data[3341 * heightmap.cols + 2388] as f32 + 1800.0,
-        ],
-        [2527.0 * 21.06, 3467.0 * 30.87, 3476.0],
-        60.0,
-        1.0, // square image for now
+        [cam_col * dx, cam_row * dy, 3341.0],
+        [cam_col * dx + 19_627.0, cam_row * dy - 1_718.0, -131.0],
+        70.0,
+        pic_width as f32 / pic_height as f32,
     );
 
     // Center pixel should point roughly at look_at
@@ -799,4 +844,35 @@ fn main() {
     // Top-left pixel should point up-left relative to center
     let ray_tl = cam.ray_for_pixel(0, 0, 1000, 1000);
     println!("top-left ray dir: {:?}", ray_tl.dir);
+
+    let hit = render_cpu::raymarch(
+        &ray_center,
+        &heightmap,
+        heightmap.dx_meters as f32 / 1.0,
+        200_000.0,
+    );
+    println!("hit: {:?}", hit);
+
+    let (ticks, fb) = profiling::timed("render_cpu", || {
+        render_cpu::render(
+            &cam,
+            &heightmap,
+            &normal_map,
+            pic_width,
+            pic_height,
+            heightmap.dx_meters as f32 / 1.0,
+            200_000.0,
+        )
+    });
+    println!(
+        "render_cpu {}x{}: {:.2}s",
+        pic_width,
+        pic_height,
+        ticks as f64 / counter_frequency()
+    );
+
+    image::RgbImage::from_raw(pic_width, pic_height, fb)
+        .unwrap()
+        .save("artifacts/render_cpu.png")
+        .unwrap();
 }

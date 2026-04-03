@@ -792,6 +792,10 @@ dependencies = [
 [[package]]
 name = "render_cpu"
 version = "0.1.0"
+dependencies = [
+ "dem_io",
+ "terrain",
+]
 
 [[package]]
 name = "render_gpu"
