@@ -245,6 +245,7 @@ dependencies = [
  "dem_io",
  "image",
  "profiling 0.1.0",
+ "render_cpu",
  "terrain",
 ]
 

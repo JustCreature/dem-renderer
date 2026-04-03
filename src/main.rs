@@ -773,4 +773,30 @@ fn main() {
     // evict heightmap from cach
     let evict: Vec<i32> = (0..100 * 1024 * 1024).map(|i| i as i32).collect();
     std::hint::black_box(evict);
+
+    // -- Camera CPU Renderer
+
+    println!("---------- Camera CPU Renderer ----------");
+
+    // Camera above the terrain, looking at Olperer
+    // pixel space: origin at (col=2388, row=3341), z = terrain_height + 1800m
+    // look_at: Olperer at (col=2527, row=3467), z = 3476m
+    let cam = render_cpu::Camera::new(
+        [
+            2388.0 * 21.06,
+            3341.0 * 30.87,
+            heightmap.data[3341 * heightmap.cols + 2388] as f32 + 1800.0,
+        ],
+        [2527.0 * 21.06, 3467.0 * 30.87, 3476.0],
+        60.0,
+        1.0, // square image for now
+    );
+
+    // Center pixel should point roughly at look_at
+    let ray_center = cam.ray_for_pixel(500, 500, 1000, 1000);
+    println!("center ray dir: {:?}", ray_center.dir);
+
+    // Top-left pixel should point up-left relative to center
+    let ray_tl = cam.ray_for_pixel(0, 0, 1000, 1000);
+    println!("top-left ray dir: {:?}", ray_tl.dir);
 }
