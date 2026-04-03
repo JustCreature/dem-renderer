@@ -4,8 +4,9 @@ use dem_io::{Heightmap, TiledHeightmap};
 use terrain::{
     compute_normals_neon, compute_normals_neon_8, compute_normals_neon_parallel,
     compute_normals_neon_tiled, compute_normals_neon_tiled_parallel, compute_normals_scalar,
-    compute_shadow_neon, compute_shadow_neon_parallel, compute_shadow_scalar,
-    compute_shadow_scalar_branchless, compute_shadow_scalar_with_azimuth, NormalMap, ShadowMask,
+    compute_shadow_neon, compute_shadow_neon_parallel, compute_shadow_neon_parallel_with_azimuth,
+    compute_shadow_scalar, compute_shadow_scalar_branchless, compute_shadow_scalar_with_azimuth,
+    NormalMap, ShadowMask,
 };
 
 static FREQ: std::sync::OnceLock<f64> = std::sync::OnceLock::new();
@@ -563,6 +564,50 @@ fn benchmark_shadow_mask_neon_parallel(
     shadow_mask
 }
 
+fn benchmark_shadow_mask_neon_parallel_with_azimuth_labeled(
+    heightmap: &Heightmap,
+    sun_azimuth_rad: f32,
+    sun_elevation_rad: f32,
+    cur_label: &str,
+) -> ShadowMask {
+    let (ticks, shadow_mask) = profiling::timed(
+        &format!(
+            "[[ {} ]] build shadow mask NEON parallel from row-major hm",
+            cur_label
+        ),
+        || unsafe {
+            compute_shadow_neon_parallel_with_azimuth(
+                &heightmap,
+                sun_azimuth_rad,
+                sun_elevation_rad,
+            )
+        },
+    );
+    let gb_per_second: f64 = count_gb_per_sec(
+        ticks,
+        Some(2 * heightmap.rows * heightmap.cols + 4 * heightmap.rows * heightmap.cols),
+    );
+    println!(
+        "compute_shadows_neon_parallel_labeled_from_row_major_hm: {:.1} GB/s",
+        gb_per_second
+    );
+
+    let pixels: Vec<u8> = shadow_mask
+        .data
+        .iter()
+        .map(|&v| (v * 255.0) as u8)
+        .collect();
+    image::GrayImage::from_raw(heightmap.cols as u32, heightmap.rows as u32, pixels)
+        .unwrap()
+        .save(&format!(
+            "artifacts/[{}]_shadow_mask_neon_parallel_west_to_east.png",
+            cur_label
+        ))
+        .unwrap();
+
+    shadow_mask
+}
+
 fn main() {
     println!("dem_renderer");
     let data: Vec<f32> = (0..N).map(|i| i as f32).collect();
@@ -708,6 +753,17 @@ fn main() {
     std::hint::black_box(evict);
 
     benchmark_shadow_mask_scalar_with_azimuth_labeled(
+        &heightmap,
+        270f32.to_radians(),
+        10f32.to_radians(),
+        "sunset",
+    );
+
+    // evict heightmap from cach
+    let evict: Vec<i32> = (0..100 * 1024 * 1024).map(|i| i as i32).collect();
+    std::hint::black_box(evict);
+
+    benchmark_shadow_mask_neon_parallel_with_azimuth_labeled(
         &heightmap,
         270f32.to_radians(),
         10f32.to_radians(),

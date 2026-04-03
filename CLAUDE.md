@@ -16,7 +16,7 @@ A learning-first, cache-optimized terrain + sunlight renderer in Rust using real
 
 ## Status
 
-**Current phase: Phase 3** (Phases 0, 1, 2 complete)
+**Current phase: Phase 4** (Phases 0, 1, 2, 3 complete)
 
 Phase 0 artifacts:
 - `crates/profiling/src/lib.rs` — `now()` (cntvct_el0 via inline asm), `timed()`, tests
@@ -61,12 +61,27 @@ Phase 2 key numbers (M4 Max, cold cache, isolated runs):
 - Tiled NEON single: 22.9 GB/s | Tiled NEON parallel: 34.0 GB/s (worse than row-major — output is row-major, writes dominate)
 - Lesson: tiling helps input reads but hurts output writes when output layout doesn't match iteration order
 
-Known open items from Phase 2:
+Phase 3 artifacts:
+- `crates/terrain/src/shadow.rs` — `DdaSetup`, `dda_setup()`, `ShadowMask`, `compute_shadow_scalar`, `compute_shadow_scalar_branchless`, `compute_shadow_scalar_with_azimuth`, `compute_shadow_neon`, `compute_shadow_neon_parallel`, `compute_shadow_neon_parallel_with_azimuth`
+- `crates/terrain/src/lib.rs` — exports updated for all shadow functions
+- `src/main.rs` — benchmark functions for all shadow variants, `create_rgb_png`
+- `docs/lessons/phase-3/long-report.md` — comprehensive Phase 3 student textbook
+- `docs/lessons/phase-3/short-report.md` — comprehensive Phase 3 reference
+- `docs/sessions/phase-3/main-session.md` — session log
+
+Phase 3 key numbers (M4 Max, cold cache, isolated runs):
+- Scalar branchy: 8.1 GB/s | Scalar branchless: 10.6 GB/s | NEON 4-wide: 17.4 GB/s | NEON parallel (10 cores): 58.6 GB/s
+- Bottleneck arc: latency-bound (64%) → latency+memory → purely memory-bound
+- Lesson: branchless wins (31%) despite accurate branch prediction — unconditional store pattern is more pipeline-friendly
+- Lesson: NEON vectorises across rows (not within), breaking the serial dependency chain 4×
+- NEON parallel gives 3.4× from parallelism (not 10×) — memory bandwidth is the ceiling at 58.6 GB/s
+
+Known open items from Phase 3:
+- `compute_shadow_neon_parallel_with_azimuth` written but not yet benchmarked at various azimuths — pending diagonal vs cardinal comparison
 - `profiling::timed(label, ...)` in `random_read`, `seq_write`, `random_write` uses wrong label `"seq_read"` — fix
 - `fill_nodata` division-by-zero if all 4 directions hit boundary without finding valid data
 - Drop `bil_bytes` early in `parse_bil` to halve peak memory
 - Tiled normal computation leaves cross-tile boundary pixel rows as zero (incorrect) — halo exchange needed to fix
-- Phase 3 shadow sweep will also be write-heavy — same DRAM bandwidth ceiling applies
 
 Implementation follows the phased plan in `docs/planning/global_plan.md`.
 
