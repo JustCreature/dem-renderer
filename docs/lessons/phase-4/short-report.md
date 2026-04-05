@@ -176,6 +176,8 @@ framebuffer
 
 Average steps per ray: **506**
 
+**Screen-space tiling (considered, not implemented)**: processing 8×8 screen tiles instead of rows would improve 2D spatial coherence in heightmap access. For parallel rendering: not worth it — already not bandwidth-limited (22 GB/s << 400 GB/s). For single-core NEON: not worth it — the bottleneck is the gather instruction count (4 scalar loads per step), not cache misses. Horizontal 1×4 packets already achieve optimal cache-line reuse (adjacent pixels land in the same 64-byte cache line). **Future optimization**: "supersampled ray" — march 1 reference ray, approximate 3 neighbor terrain heights via `h ≈ h_center + grad_x * Δcol + grad_y * Δrow` using the Phase 2 normal map. Reduces gather from 4→1 per step (directly attacks the bottleneck). Requires normal map in inner loop; breaks at sharp peaks (Olperer-style discrete sampling problem).
+
 **Why NEON ≈ scalar**:
 - Workload is memory-bound with sequential access (prefetcher-friendly stride ~1 pixel/step)
 - Compiler auto-vectorizes scalar `raymarch` in release mode
