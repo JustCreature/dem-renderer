@@ -1,5 +1,5 @@
 use dem_io::Heightmap;
-use terrain::NormalMap;
+use terrain::{NormalMap, ShadowMask};
 
 use crate::{Camera, Ray, raymarch, vector_utils::normalize};
 
@@ -7,6 +7,8 @@ pub fn render(
     cam: &Camera,
     hm: &Heightmap,
     normals: &NormalMap,
+    shadow_mask: &ShadowMask,
+    sun_dir: [f32; 3],
     width: u32,
     height: u32,
     step_m: f32,
@@ -19,7 +21,7 @@ pub fn render(
             let ray: Ray = cam.ray_for_pixel(px, py, width, height);
             let hit: Option<[f32; 3]> = raymarch(&ray, hm, step_m, t_max);
             // let color: [u8; 3] = elevation_color(hit);
-            let color: [u8; 3] = shade(hit, hm, normals);
+            let color: [u8; 3] = shade(hit, hm, normals, shadow_mask, sun_dir);
             let idx: usize = ((py * width + px) * 3) as usize;
             framebuffer[idx] = color[0];
             framebuffer[idx + 1] = color[1];
@@ -30,7 +32,13 @@ pub fn render(
     framebuffer
 }
 
-fn shade(hit: Option<[f32; 3]>, hm: &Heightmap, normals: &NormalMap) -> [u8; 3] {
+fn shade(
+    hit: Option<[f32; 3]>,
+    hm: &Heightmap,
+    normals: &NormalMap,
+    shadow_mask: &ShadowMask,
+    sun_dir: [f32; 3],
+) -> [u8; 3] {
     match hit {
         None => [135, 206, 235],
         Some(p) => {
@@ -43,13 +51,15 @@ fn shade(hit: Option<[f32; 3]>, hm: &Heightmap, normals: &NormalMap) -> [u8; 3] 
             let nz = normals.nz[idx];
 
             // let sun = normalize([0.5, 0.5, 0.7]);
-            let sun = normalize([0.4, 0.5, 0.7]); // more east, less south
+            // let sun = normalize([0.4, 0.5, 0.7]); // more east, less south
+            let sun = normalize(sun_dir);
             // dot(normal, sun_dir) — sun_dir must also be normalized
             let diffuse = f32::max(0.0, nx * sun[0] + ny * sun[1] + nz * sun[2]);
 
             let ambient = 0.15;
             // let ambient = 0.3; // less dark shadow faces
-            let brightness = ambient + (1.0 - ambient) * diffuse;
+            let in_shadow: f32 = shadow_mask.data[idx];
+            let brightness = (ambient + (1.0 - ambient) * diffuse) * in_shadow;
 
             // let base = [180u8, 160u8, 140u8]; // rocky grey-brown
             // let base = [200u8, 200u8, 195u8]; // cool grey-white
