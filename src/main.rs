@@ -368,4 +368,36 @@ fn main() {
         .unwrap();
 
     render_3d_pic_cpu(tile_path);
+
+    // -- Camera GPU Renderer
+
+    println!("---------- Camera GPU Renderer ----------");
+
+    let (ticks, fb) = profiling::timed("render_gpu", || {
+        render_gpu::render_gpu(
+            [cam_col * dx, cam_row * dy, 3341.0],
+            [cam_col * dx + 19_627.0, cam_row * dy - 1_718.0, -131.0],
+            70.0,
+            pic_width as f32 / pic_height as f32,
+            &heightmap,
+            &normal_map,
+            &shadow_mask,
+            sun_dir,
+            pic_width,
+            pic_height,
+            heightmap.dx_meters as f32 / 0.8,
+            200_000.0,
+        )
+    });
+    println!(
+        "render_gpu {}x{}: {:.2}s",
+        pic_width,
+        pic_height,
+        ticks as f64 / counter_frequency()
+    );
+
+    image::RgbImage::from_raw(pic_width, pic_height, fb)
+        .unwrap()
+        .save("artifacts/render_gpu.png")
+        .unwrap();
 }

@@ -4,3 +4,8 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
+wgpu = "29.0.1"
+pollster = "0.4.0"
+bytemuck = { version = "1", features = ["derive"] }
+dem_io = { path = "../dem_io" }
+terrain = { path = "../terrain" }
