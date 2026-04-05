@@ -260,6 +260,13 @@ fn main() {
     );
     println!("hit: {:?}", hit);
 
+    let r0 = cam.ray_for_pixel(500, 500, 1000, 1000);
+    let packet = render_cpu::RayPacket::new(&r0, &r0, &r0, &r0);
+    let hits = unsafe {
+        render_cpu::raymarch_neon(&packet, &heightmap, heightmap.dx_meters as f32, 200_000.0)
+    };
+    println!("neon hits: {:?}", hits);
+
     let sun_dir = [0.4f32, 0.5f32, 0.7f32]; // [east, south, up] — morning sun NE
 
     let (ticks, fb) = profiling::timed("render_cpu", || {
@@ -271,7 +278,7 @@ fn main() {
             sun_dir,
             pic_width,
             pic_height,
-            heightmap.dx_meters as f32 / 1.0,
+            heightmap.dx_meters as f32 / 0.8,
             200_000.0,
         )
     });
@@ -281,10 +288,83 @@ fn main() {
         pic_height,
         ticks as f64 / counter_frequency()
     );
-
     image::RgbImage::from_raw(pic_width, pic_height, fb)
         .unwrap()
         .save("artifacts/render_cpu.png")
+        .unwrap();
+
+    let (ticks, fb) = profiling::timed("render_cpu_parallel", || {
+        render_cpu::render_par(
+            &cam,
+            &heightmap,
+            &normal_map,
+            &shadow_mask,
+            sun_dir,
+            pic_width,
+            pic_height,
+            heightmap.dx_meters as f32 / 0.8,
+            200_000.0,
+        )
+    });
+    println!(
+        "render_cpu PARALLEL {}x{}: {:.2}s",
+        pic_width,
+        pic_height,
+        ticks as f64 / counter_frequency()
+    );
+
+    image::RgbImage::from_raw(pic_width, pic_height, fb)
+        .unwrap()
+        .save("artifacts/render_cpu[parallel].png")
+        .unwrap();
+
+    let (ticks, fb) = profiling::timed("render_cpu[NEON]", || {
+        render_cpu::render_neon(
+            &cam,
+            &heightmap,
+            &normal_map,
+            &shadow_mask,
+            sun_dir,
+            pic_width,
+            pic_height,
+            heightmap.dx_meters as f32 / 0.8,
+            200_000.0,
+        )
+    });
+    println!(
+        "render_cpu [NEON] {}x{}: {:.2}s",
+        pic_width,
+        pic_height,
+        ticks as f64 / counter_frequency()
+    );
+    image::RgbImage::from_raw(pic_width, pic_height, fb)
+        .unwrap()
+        .save("artifacts/render_cpu[NEON].png")
+        .unwrap();
+
+    let (ticks, fb) = profiling::timed("render_cpu_NEON_parallel", || {
+        render_cpu::render_neon_par(
+            &cam,
+            &heightmap,
+            &normal_map,
+            &shadow_mask,
+            sun_dir,
+            pic_width,
+            pic_height,
+            heightmap.dx_meters as f32 / 0.8,
+            200_000.0,
+        )
+    });
+    println!(
+        "render_cpu NEON PARALLEL {}x{}: {:.2}s",
+        pic_width,
+        pic_height,
+        ticks as f64 / counter_frequency()
+    );
+
+    image::RgbImage::from_raw(pic_width, pic_height, fb)
+        .unwrap()
+        .save("artifacts/render_cpu[NEON_parallel].png")
         .unwrap();
 
     render_3d_pic_cpu(tile_path);

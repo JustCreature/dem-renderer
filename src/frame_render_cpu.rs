@@ -43,8 +43,8 @@ pub(crate) fn render_3d_pic_cpu(tile_path: &Path) {
             sun_elevation_rad,
         );
 
-        let (ticks, fb) = profiling::timed("render_cpu[shadows]", || {
-            render_cpu::render(
+        let (ticks, fb) = profiling::timed("render_cpu[shadows_SCALAR_PARALLEL]", || {
+            render_cpu::render_par(
                 &cam,
                 &heightmap,
                 &normal_map,
@@ -52,12 +52,12 @@ pub(crate) fn render_3d_pic_cpu(tile_path: &Path) {
                 sun_dir,
                 pic_width,
                 pic_height,
-                heightmap.dx_meters as f32 / 1.0,
+                heightmap.dx_meters as f32 / 0.8,
                 200_000.0,
             )
         });
         println!(
-            "render_cpu {}x{}: {:.2}s",
+            "render_cpu shadows_SCALAR_PARALLEL {}x{}: {:.2}s",
             pic_width,
             pic_height,
             ticks as f64 / counter_frequency()
@@ -65,7 +65,7 @@ pub(crate) fn render_3d_pic_cpu(tile_path: &Path) {
 
         image::RgbImage::from_raw(pic_width, pic_height, fb)
             .unwrap()
-            .save("artifacts/render_cpu[shadows].png")
+            .save("artifacts/render_cpu[shadows_SCALAR_PARALLEL].png")
             .unwrap();
     }
 }

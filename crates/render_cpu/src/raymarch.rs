@@ -24,11 +24,37 @@ pub fn raymarch(ray: &Ray, hm: &Heightmap, step_m: f32, t_max: f32) -> Option<[f
 
         // 5. hit test
         if p[2] < terrain_z {
-            return Some(p);
+            let hit = binary_search_hit(ray, hm, t - step_m, t, 8);
+            return Some(hit);
         }
 
         t += step_m;
     }
 
     None
+}
+
+fn binary_search_hit(
+    ray: &Ray,
+    hm: &Heightmap,
+    mut t_lo: f32,
+    mut t_hi: f32,
+    iterations: u32,
+) -> [f32; 3] {
+    for _ in 0..iterations {
+        let t_mid = (t_lo + t_hi) * 0.5;
+        let p = add(ray.origin, scale(ray.dir, t_mid));
+
+        let col = (p[0] / hm.dx_meters as f32) as usize;
+        let row = (p[1] / hm.dy_meters as f32) as usize;
+        let terrain_z = hm.data[row * hm.cols + col] as f32;
+
+        if p[2] < terrain_z {
+            t_hi = t_mid; // still below — move upper bound down
+        } else {
+            t_lo = t_mid; // above — move lower bound up
+        }
+    }
+
+    add(ray.origin, scale(ray.dir, t_lo)) // return last above-ground position
 }
