@@ -1,4 +1,5 @@
 mod camera;
+mod context;
 mod normals_gpu;
 mod render_buffer;
 mod render_gpu_combined;
@@ -6,6 +7,7 @@ mod render_rexture;
 mod shadow_gpu;
 mod vector_utils;
 
+pub use context::GpuContext;
 pub use normals_gpu::compute_normals_gpu;
 pub use render_buffer::render_gpu_buffer;
 pub use render_gpu_combined::render_gpu_combined;

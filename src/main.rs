@@ -114,8 +114,10 @@ fn main() {
     let evict: Vec<i32> = (0..100 * 1024 * 1024).map(|i| i as i32).collect();
     std::hint::black_box(evict);
 
+    let gpu_ctx = render_gpu::GpuContext::new();
+
     let (ticks, normal_map_gpu) = profiling::timed("compute_normals_gpu", || {
-        render_gpu::compute_normals_gpu(&heightmap)
+        render_gpu::compute_normals_gpu(&gpu_ctx, &heightmap)
     });
     println!(
         "compute_normals_gpu: {:.2}s",
@@ -194,7 +196,7 @@ fn main() {
     std::hint::black_box(evict);
 
     let (ticks, _shadow_mask_gpu) = profiling::timed("compute_shadow_gpu", || {
-        render_gpu::compute_shadow_gpu(&heightmap, sun_elevation_rad_const)
+        render_gpu::compute_shadow_gpu(&gpu_ctx, &heightmap, sun_elevation_rad_const)
     });
     println!(
         "compute_shadow_gpu: {:.2}s",
@@ -410,6 +412,7 @@ fn main() {
 
     let (ticks, fb) = profiling::timed("render_gpu", || {
         render_gpu::render_gpu_buffer(
+            &gpu_ctx,
             [cam_col * dx, cam_row * dy, 3341.0],
             [cam_col * dx + 19_627.0, cam_row * dy - 1_718.0, -131.0],
             100.0,
@@ -438,6 +441,7 @@ fn main() {
 
     let (ticks, fb) = profiling::timed("render_gpu[texture]", || {
         render_gpu::render_gpu_texture(
+            &gpu_ctx,
             [cam_col * dx, cam_row * dy, 3341.0],
             [cam_col * dx + 19_627.0, cam_row * dy - 1_718.0, -131.0],
             100.0,
@@ -466,6 +470,7 @@ fn main() {
 
     let (ticks, fb) = profiling::timed("render_gpu[combined]", || {
         render_gpu::render_gpu_combined(
+            &gpu_ctx,
             &heightmap,
             &shadow_mask,
             [cam_col * dx, cam_row * dy, 3341.0],
@@ -489,6 +494,12 @@ fn main() {
         .unwrap()
         .save("artifacts/render_gpu[combined].png")
         .unwrap();
+
+    // -- Multi-frame benchmark
+    println!("---------- Multi-frame benchmark ----------");
+    // benchmark_multi_frame_cpu(&heightmap, &normal_map, &shadow_mask);
+    benchmark_multi_frame_gpu_separate(&gpu_ctx, &heightmap, &normal_map, &shadow_mask);
+    benchmark_multi_frame_gpu_combined(&gpu_ctx, &heightmap, &shadow_mask);
 
     pic_width = 2000;
     pic_height = 900;

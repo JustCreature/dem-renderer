@@ -3,8 +3,10 @@ use terrain::{NormalMap, ShadowMask};
 use wgpu::util::DeviceExt;
 
 use crate::camera::CameraUniforms;
+use crate::context::GpuContext;
 
 pub fn render_gpu_texture(
+    gpu_ctx: &GpuContext,
     origin: [f32; 3],
     look_at: [f32; 3],
     fov_deg: f32,
@@ -18,193 +20,187 @@ pub fn render_gpu_texture(
     step_m: f32,
     t_max: f32,
 ) -> Vec<u8> {
-    pollster::block_on(async {
-        let instance: wgpu::Instance = wgpu::Instance::default();
-        let adapter: wgpu::Adapter = instance
-            .request_adapter(&wgpu::RequestAdapterOptions {
-                power_preference: wgpu::PowerPreference::HighPerformance,
-                ..Default::default()
-            })
-            .await
-            .expect("no GPU adapter found");
+    let cam: CameraUniforms = CameraUniforms::new(
+        origin, look_at, fov_deg, aspect, hm, sun_dir, width, height, step_m, t_max,
+    );
 
-        let (device, queue): (wgpu::Device, wgpu::Queue) = adapter
-            .request_device(&wgpu::DeviceDescriptor::default())
-            .await
-            .expect("failed to get device");
+    // heightmap texture
+    let hm_f32: Vec<f32> = hm.data.iter().map(|&v| v as f32).collect();
+    let hm_texture = gpu_ctx.device.create_texture(&wgpu::TextureDescriptor {
+        label: Some("heightmap_texture"),
+        size: wgpu::Extent3d {
+            width: hm.cols as u32,
+            height: hm.rows as u32,
+            depth_or_array_layers: 1,
+        },
+        mip_level_count: 1,
+        sample_count: 1,
+        dimension: wgpu::TextureDimension::D2,
+        format: wgpu::TextureFormat::R32Float,
+        usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+        view_formats: &[],
+    });
+    gpu_ctx.queue.write_texture(
+        hm_texture.as_image_copy(),
+        bytemuck::cast_slice(&hm_f32),
+        wgpu::TexelCopyBufferLayout {
+            offset: 0,
+            bytes_per_row: Some(hm.cols as u32 * 4),
+            rows_per_image: None,
+        },
+        wgpu::Extent3d {
+            width: hm.cols as u32,
+            height: hm.rows as u32,
+            depth_or_array_layers: 1,
+        },
+    );
+    let hm_view = hm_texture.create_view(&wgpu::TextureViewDescriptor::default());
+    let hm_sampler = gpu_ctx
+        .device
+        .create_sampler(&wgpu::SamplerDescriptor::default());
 
-        let cam: CameraUniforms = CameraUniforms::new(
-            origin, look_at, fov_deg, aspect, hm, sun_dir, width, height, step_m, t_max,
-        );
-
-        // heightmap texture
-        let hm_f32: Vec<f32> = hm.data.iter().map(|&v| v as f32).collect();
-        let hm_texture = device.create_texture(&wgpu::TextureDescriptor {
-            label: Some("heightmap_texture"),
-            size: wgpu::Extent3d {
-                width: hm.cols as u32,
-                height: hm.rows as u32,
-                depth_or_array_layers: 1,
-            },
-            mip_level_count: 1,
-            sample_count: 1,
-            dimension: wgpu::TextureDimension::D2,
-            format: wgpu::TextureFormat::R32Float,
-            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
-            view_formats: &[],
-        });
-        queue.write_texture(
-            hm_texture.as_image_copy(),
-            bytemuck::cast_slice(&hm_f32),
-            wgpu::TexelCopyBufferLayout {
-                offset: 0,
-                bytes_per_row: Some(hm.cols as u32 * 4),
-                rows_per_image: None,
-            },
-            wgpu::Extent3d {
-                width: hm.cols as u32,
-                height: hm.rows as u32,
-                depth_or_array_layers: 1,
-            },
-        );
-        let hm_view = hm_texture.create_view(&wgpu::TextureViewDescriptor::default());
-        let hm_sampler = device.create_sampler(&wgpu::SamplerDescriptor::default());
-
-        let nx_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+    let nx_buffer = gpu_ctx
+        .device
+        .create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("nx"),
             contents: bytemuck::cast_slice(&normals.nx),
             usage: wgpu::BufferUsages::STORAGE,
         });
 
-        let ny_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+    let ny_buffer = gpu_ctx
+        .device
+        .create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("ny"),
             contents: bytemuck::cast_slice(&normals.ny),
             usage: wgpu::BufferUsages::STORAGE,
         });
 
-        let nz_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+    let nz_buffer = gpu_ctx
+        .device
+        .create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("nz"),
             contents: bytemuck::cast_slice(&normals.nz),
             usage: wgpu::BufferUsages::STORAGE,
         });
 
-        let shadow_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+    let shadow_buffer = gpu_ctx
+        .device
+        .create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("shadow_buffer"),
             contents: bytemuck::cast_slice(&shadow_mask.data),
             usage: wgpu::BufferUsages::STORAGE,
         });
 
-        let output_buffer: wgpu::Buffer = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("output_buffer"),
-            size: (width * height * 4) as u64,
-            mapped_at_creation: false,
-            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
-        });
+    let output_buffer: wgpu::Buffer = gpu_ctx.device.create_buffer(&wgpu::BufferDescriptor {
+        label: Some("output_buffer"),
+        size: (width * height * 4) as u64,
+        mapped_at_creation: false,
+        usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
+    });
 
-        let reedback_buffer: wgpu::Buffer = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("reedback_buffer"),
-            size: (width * height * 4) as u64,
-            mapped_at_creation: false,
-            usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
-        });
+    let reedback_buffer: wgpu::Buffer = gpu_ctx.device.create_buffer(&wgpu::BufferDescriptor {
+        label: Some("reedback_buffer"),
+        size: (width * height * 4) as u64,
+        mapped_at_creation: false,
+        usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
+    });
 
-        let cam_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+    let cam_buffer = gpu_ctx
+        .device
+        .create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("camera"),
             contents: bytemuck::bytes_of(&cam),
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
         });
 
-        let bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-            label: Some("bgl"),
-            entries: &[
-                // binding 0: camera uniforms
-                wgpu::BindGroupLayoutEntry {
-                    binding: 0,
-                    visibility: wgpu::ShaderStages::COMPUTE,
-                    ty: wgpu::BindingType::Buffer {
-                        ty: wgpu::BufferBindingType::Uniform,
-                        has_dynamic_offset: false,
-                        min_binding_size: None,
+    let bind_group_layout =
+        gpu_ctx
+            .device
+            .create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+                label: Some("bgl"),
+                entries: &[
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 0,
+                        visibility: wgpu::ShaderStages::COMPUTE,
+                        ty: wgpu::BindingType::Buffer {
+                            ty: wgpu::BufferBindingType::Uniform,
+                            has_dynamic_offset: false,
+                            min_binding_size: None,
+                        },
+                        count: None,
                     },
-                    count: None,
-                },
-                // binding 1: heightmap texture (read-only storage)
-                wgpu::BindGroupLayoutEntry {
-                    binding: 1,
-                    visibility: wgpu::ShaderStages::COMPUTE,
-                    ty: wgpu::BindingType::Texture {
-                        sample_type: wgpu::TextureSampleType::Float { filterable: false },
-                        view_dimension: wgpu::TextureViewDimension::D2,
-                        multisampled: false,
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 1,
+                        visibility: wgpu::ShaderStages::COMPUTE,
+                        ty: wgpu::BindingType::Texture {
+                            sample_type: wgpu::TextureSampleType::Float { filterable: false },
+                            view_dimension: wgpu::TextureViewDimension::D2,
+                            multisampled: false,
+                        },
+                        count: None,
                     },
-                    count: None,
-                },
-                // binding 2: heightmap sampler
-                wgpu::BindGroupLayoutEntry {
-                    binding: 2,
-                    visibility: wgpu::ShaderStages::COMPUTE,
-                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::NonFiltering),
-                    count: None,
-                },
-                // binding 3: output (read-write storage)
-                wgpu::BindGroupLayoutEntry {
-                    binding: 3,
-                    visibility: wgpu::ShaderStages::COMPUTE,
-                    ty: wgpu::BindingType::Buffer {
-                        ty: wgpu::BufferBindingType::Storage { read_only: false },
-                        has_dynamic_offset: false,
-                        min_binding_size: None,
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 2,
+                        visibility: wgpu::ShaderStages::COMPUTE,
+                        ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::NonFiltering),
+                        count: None,
                     },
-                    count: None,
-                },
-                // binding 4: normals nx (read-only storage)
-                wgpu::BindGroupLayoutEntry {
-                    binding: 4,
-                    visibility: wgpu::ShaderStages::COMPUTE,
-                    ty: wgpu::BindingType::Buffer {
-                        ty: wgpu::BufferBindingType::Storage { read_only: true },
-                        has_dynamic_offset: false,
-                        min_binding_size: None,
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 3,
+                        visibility: wgpu::ShaderStages::COMPUTE,
+                        ty: wgpu::BindingType::Buffer {
+                            ty: wgpu::BufferBindingType::Storage { read_only: false },
+                            has_dynamic_offset: false,
+                            min_binding_size: None,
+                        },
+                        count: None,
                     },
-                    count: None,
-                },
-                // binding 5: normals ny (read-only storage)
-                wgpu::BindGroupLayoutEntry {
-                    binding: 5,
-                    visibility: wgpu::ShaderStages::COMPUTE,
-                    ty: wgpu::BindingType::Buffer {
-                        ty: wgpu::BufferBindingType::Storage { read_only: true },
-                        has_dynamic_offset: false,
-                        min_binding_size: None,
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 4,
+                        visibility: wgpu::ShaderStages::COMPUTE,
+                        ty: wgpu::BindingType::Buffer {
+                            ty: wgpu::BufferBindingType::Storage { read_only: true },
+                            has_dynamic_offset: false,
+                            min_binding_size: None,
+                        },
+                        count: None,
                     },
-                    count: None,
-                },
-                // binding 6: normals nz (read-only storage)
-                wgpu::BindGroupLayoutEntry {
-                    binding: 6,
-                    visibility: wgpu::ShaderStages::COMPUTE,
-                    ty: wgpu::BindingType::Buffer {
-                        ty: wgpu::BufferBindingType::Storage { read_only: true },
-                        has_dynamic_offset: false,
-                        min_binding_size: None,
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 5,
+                        visibility: wgpu::ShaderStages::COMPUTE,
+                        ty: wgpu::BindingType::Buffer {
+                            ty: wgpu::BufferBindingType::Storage { read_only: true },
+                            has_dynamic_offset: false,
+                            min_binding_size: None,
+                        },
+                        count: None,
                     },
-                    count: None,
-                },
-                // binding 7: shadow_mask.data (read-only storage)
-                wgpu::BindGroupLayoutEntry {
-                    binding: 7,
-                    visibility: wgpu::ShaderStages::COMPUTE,
-                    ty: wgpu::BindingType::Buffer {
-                        ty: wgpu::BufferBindingType::Storage { read_only: true },
-                        has_dynamic_offset: false,
-                        min_binding_size: None,
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 6,
+                        visibility: wgpu::ShaderStages::COMPUTE,
+                        ty: wgpu::BindingType::Buffer {
+                            ty: wgpu::BufferBindingType::Storage { read_only: true },
+                            has_dynamic_offset: false,
+                            min_binding_size: None,
+                        },
+                        count: None,
                     },
-                    count: None,
-                },
-            ],
-        });
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 7,
+                        visibility: wgpu::ShaderStages::COMPUTE,
+                        ty: wgpu::BindingType::Buffer {
+                            ty: wgpu::BufferBindingType::Storage { read_only: true },
+                            has_dynamic_offset: false,
+                            min_binding_size: None,
+                        },
+                        count: None,
+                    },
+                ],
+            });
 
-        let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+    let bind_group = gpu_ctx
+        .device
+        .create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("bg"),
             layout: &bind_group_layout,
             entries: &[
@@ -243,18 +239,24 @@ pub fn render_gpu_texture(
             ],
         });
 
-        let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+    let shader = gpu_ctx
+        .device
+        .create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("shader"),
             source: wgpu::ShaderSource::Wgsl(include_str!("shader_texture.wgsl").into()),
         });
 
-        let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+    let pipeline_layout = gpu_ctx
+        .device
+        .create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("pipeline_layout"),
             bind_group_layouts: &[Some(&bind_group_layout)],
             immediate_size: 0,
         });
 
-        let pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+    let pipeline = gpu_ctx
+        .device
+        .create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
             label: Some("pipeline"),
             layout: Some(&pipeline_layout),
             module: &shader,
@@ -263,55 +265,49 @@ pub fn render_gpu_texture(
             cache: None,
         });
 
-        let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+    let mut encoder = gpu_ctx
+        .device
+        .create_command_encoder(&wgpu::CommandEncoderDescriptor {
             label: Some("encoder"),
         });
 
-        {
-            // The { } block around pass is important — pass borrows encoder mutably,
-            // and you can't call encoder.copy_buffer_to_buffer until pass is dropped. The block forces the drop.
-            let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
-                label: Some("compute_pass"),
-                timestamp_writes: None,
-            });
-            pass.set_pipeline(&pipeline);
-            pass.set_bind_group(0, &bind_group, &[]);
-            // (width + 7) / 8 is integer ceiling division — ensures you launch enough workgroups
-            // to cover all pixels even when dimensions aren't multiples of 8.
-            pass.dispatch_workgroups((width + 7) / 8, (height + 7) / 8, 1);
-        }
+    {
+        let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+            label: Some("compute_pass"),
+            timestamp_writes: None,
+        });
+        pass.set_pipeline(&pipeline);
+        pass.set_bind_group(0, &bind_group, &[]);
+        pass.dispatch_workgroups((width + 7) / 8, (height + 7) / 8, 1);
+    }
 
-        // copy output → readback
-        encoder.copy_buffer_to_buffer(
-            &output_buffer,
-            0,
-            &reedback_buffer,
-            0,
-            (width * height * 4) as u64,
-        );
+    encoder.copy_buffer_to_buffer(
+        &output_buffer,
+        0,
+        &reedback_buffer,
+        0,
+        (width * height * 4) as u64,
+    );
 
-        queue.submit([encoder.finish()]);
+    gpu_ctx.queue.submit([encoder.finish()]);
 
-        // wait for GPU to finish
-        let (sender, receiver) = std::sync::mpsc::channel();
+    let (sender, receiver) = std::sync::mpsc::channel();
+    reedback_buffer
+        .slice(..)
+        .map_async(wgpu::MapMode::Read, move |r| sender.send(r).unwrap());
+    gpu_ctx
+        .device
+        .poll(wgpu::PollType::Wait {
+            submission_index: None,
+            timeout: None,
+        })
+        .unwrap();
+    receiver.recv().unwrap().unwrap();
 
-        reedback_buffer
-            .slice(..)
-            .map_async(wgpu::MapMode::Read, move |r| sender.send(r).unwrap());
+    let data = reedback_buffer.slice(..).get_mapped_range();
+    let result: Vec<u8> = data.to_vec();
+    drop(data);
+    reedback_buffer.unmap();
 
-        device
-            .poll(wgpu::PollType::Wait {
-                submission_index: None,
-                timeout: None,
-            })
-            .unwrap();
-        receiver.recv().unwrap().unwrap();
-
-        let data = reedback_buffer.slice(..).get_mapped_range();
-        let result: Vec<u8> = data.to_vec();
-        drop(data);
-        reedback_buffer.unmap();
-
-        result
-    })
+    result
 }

@@ -99,8 +99,11 @@ pub(crate) fn render_3d_pic_gpu(tile_path: &Path) {
             sun_elevation_rad,
         );
 
+        let gpu_ctx = render_gpu::GpuContext::new();
+
         let (ticks, fb) = profiling::timed("render_gpu[GPU]", || {
             render_gpu::render_gpu_texture(
+                &gpu_ctx,
                 [cam_col * dx, cam_row * dy, 3341.0],
                 [cam_col * dx + 19_627.0, cam_row * dy - 1_718.0, -131.0],
                 70.0,
