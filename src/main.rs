@@ -498,11 +498,12 @@ fn main() {
 
     // -- Multi-frame benchmark
     println!("---------- Multi-frame benchmark ----------");
+    // // commeted out since it takes about 17 seconds to run
     // benchmark_multi_frame_cpu(&heightmap, &normal_map, &shadow_mask);
     benchmark_multi_frame_gpu_separate(&gpu_ctx, &heightmap, &normal_map, &shadow_mask);
     benchmark_multi_frame_gpu_combined(&gpu_ctx, &heightmap, &shadow_mask);
     // GpuScene takes ctx by value (owns it) — create a dedicated one
     benchmark_multi_frame_gpu_scene(render_gpu::GpuContext::new(), &heightmap, &shadow_mask);
 
-    render_gif::render_gif(tile_path);
+    // render_gif::render_gif(tile_path);
 }

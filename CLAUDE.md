@@ -2,6 +2,24 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+## Learning Guide
+
+This project uses the `learning-guide` skill (located at `skills/learning-guide/SKILL.md`). It is **always active**.
+
+### Commands
+
+| Command | What it does |
+|---|---|
+| `--R` | Generate / update `docs/lessons/phase-N/long-report.md` and `short-report.md` |
+| `--\|` | Save session to `docs/sessions/phase-N/main-session.md` and update CLAUDE.md |
+| `--\|--` | Restore from the most recent session file in `docs/sessions/` |
+| `--\|--path` | Restore from a specific file, e.g. `--\|--docs/sessions/phase-2/session-1.md` |
+| `--s` | Show current phase, completion status, open items, last session summary |
+| `--v` | Finalise current phase if all planned items are complete |
+| `--v--FORCE` | Finalise unconditionally; carry incomplete items as open items to next phase |
+
+---
+
 ## Interaction Mode
 
 - **Guide, don't implement.** The user is building this to learn. Explain *why* something works at the hardware level, point to the right direction, suggest experiments — but do not write code or execute commands unless explicitly asked.
@@ -16,7 +34,7 @@ A learning-first, cache-optimized terrain + sunlight renderer in Rust using real
 
 ## Status
 
-**Current phase: Phase 5** (Phases 0, 1, 2, 3, 4 complete)
+**Current phase: Phase 6** (Phases 0, 1, 2, 3, 4, 5 complete)
 
 Phase 0 artifacts:
 - `crates/profiling/src/lib.rs` — `now()` (cntvct_el0 via inline asm), `timed()`, tests
@@ -97,11 +115,57 @@ Phase 4 key numbers (M4 Max, 2000×900 image, step_m = dx_meters ≈ 20.7m):
 - Lesson: for memory-bound code with sequential access, parallelism >> manual SIMD; NEON gain cancelled by gather overhead + compiler auto-vectorization of scalar
 - Lesson: screen-space tiling not beneficial here — horizontal 1×4 packets already give optimal cache-line reuse; bottleneck is gather count not cache misses
 
+Phase 5 artifacts:
+- `crates/render_gpu/src/context.rs` — `GpuContext { device, queue }`, `new()` does one-time Instance→Adapter→Device init (~80ms)
+- `crates/render_gpu/src/render_buffer.rs` — `render_gpu_buffer()`: heightmap as storage buffer, normals+shadow uploaded each call
+- `crates/render_gpu/src/render_rexture.rs` — `render_gpu_texture()`: heightmap as 2D texture + sampler
+- `crates/render_gpu/src/render_gpu_combined.rs` — `render_gpu_combined()`: normals computed on GPU, no normal map upload
+- `crates/render_gpu/src/normals_gpu.rs` — `compute_normals_gpu()`: wgpu compute pass, outputs NormalMap
+- `crates/render_gpu/src/shadow_gpu.rs` — `compute_shadow_gpu()`: GPU shadow sweep (serial, slower than CPU NEON)
+- `crates/render_gpu/src/scene.rs` — `GpuScene`: all static GPU resources persistent; only 128 bytes written per frame
+- `crates/render_gpu/src/camera.rs` — `CameraUniforms` (128 bytes, std140-padded), build_camera_uniforms()
+- `crates/render_gpu/src/shader_buffer.wgsl` — raymarching shader using storage buffer for heightmap
+- `crates/render_gpu/src/shader_texture.wgsl` — raymarching shader using 2D texture for heightmap
+- `crates/render_gpu/src/shader_normals.wgsl` — normals compute pass (finite differences on GPU)
+- `crates/render_gpu/src/shader_shadow.wgsl` — shadow sweep compute pass (GPU)
+- `src/benchmarks/multi_frame.rs` — 4-way multi-frame benchmark: CPU parallel, GPU separate, GPU combined, GPU scene
+- `src/render_gif.rs` — 60-frame GIF renderer at 1600×533, 20fps, using GpuScene
+- `src/frame_render_final.rs` — camera setup from Google Earth coords, CPU + GPU single-image renders
+- `docs/lessons/phase-5/long-report.md` — comprehensive Phase 5 student textbook
+- `docs/lessons/phase-5/short-report.md` — comprehensive Phase 5 reference
+- `docs/sessions/phase-5/benchmark_results.md` — full benchmark table from 2026-04-06 run
+- `docs/sessions/phase-5/main-session.md` — session log
+
+Phase 5 key numbers (M4 Max, 8000×2667 = 21.3 Mpix, step_m = dx/1.0 ≈ 20.7m):
+- GPU buffer: 130 ms | GPU texture: 170 ms | GPU combined: 90 ms | CPU parallel: 1260 ms
+- Buffer beats texture: 1.3× (stripe-like ray access doesn't benefit 2D texture cache; sampler unit adds latency)
+- GPU combined vs buffer: combined skips 156 MB normal upload; wins by 1.4×
+- Multi-frame per-frame: CPU 1730ms | GPU separate 133ms | GPU combined 120ms | GPU scene 98ms
+- GpuScene speedup over CPU: 17.7× — only 128 bytes written per frame; 85 MB readback is the hard floor (~88ms)
+- Shadow CPU vs GPU: NEON parallel 1.5ms vs GPU 26ms — CPU wins 17× (serial running-max dependency)
+- Diagonal shadow 2.4× slower than cardinal (strided cache-line access)
+- Workgroup size (all variants 64–256 threads, shapes 8×8 to 32×8): all within ±3% (~136–140ms) — readback dominates, compute dispatch is ~5–10ms
+
+Phase 5 lessons:
+- GPU wins rendering (17.7×) because raymarching is embarrassingly parallel — no inter-pixel dependencies
+- CPU wins shadow because running-max is serial per row; GPU shader cores run at lower clock with no advantage
+- wgpu bind groups store GPU addresses, not CPU-side Arc refs — all referenced resources must be kept alive in the owning struct
+- `write_buffer` updates buffer contents in-place; bound bind group sees new data automatically on next dispatch
+- Normals computed once on GPU in `GpuScene::new()` and never read back; shadow computed on CPU (NEON) and uploaded
+- The GPU readback floor (~88ms for 85 MB) limits max frame rate; eliminating it requires a display/swap-chain architecture
+- Workgroup size (shape or thread count 64→256) has no effect: all variants ±3% because the 85 MB readback dominates; dispatch itself is ~5–10 ms
+
+Known open items from Phase 5:
+- GPU shadow via parallel prefix scan not implemented — would potentially match CPU NEON for cardinal direction
+- Occupancy analysis via Instruments/Metal GPU trace deferred — requires full Xcode.app; not a priority since workgroup tuning shows no effect with readback dominating
+- GIF rendering uses CPU readback + GIF encoding; the 85 MB readback dominates per-frame cost
+- `render_gif::render_gif` is commented out in main.rs — re-enable when generating animations
+
 Known open items from Phase 4:
 - Supersampled ray optimization considered but not implemented: march 1 reference ray, approximate 3 neighbor heights via `h ≈ h_center + grad_x * Δcol + grad_y * Δrow` (using Phase 2 normal map). Would reduce gather 4→1 per step. Breaks at sharp discrete peaks.
 
 Known open items from Phase 3:
-- `compute_shadow_neon_parallel_with_azimuth` written but not yet benchmarked at various azimuths — pending diagonal vs cardinal comparison
+- `compute_shadow_neon_parallel_with_azimuth` benchmarked at sunset (270°): 26.3 GB/s vs cardinal 55.4 GB/s — 2.1× gap confirmed
 - `profiling::timed(label, ...)` in `random_read`, `seq_write`, `random_write` uses wrong label `"seq_read"` — fix
 - `fill_nodata` division-by-zero if all 4 directions hit boundary without finding valid data
 - Drop `bil_bytes` early in `parse_bil` to halve peak memory
@@ -215,23 +279,16 @@ Key counters: `cache-misses`, `L1-dcache-load-misses`, `dTLB-load-misses`, `inst
 
 ## Custom Procedures
 
-### GENERATE_REPORTS{}
+### Reports — use `--R`
 
-When the user types `GENERATE_REPORTS{}`, do the following — no questions, no confirmation:
+`--R` replaces `GENERATE_REPORTS{}`. See `learning-guide/references/reporting.md` for full spec.
 
-1. **Determine the current phase** from the Status section above (e.g., "Phase 0").
+No confirmation needed — run immediately when `--R` is typed. Read the current phase's session log
+and any existing reports, then write or fully update both:
+- `docs/lessons/phase-N/long-report.md` — comprehensive student textbook
+- `docs/lessons/phase-N/short-report.md` — thorough reference (refresh in 10–15 min)
 
-2. **Read the session log** at `docs/sessions/phase-N/main-session.md` to reconstruct what was covered.
-
-3. **Read the existing reports** at `docs/lessons/phase-N/long-report.md` and `docs/lessons/phase-N/short-report.md` if they exist.
-
-4. **Write `docs/lessons/phase-N/long-report.md`** — a comprehensive student textbook covering every concept from the phase. Structure: numbered parts, every term defined on first use, all hardware reasoning included, all code patterns shown with explanation, all gotchas and errors documented, all benchmark results with analysis. Think: a student who missed the session can learn everything from this document alone.
-
-5. **Write `docs/lessons/phase-N/short-report.md`** — a comprehensive reference document. Structure: numbered sections, every topic covered with brief but self-contained explanations (2–6 sentences per concept), all code patterns included, all tables and numbers. Think: a student who did the session uses this to refresh their full mental model in 10–15 minutes.
-
-6. **Do not update the session log** — that is written during or immediately after the session, not on demand.
-
-The long report is a textbook. The short report is a thorough reference, not a cheatsheet.
+Do not update the session log during `--R` — that is `--|`'s job.
 
 ---
 
