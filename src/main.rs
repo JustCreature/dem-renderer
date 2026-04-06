@@ -1,11 +1,11 @@
 mod benchmarks;
-mod frame_render_cpu;
+mod frame_render_final;
 mod utils;
 
 use std::path::Path;
 
 use crate::benchmarks::*;
-use frame_render_cpu::render_3d_pic_cpu;
+use frame_render_final::{render_3d_pic_cpu, render_3d_pic_gpu};
 use utils::*;
 
 use dem_io::{Heightmap, TiledHeightmap};
@@ -344,6 +344,7 @@ fn main() {
         .unwrap();
 
     render_3d_pic_cpu(tile_path);
+    render_3d_pic_gpu(tile_path);
 
     pic_width = 8000;
     pic_height = 2667;
