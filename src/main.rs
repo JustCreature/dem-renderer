@@ -1,5 +1,6 @@
 mod benchmarks;
 mod frame_render_final;
+mod render_gif;
 mod utils;
 
 use std::path::Path;
@@ -500,13 +501,8 @@ fn main() {
     // benchmark_multi_frame_cpu(&heightmap, &normal_map, &shadow_mask);
     benchmark_multi_frame_gpu_separate(&gpu_ctx, &heightmap, &normal_map, &shadow_mask);
     benchmark_multi_frame_gpu_combined(&gpu_ctx, &heightmap, &shadow_mask);
+    // GpuScene takes ctx by value (owns it) — create a dedicated one
+    benchmark_multi_frame_gpu_scene(render_gpu::GpuContext::new(), &heightmap, &shadow_mask);
 
-    pic_width = 2000;
-    pic_height = 900;
-    cam = render_cpu::Camera::new(
-        [cam_col * dx, cam_row * dy, 3341.0],
-        [cam_col * dx + 19_627.0, cam_row * dy - 1_718.0, -131.0],
-        70.0,
-        pic_width as f32 / pic_height as f32,
-    );
+    render_gif::render_gif(tile_path);
 }

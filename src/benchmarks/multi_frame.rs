@@ -155,6 +155,45 @@ pub(crate) fn benchmark_multi_frame_gpu_separate(
     );
 }
 
+// ── GPU scene (static data uploaded once; only camera written per frame) ─────
+
+pub(crate) fn benchmark_multi_frame_gpu_scene(
+    gpu_ctx: render_gpu::GpuContext,
+    heightmap: &Heightmap,
+    shadow_mask: &ShadowMask,
+) {
+    let dx = heightmap.dx_meters as f32;
+    let dy = heightmap.dy_meters as f32;
+    let step_m = heightmap.dx_meters as f32 / STEP_SIZE;
+    let aspect = PIC_WIDTH as f32 / PIC_HEIGHT as f32;
+
+    // new() uploads heightmap + computes normals once
+    let scene = render_gpu::GpuScene::new(gpu_ctx, heightmap, shadow_mask, PIC_WIDTH, PIC_HEIGHT);
+
+    // Warm-up: Metal compiles the render pipeline on first dispatch
+    {
+        let (origin, look_at) = frame_cam(0, dx, dy);
+        let _ = scene.render_frame(origin, look_at, FOV_DEG, aspect, SUN_DIR, step_m, T_MAX);
+    }
+
+    let t0 = profiling::now();
+    for i in 0..N_FRAMES {
+        let (origin, look_at) = frame_cam(i, dx, dy);
+        let _ = std::hint::black_box(
+            scene.render_frame(origin, look_at, FOV_DEG, aspect, SUN_DIR, step_m, T_MAX),
+        );
+    }
+    let total_s = (profiling::now() - t0) as f64 / counter_frequency();
+    println!(
+        "multi_frame GPU_scene       {}x{}: {:5.1}ms/frame  ({:.2}s total, {} frames)",
+        PIC_WIDTH,
+        PIC_HEIGHT,
+        total_s / N_FRAMES as f64 * 1000.0,
+        total_s,
+        N_FRAMES,
+    );
+}
+
 // ── GPU combined (normals recomputed on GPU every frame) ─────────────────────
 
 pub(crate) fn benchmark_multi_frame_gpu_combined(
