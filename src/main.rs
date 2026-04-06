@@ -506,4 +506,48 @@ fn main() {
     benchmark_multi_frame_gpu_scene(render_gpu::GpuContext::new(), &heightmap, &shadow_mask);
 
     // render_gif::render_gif(tile_path);
+
+    // -- Valley render
+    // Camera: 47°03'52.84"N 11°42'26.24"E, alt 3284m, heading 165°, tilt 72° from nadir
+    // Google Earth cursor alt 2339m → used as look-at altitude
+    // row = (48 - 47.064678) * 3600 = 3367, col = (11.707289 - 11) * 3600 = 2546
+    // moved 200m back (opposite heading) and tilted down to 72° (was 78°)
+    {
+        let cam_col_v = 2546.0f32;
+        let cam_row_v = 3367.0f32;
+        let cam_alt_v = 3284.0f32;
+        let look_alt_v = 2339.0f32;
+        let heading_rad_v = 165.0f32.to_radians();
+        // move 200m back: opposite heading direction
+        let cam_x_v = cam_col_v * dx - 800.0 * heading_rad_v.sin();
+        let cam_y_v = cam_row_v * dy + 800.0 * heading_rad_v.cos(); // cos(165°)<0 → moves north
+                                                                    // tilt down to 72° from nadir (was 78°): shorter horizontal lookahead
+        let horiz_v = (cam_alt_v - look_alt_v) * 77.0f32.to_radians().tan();
+        let look_x_v = cam_x_v + horiz_v * heading_rad_v.sin();
+        let look_y_v = cam_y_v + horiz_v * (-heading_rad_v.cos());
+
+        let (ticks, fb) = profiling::timed("render valley", || {
+            render_gpu::render_gpu_texture(
+                &gpu_ctx,
+                [cam_x_v, cam_y_v, cam_alt_v],
+                [look_x_v, look_y_v, look_alt_v],
+                70.0,
+                8000.0 / 2667.0,
+                &heightmap,
+                &normal_map,
+                &shadow_mask,
+                sun_dir,
+                8000,
+                2667,
+                heightmap.dx_meters as f32 / 0.8,
+                200_000.0,
+            )
+        });
+        println!("valley render: {:.2}s", ticks as f64 / counter_frequency());
+
+        image::RgbaImage::from_raw(8000, 2667, fb)
+            .unwrap()
+            .save("artifacts/valley.png")
+            .unwrap();
+    }
 }
