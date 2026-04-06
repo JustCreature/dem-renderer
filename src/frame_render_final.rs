@@ -2,7 +2,7 @@ use std::path::Path;
 
 use dem_io::Heightmap;
 use terrain::{
-    compute_normals_neon_parallel, compute_shadow_neon_parallel_with_azimuth, NormalMap, ShadowMask,
+    compute_normals_vector_par, compute_shadow_vector_par_with_azimuth, NormalMap, ShadowMask,
 };
 
 use crate::utils::counter_frequency;
@@ -34,40 +34,35 @@ pub(crate) fn render_3d_pic_cpu(tile_path: &Path) {
     let sun_azimuth_rad = (sun_dir[0]).atan2(-sun_dir[1]); // atan2(east, north)
     let sun_elevation_rad = sun_dir[2].atan2((sun_dir[0].powi(2) + sun_dir[1].powi(2)).sqrt());
 
-    unsafe {
-        let normal_map: NormalMap = compute_normals_neon_parallel(&heightmap);
+    let normal_map: NormalMap = compute_normals_vector_par(&heightmap);
 
-        let shadow_mask: ShadowMask = compute_shadow_neon_parallel_with_azimuth(
+    let shadow_mask: ShadowMask =
+        compute_shadow_vector_par_with_azimuth(&heightmap, sun_azimuth_rad, sun_elevation_rad);
+
+    let (ticks, fb) = profiling::timed("render_cpu[CPU|shadows_SCALAR_PARALLEL]", || {
+        render_cpu::render_par(
+            &cam,
             &heightmap,
-            sun_azimuth_rad,
-            sun_elevation_rad,
-        );
-
-        let (ticks, fb) = profiling::timed("render_cpu[CPU|shadows_SCALAR_PARALLEL]", || {
-            render_cpu::render_par(
-                &cam,
-                &heightmap,
-                &normal_map,
-                &shadow_mask,
-                sun_dir,
-                pic_width,
-                pic_height,
-                heightmap.dx_meters as f32 / 0.8,
-                200_000.0,
-            )
-        });
-        println!(
-            "render_cpu CPU|shadows_SCALAR_PARALLEL {}x{}: {:.2}s",
+            &normal_map,
+            &shadow_mask,
+            sun_dir,
             pic_width,
             pic_height,
-            ticks as f64 / counter_frequency()
-        );
+            heightmap.dx_meters as f32 / 0.8,
+            200_000.0,
+        )
+    });
+    println!(
+        "render_cpu CPU|shadows_SCALAR_PARALLEL {}x{}: {:.2}s",
+        pic_width,
+        pic_height,
+        ticks as f64 / counter_frequency()
+    );
 
-        image::RgbImage::from_raw(pic_width, pic_height, fb)
-            .unwrap()
-            .save("artifacts/render_cpu[CPU|shadows_SCALAR_PARALLEL].png")
-            .unwrap();
-    }
+    image::RgbImage::from_raw(pic_width, pic_height, fb)
+        .unwrap()
+        .save("artifacts/render_cpu[CPU|shadows_SCALAR_PARALLEL].png")
+        .unwrap();
 }
 
 pub(crate) fn render_3d_pic_gpu(tile_path: &Path) {
@@ -90,44 +85,39 @@ pub(crate) fn render_3d_pic_gpu(tile_path: &Path) {
     let sun_azimuth_rad = (sun_dir[0]).atan2(-sun_dir[1]); // atan2(east, north)
     let sun_elevation_rad = sun_dir[2].atan2((sun_dir[0].powi(2) + sun_dir[1].powi(2)).sqrt());
 
-    unsafe {
-        let normal_map: NormalMap = compute_normals_neon_parallel(&heightmap);
+    let normal_map: NormalMap = compute_normals_vector_par(&heightmap);
 
-        let shadow_mask: ShadowMask = compute_shadow_neon_parallel_with_azimuth(
+    let shadow_mask: ShadowMask =
+        compute_shadow_vector_par_with_azimuth(&heightmap, sun_azimuth_rad, sun_elevation_rad);
+
+    let gpu_ctx = render_gpu::GpuContext::new();
+
+    let (ticks, fb) = profiling::timed("render_gpu[GPU]", || {
+        render_gpu::render_gpu_texture(
+            &gpu_ctx,
+            [cam_col * dx, cam_row * dy, 3341.0],
+            [cam_col * dx + 19_627.0, cam_row * dy - 1_718.0, -131.0],
+            70.0,
+            pic_width as f32 / pic_height as f32,
             &heightmap,
-            sun_azimuth_rad,
-            sun_elevation_rad,
-        );
-
-        let gpu_ctx = render_gpu::GpuContext::new();
-
-        let (ticks, fb) = profiling::timed("render_gpu[GPU]", || {
-            render_gpu::render_gpu_texture(
-                &gpu_ctx,
-                [cam_col * dx, cam_row * dy, 3341.0],
-                [cam_col * dx + 19_627.0, cam_row * dy - 1_718.0, -131.0],
-                70.0,
-                pic_width as f32 / pic_height as f32,
-                &heightmap,
-                &normal_map,
-                &shadow_mask,
-                sun_dir,
-                pic_width,
-                pic_height,
-                heightmap.dx_meters as f32 / 0.8,
-                200_000.0,
-            )
-        });
-        println!(
-            "render_gpu GPU {}x{}: {:.2}s",
+            &normal_map,
+            &shadow_mask,
+            sun_dir,
             pic_width,
             pic_height,
-            ticks as f64 / counter_frequency()
-        );
+            heightmap.dx_meters as f32 / 0.8,
+            200_000.0,
+        )
+    });
+    println!(
+        "render_gpu GPU {}x{}: {:.2}s",
+        pic_width,
+        pic_height,
+        ticks as f64 / counter_frequency()
+    );
 
-        image::RgbaImage::from_raw(pic_width, pic_height, fb)
-            .unwrap()
-            .save("artifacts/render_gpu[GPU].png")
-            .unwrap();
-    }
+    image::RgbaImage::from_raw(pic_width, pic_height, fb)
+        .unwrap()
+        .save("artifacts/render_gpu[GPU].png")
+        .unwrap();
 }

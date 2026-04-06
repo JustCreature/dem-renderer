@@ -275,8 +275,7 @@ fn stencil_morton(hm: &MortonHeightmap, output: &mut [f32]) {
                         data[tile_e + r * ts]
                     } as f32;
 
-                    output[global_r * hm.cols + global_c] =
-                        center + north + south + west + east;
+                    output[global_r * hm.cols + global_c] = center + north + south + west + east;
                 }
             }
         }
@@ -658,10 +657,11 @@ pub(crate) fn bench_tlb_sweep(data: &[f32]) {
 
     println!("--- Phase 6 / Exp 9: TLB Working Set Sweep ---");
     println!("  macOS/M4: 16KB base pages (not 4KB like x86)");
+    println!("  L1 DTLB: ~256 entries × 16KB = ~4 MB  |  L2 TLB: ~3000 × 16KB = ~48 MB");
     println!(
-        "  L1 DTLB: ~256 entries × 16KB = ~4 MB  |  L2 TLB: ~3000 × 16KB = ~48 MB"
+        "  {} M random reads per size, 4 bytes each",
+        n_accesses / 1_000_000
     );
-    println!("  {} M random reads per size, 4 bytes each", n_accesses / 1_000_000);
     println!();
 
     // Working set sizes in floats
@@ -858,9 +858,7 @@ pub(crate) fn bench_software_prefetch(data: &[f32]) {
     }
 
     println!();
-    println!(
-        "  sequential ceiling (Exp 1): ~68 GB/s — bandwidth-limited, not latency-limited"
-    );
+    println!("  sequential ceiling (Exp 1): ~68 GB/s — bandwidth-limited, not latency-limited");
 }
 
 // ---------------------------------------------------------------------------
@@ -882,7 +880,7 @@ pub(crate) fn bench_software_prefetch(data: &[f32]) {
 #[cfg(target_arch = "aarch64")]
 #[inline(never)]
 #[target_feature(enable = "neon")]
-unsafe fn shade_neon_1acc(nx: &[f32], ny: &[f32], nz: &[f32], sun: [f32; 3]) -> f32 {
+unsafe fn shade_vector_1acc(nx: &[f32], ny: &[f32], nz: &[f32], sun: [f32; 3]) -> f32 {
     use core::arch::aarch64::*;
     let sx = vdupq_n_f32(sun[0]);
     let sy = vdupq_n_f32(sun[1]);
@@ -904,7 +902,7 @@ unsafe fn shade_neon_1acc(nx: &[f32], ny: &[f32], nz: &[f32], sun: [f32; 3]) -> 
 #[cfg(target_arch = "aarch64")]
 #[inline(never)]
 #[target_feature(enable = "neon")]
-unsafe fn shade_neon_4acc(nx: &[f32], ny: &[f32], nz: &[f32], sun: [f32; 3]) -> f32 {
+unsafe fn shade_vector_4acc(nx: &[f32], ny: &[f32], nz: &[f32], sun: [f32; 3]) -> f32 {
     use core::arch::aarch64::*;
     let sx = vdupq_n_f32(sun[0]);
     let sy = vdupq_n_f32(sun[1]);
@@ -949,7 +947,7 @@ unsafe fn shade_neon_4acc(nx: &[f32], ny: &[f32], nz: &[f32], sun: [f32; 3]) -> 
 #[cfg(target_arch = "aarch64")]
 #[inline(never)]
 #[target_feature(enable = "neon")]
-unsafe fn shade_neon_8acc(nx: &[f32], ny: &[f32], nz: &[f32], sun: [f32; 3]) -> f32 {
+unsafe fn shade_vector_8acc(nx: &[f32], ny: &[f32], nz: &[f32], sun: [f32; 3]) -> f32 {
     use core::arch::aarch64::*;
     let sx = vdupq_n_f32(sun[0]);
     let sy = vdupq_n_f32(sun[1]);
@@ -993,7 +991,7 @@ unsafe fn shade_neon_8acc(nx: &[f32], ny: &[f32], nz: &[f32], sun: [f32; 3]) -> 
     vaddvq_f32(vaddq_f32(vaddq_f32(s01, s23), vaddq_f32(s45, s67)))
 }
 
-pub(crate) fn bench_neon_accumulators(nm: &terrain::NormalMap) {
+pub(crate) fn bench_vector_accumulators(nm: &terrain::NormalMap) {
     let n = nm.rows * nm.cols;
     let sun = [0.4f32, 0.5f32, 0.7f32];
     let bytes = n * 12; // 3 × f32/pixel
@@ -1020,8 +1018,8 @@ pub(crate) fn bench_neon_accumulators(nm: &terrain::NormalMap) {
     #[cfg(target_arch = "aarch64")]
     {
         evict_cache();
-        let (ticks, _) = profiling::timed("shade_neon_1acc", || {
-            std::hint::black_box(unsafe { shade_neon_1acc(&nm.nx, &nm.ny, &nm.nz, sun) });
+        let (ticks, _) = profiling::timed("shade_vector_1acc", || {
+            std::hint::black_box(unsafe { shade_vector_1acc(&nm.nx, &nm.ny, &nm.nz, sun) });
         });
         println!(
             "  NEON explicit 1 acc:      {:>5.1} GB/s  (4 f32/iter, serial dep)",
@@ -1029,8 +1027,8 @@ pub(crate) fn bench_neon_accumulators(nm: &terrain::NormalMap) {
         );
 
         evict_cache();
-        let (ticks, _) = profiling::timed("shade_neon_4acc", || {
-            std::hint::black_box(unsafe { shade_neon_4acc(&nm.nx, &nm.ny, &nm.nz, sun) });
+        let (ticks, _) = profiling::timed("shade_vector_4acc", || {
+            std::hint::black_box(unsafe { shade_vector_4acc(&nm.nx, &nm.ny, &nm.nz, sun) });
         });
         println!(
             "  NEON explicit 4 acc:      {:>5.1} GB/s  (16 f32/iter, 4 parallel chains)",
@@ -1038,8 +1036,8 @@ pub(crate) fn bench_neon_accumulators(nm: &terrain::NormalMap) {
         );
 
         evict_cache();
-        let (ticks, _) = profiling::timed("shade_neon_8acc", || {
-            std::hint::black_box(unsafe { shade_neon_8acc(&nm.nx, &nm.ny, &nm.nz, sun) });
+        let (ticks, _) = profiling::timed("shade_vector_8acc", || {
+            std::hint::black_box(unsafe { shade_vector_8acc(&nm.nx, &nm.ny, &nm.nz, sun) });
         });
         println!(
             "  NEON explicit 8 acc:      {:>5.1} GB/s  (32 f32/iter, 8 parallel chains)",
@@ -1112,9 +1110,7 @@ pub(crate) fn bench_aos_vs_soa(nm: &terrain::NormalMap) {
     let bytes_nz = n * 4; // 1 × f32 per pixel
 
     // Build AoS layout once (excluded from benchmark timing)
-    let aos: Vec<[f32; 3]> = (0..n)
-        .map(|i| [nm.nx[i], nm.ny[i], nm.nz[i]])
-        .collect();
+    let aos: Vec<[f32; 3]> = (0..n).map(|i| [nm.nx[i], nm.ny[i], nm.nz[i]]).collect();
 
     println!("--- Phase 6 / Exp 4: AoS vs SoA Normal Storage ---");
     println!(
@@ -1140,7 +1136,11 @@ pub(crate) fn bench_aos_vs_soa(nm: &terrain::NormalMap) {
 
     println!("  dot(normal, sun)  — 12 bytes/pixel");
     println!("    SoA: {:>6.1} GB/s", soa_dot);
-    println!("    AoS: {:>6.1} GB/s  ({:.2}× vs SoA)", aos_dot, aos_dot / soa_dot);
+    println!(
+        "    AoS: {:>6.1} GB/s  ({:.2}× vs SoA)",
+        aos_dot,
+        aos_dot / soa_dot
+    );
     println!();
 
     // --- Kernel B: nz-only (1 of 3 components) ---
@@ -1160,10 +1160,16 @@ pub(crate) fn bench_aos_vs_soa(nm: &terrain::NormalMap) {
     let aos_nz_actual = count_gb_per_sec(ticks, Some(bytes_full));
 
     println!("  nz-only  — 4 bytes/pixel SoA, 12 bytes/pixel AoS (logical 4 reported)");
-    println!("    SoA: {:>6.1} GB/s  ({} MB read)", soa_nz, bytes_nz / 1_000_000);
+    println!(
+        "    SoA: {:>6.1} GB/s  ({} MB read)",
+        soa_nz,
+        bytes_nz / 1_000_000
+    );
     println!(
         "    AoS: {:>6.1} GB/s  (actual cache traffic: {:.1} GB/s for {} MB)",
-        aos_nz, aos_nz_actual, bytes_full / 1_000_000
+        aos_nz,
+        aos_nz_actual,
+        bytes_full / 1_000_000
     );
     println!("    SoA advantage: {:.1}×", soa_nz / aos_nz);
     println!();
@@ -1195,10 +1201,16 @@ pub(crate) fn bench_aos_vs_soa(nm: &terrain::NormalMap) {
     let aos_nz_par_actual = count_gb_per_sec(ticks, Some(bytes_full));
 
     println!("  nz-only parallel (10 threads) — dependency chain broken");
-    println!("    SoA: {:>6.1} GB/s  ({} MB read)", soa_nz_par, bytes_nz / 1_000_000);
+    println!(
+        "    SoA: {:>6.1} GB/s  ({} MB read)",
+        soa_nz_par,
+        bytes_nz / 1_000_000
+    );
     println!(
         "    AoS: {:>6.1} GB/s  (actual: {:.1} GB/s, {} MB read)",
-        aos_nz_par, aos_nz_par_actual, bytes_full / 1_000_000
+        aos_nz_par,
+        aos_nz_par_actual,
+        bytes_full / 1_000_000
     );
     println!("    SoA advantage: {:.1}×", soa_nz_par / aos_nz_par);
 }

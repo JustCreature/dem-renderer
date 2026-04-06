@@ -1,15 +1,99 @@
 mod camera;
 mod raymarch;
+#[cfg(target_arch = "aarch64")]
 mod raymarch_neon;
 mod render;
+#[cfg(target_arch = "aarch64")]
 mod render_neon;
 mod vector_utils;
 
 pub use camera::{Camera, Ray};
 pub use raymarch::raymarch;
+#[cfg(target_arch = "aarch64")]
 pub use raymarch_neon::{RayPacket, raymarch_neon};
 pub use render::{render, render_par};
+#[cfg(target_arch = "aarch64")]
 pub use render_neon::{render_neon, render_neon_par};
+
+pub fn render_vector(
+    cam: &Camera,
+    hm: &dem_io::Heightmap,
+    normals: &terrain::NormalMap,
+    shadow_mask: &terrain::ShadowMask,
+    sun_dir: [f32; 3],
+    width: u32,
+    height: u32,
+    step_m: f32,
+    t_max: f32,
+) -> Vec<u8> {
+    #[cfg(target_arch = "aarch64")]
+    return unsafe {
+        render_neon(
+            cam,
+            hm,
+            normals,
+            shadow_mask,
+            sun_dir,
+            width,
+            height,
+            step_m,
+            t_max,
+        )
+    };
+    // TODO: replace with render_avx2 once implemented
+    #[cfg(not(target_arch = "aarch64"))]
+    return render(
+        cam,
+        hm,
+        normals,
+        shadow_mask,
+        sun_dir,
+        width,
+        height,
+        step_m,
+        t_max,
+    );
+}
+
+pub fn render_vector_par(
+    cam: &Camera,
+    hm: &dem_io::Heightmap,
+    normals: &terrain::NormalMap,
+    shadow_mask: &terrain::ShadowMask,
+    sun_dir: [f32; 3],
+    width: u32,
+    height: u32,
+    step_m: f32,
+    t_max: f32,
+) -> Vec<u8> {
+    #[cfg(target_arch = "aarch64")]
+    return unsafe {
+        render_neon_par(
+            cam,
+            hm,
+            normals,
+            shadow_mask,
+            sun_dir,
+            width,
+            height,
+            step_m,
+            t_max,
+        )
+    };
+    // TODO: replace with render_avx2_par once implemented
+    #[cfg(not(target_arch = "aarch64"))]
+    return render_par(
+        cam,
+        hm,
+        normals,
+        shadow_mask,
+        sun_dir,
+        width,
+        height,
+        step_m,
+        t_max,
+    );
+}
 
 use crate::vector_utils::normalize;
 use dem_io::Heightmap;

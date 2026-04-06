@@ -1,8 +1,4 @@
 use core::f32;
-use std::arch::aarch64::{
-    float32x4_t, uint32x4_t, vaddq_f32, vbslq_f32, vcltq_f32, vdupq_n_f32, vgetq_lane_f32,
-    vld1q_f32, vmaxq_f32,
-};
 
 use crate::SendPtr;
 use dem_io::Heightmap;
@@ -177,7 +173,12 @@ pub fn compute_shadow_scalar_with_azimuth(
 
 // ── NEON 4-wide west-only ────────────────────────────────────────────────────
 
+#[cfg(target_arch = "aarch64")]
 pub unsafe fn compute_shadow_neon(hm: &Heightmap, sun_elevation_rad: f32) -> ShadowMask {
+    use std::arch::aarch64::{
+        float32x4_t, uint32x4_t, vaddq_f32, vbslq_f32, vcltq_f32, vdupq_n_f32, vgetq_lane_f32,
+        vld1q_f32, vmaxq_f32,
+    };
     let mut data: Vec<f32> = vec![1.0f32; hm.rows * hm.cols];
     let dx: f32 = hm.dx_meters as f32;
     let tan_sun: f32 = sun_elevation_rad.tan();
@@ -239,7 +240,12 @@ pub unsafe fn compute_shadow_neon(hm: &Heightmap, sun_elevation_rad: f32) -> Sha
 
 // ── NEON parallel west-only ───────────────────────────────────────────────────
 
+#[cfg(target_arch = "aarch64")]
 pub unsafe fn compute_shadow_neon_parallel(hm: &Heightmap, sun_elevation_rad: f32) -> ShadowMask {
+    use std::arch::aarch64::{
+        float32x4_t, uint32x4_t, vaddq_f32, vbslq_f32, vcltq_f32, vdupq_n_f32, vgetq_lane_f32,
+        vld1q_f32, vmaxq_f32,
+    };
     let mut data: Vec<f32> = vec![1.0f32; hm.rows * hm.cols];
     let dx: f32 = hm.dx_meters as f32;
     let tan_sun: f32 = sun_elevation_rad.tan();
@@ -320,11 +326,16 @@ pub unsafe fn compute_shadow_neon_parallel(hm: &Heightmap, sun_elevation_rad: f3
 // AArch64 a 32-bit store is a single instruction — no torn writes.
 // The two threads write either 0.0 or 1.0; both are valid f32 values.
 
+#[cfg(target_arch = "aarch64")]
 pub unsafe fn compute_shadow_neon_parallel_with_azimuth(
     hm: &Heightmap,
     sun_azimuth_rad: f32,
     sun_elevation_rad: f32,
 ) -> ShadowMask {
+    use std::arch::aarch64::{
+        float32x4_t, uint32x4_t, vaddq_f32, vbslq_f32, vcltq_f32, vdupq_n_f32, vgetq_lane_f32,
+        vld1q_f32, vmaxq_f32,
+    };
     let mut data: Vec<f32> = vec![1.0f32; hm.rows * hm.cols];
     let dx = hm.dx_meters as f32;
     let dy = hm.dy_meters as f32;

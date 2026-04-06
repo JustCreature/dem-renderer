@@ -3,7 +3,7 @@ use std::path::Path;
 
 use image::codecs::gif::{GifEncoder, Repeat};
 use image::{Delay, Frame, RgbaImage};
-use terrain::{compute_normals_neon_parallel, compute_shadow_neon_parallel_with_azimuth};
+use terrain::{compute_normals_vector_par, compute_shadow_vector_par_with_azimuth};
 
 // Lower resolution so the GIF file is manageable
 // const GIF_WIDTH: u32 = 800;
@@ -40,10 +40,9 @@ pub(crate) fn render_gif(tile_path: &Path) {
     let sun_azimuth_rad = (SUN_DIR[0]).atan2(-SUN_DIR[1]);
     let sun_elevation_rad = SUN_DIR[2].atan2((SUN_DIR[0].powi(2) + SUN_DIR[1].powi(2)).sqrt());
 
-    let shadow_mask = unsafe {
-        compute_shadow_neon_parallel_with_azimuth(&heightmap, sun_azimuth_rad, sun_elevation_rad)
-    };
-    let _normal_map = unsafe { compute_normals_neon_parallel(&heightmap) };
+    let shadow_mask =
+        compute_shadow_vector_par_with_azimuth(&heightmap, sun_azimuth_rad, sun_elevation_rad);
+    let _normal_map = compute_normals_vector_par(&heightmap);
 
     // Build scene once: heightmap uploaded, normals computed on GPU
     let scene = render_gpu::GpuScene::new(

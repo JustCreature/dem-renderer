@@ -1,4 +1,5 @@
-use crate::vector_utils::*;
+#![cfg(target_arch = "aarch64")]
+
 use core::arch::aarch64::*;
 use std::u32;
 

@@ -39,6 +39,7 @@ pub(crate) fn seq_read_simd(data: &[f32]) {
     println!("seq_read_simd: {:.1} GB/s", gb_per_sec);
 }
 
+#[cfg(target_arch = "aarch64")]
 pub(crate) fn random_read_simd(data: &[f32]) {
     use core::arch::aarch64::*;
 
@@ -102,6 +103,22 @@ pub(crate) fn random_read_simd(data: &[f32]) {
 
     let gb_per_sec = count_gb_per_sec(ticks, None);
     println!("random_read_simd: {:.1} GB/s", gb_per_sec);
+}
+
+pub(crate) fn seq_read_vector(data: &[f32]) {
+    #[cfg(target_arch = "aarch64")]
+    seq_read_simd(data);
+    // TODO: replace with seq_read_avx2 once implemented
+    #[cfg(not(target_arch = "aarch64"))]
+    seq_read(data);
+}
+
+pub(crate) fn random_read_vector(data: &[f32]) {
+    #[cfg(target_arch = "aarch64")]
+    random_read_simd(data);
+    // TODO: replace with random_read_avx2 once implemented
+    #[cfg(not(target_arch = "aarch64"))]
+    random_read(data);
 }
 
 pub(crate) fn seq_read(data: &[f32]) {

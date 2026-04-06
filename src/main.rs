@@ -16,11 +16,11 @@ fn main() {
     println!("dem_renderer");
     let data: Vec<f32> = (0..N).map(|i| i as f32).collect();
 
-    seq_read_simd(&data);
+    seq_read_vector(&data);
     println!("--------");
     seq_read(&data);
     println!("--------");
-    random_read_simd(&data);
+    random_read_vector(&data);
     println!("--------");
     random_read(&data);
     println!("--------");
@@ -117,7 +117,7 @@ fn main() {
 
     let gpu_ctx = render_gpu::GpuContext::new();
 
-    let (ticks, normal_map_gpu) = profiling::timed("compute_normals_gpu", || {
+    let (ticks, _normal_map_gpu) = profiling::timed("compute_normals_gpu", || {
         render_gpu::compute_normals_gpu(&gpu_ctx, &heightmap)
     });
     println!(
@@ -140,13 +140,13 @@ fn main() {
     let evict: Vec<i32> = (0..100 * 1024 * 1024).map(|i| i as i32).collect();
     std::hint::black_box(evict);
 
-    benchmark_shadow_mask_neon(&heightmap, sun_elevation_rad_const);
+    benchmark_shadow_mask_vector(&heightmap, sun_elevation_rad_const);
 
     // evict heightmap from cach
     let evict: Vec<i32> = (0..100 * 1024 * 1024).map(|i| i as i32).collect();
     std::hint::black_box(evict);
 
-    benchmark_shadow_mask_neon_parallel(&heightmap, sun_elevation_rad_const);
+    benchmark_shadow_mask_vector_parallel(&heightmap, sun_elevation_rad_const);
 
     // evict heightmap from cach
     let evict: Vec<i32> = (0..100 * 1024 * 1024).map(|i| i as i32).collect();
@@ -185,7 +185,7 @@ fn main() {
     let evict: Vec<i32> = (0..100 * 1024 * 1024).map(|i| i as i32).collect();
     std::hint::black_box(evict);
 
-    benchmark_shadow_mask_neon_parallel_with_azimuth_labeled(
+    benchmark_shadow_mask_vector_parallel_with_azimuth_labeled(
         &heightmap,
         270f32.to_radians(),
         10f32.to_radians(),
@@ -287,13 +287,6 @@ fn main() {
     );
     println!("hit: {:?}", hit);
 
-    let r0 = cam.ray_for_pixel(500, 500, 1000, 1000);
-    let packet = render_cpu::RayPacket::new(&r0, &r0, &r0, &r0);
-    let hits = unsafe {
-        render_cpu::raymarch_neon(&packet, &heightmap, heightmap.dx_meters as f32, 200_000.0)
-    };
-    println!("neon hits: {:?}", hits);
-
     let sun_dir = [0.4f32, 0.5f32, 0.7f32]; // [east, south, up] — morning sun NE
 
     let (ticks, fb) = profiling::timed("render_cpu_parallel", || {
@@ -321,8 +314,8 @@ fn main() {
         .save("artifacts/render_cpu[parallel].png")
         .unwrap();
 
-    let (ticks, fb) = profiling::timed("render_cpu[NEON]", || {
-        render_cpu::render_neon(
+    let (ticks, fb) = profiling::timed("render_cpu[VECTOR]", || {
+        render_cpu::render_vector(
             &cam,
             &heightmap,
             &normal_map,
@@ -335,18 +328,18 @@ fn main() {
         )
     });
     println!(
-        "render_cpu [NEON] {}x{}: {:.2}s",
+        "render_cpu [VECTOR] {}x{}: {:.2}s",
         pic_width,
         pic_height,
         ticks as f64 / counter_frequency()
     );
     image::RgbImage::from_raw(pic_width, pic_height, fb)
         .unwrap()
-        .save("artifacts/render_cpu[NEON].png")
+        .save("artifacts/render_cpu[VECTOR].png")
         .unwrap();
 
-    let (ticks, fb) = profiling::timed("render_cpu_NEON_parallel", || {
-        render_cpu::render_neon_par(
+    let (ticks, fb) = profiling::timed("render_cpu_VECTOR_parallel", || {
+        render_cpu::render_vector_par(
             &cam,
             &heightmap,
             &normal_map,
@@ -359,7 +352,7 @@ fn main() {
         )
     });
     println!(
-        "render_cpu NEON PARALLEL {}x{}: {:.2}s",
+        "render_cpu VECTOR PARALLEL {}x{}: {:.2}s",
         pic_width,
         pic_height,
         ticks as f64 / counter_frequency()
@@ -367,7 +360,7 @@ fn main() {
 
     image::RgbImage::from_raw(pic_width, pic_height, fb)
         .unwrap()
-        .save("artifacts/render_cpu[NEON_parallel].png")
+        .save("artifacts/render_cpu[VECTOR_parallel].png")
         .unwrap();
 
     render_3d_pic_cpu(tile_path);
@@ -505,7 +498,7 @@ fn main() {
     // GpuScene takes ctx by value (owns it) — create a dedicated one
     benchmark_multi_frame_gpu_scene(render_gpu::GpuContext::new(), &heightmap, &shadow_mask);
 
-    // render_gif::render_gif(tile_path);
+    render_gif::render_gif(tile_path);
 
     // -- Phase 6 benchmarks
     println!("---------- Phase 6 Benchmarks ----------");
@@ -587,7 +580,7 @@ fn run_phase_6_benchmarks(heightmap: &Heightmap, normal_map: &NormalMap, data: &
     let evict: Vec<i32> = (0..100 * 1024 * 1024).map(|i| i as i32).collect();
     std::hint::black_box(evict);
 
-    bench_neon_accumulators(&normal_map);
+    bench_vector_accumulators(&normal_map);
 
     let evict: Vec<i32> = (0..100 * 1024 * 1024).map(|i| i as i32).collect();
     std::hint::black_box(evict);
