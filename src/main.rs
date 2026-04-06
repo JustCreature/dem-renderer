@@ -114,6 +114,18 @@ fn main() {
     let evict: Vec<i32> = (0..100 * 1024 * 1024).map(|i| i as i32).collect();
     std::hint::black_box(evict);
 
+    let (ticks, normal_map_gpu) = profiling::timed("compute_normals_gpu", || {
+        render_gpu::compute_normals_gpu(&heightmap)
+    });
+    println!(
+        "compute_normals_gpu: {:.2}s",
+        ticks as f64 / counter_frequency()
+    );
+
+    // evict heightmap from cach
+    let evict: Vec<i32> = (0..100 * 1024 * 1024).map(|i| i as i32).collect();
+    std::hint::black_box(evict);
+
     // -- SHADOWS
     println!("---------- SHADOWS ----------");
 
@@ -175,6 +187,18 @@ fn main() {
         270f32.to_radians(),
         10f32.to_radians(),
         "sunset",
+    );
+
+    // evict heightmap from cach
+    let evict: Vec<i32> = (0..100 * 1024 * 1024).map(|i| i as i32).collect();
+    std::hint::black_box(evict);
+
+    let (ticks, _shadow_mask_gpu) = profiling::timed("compute_shadow_gpu", || {
+        render_gpu::compute_shadow_gpu(&heightmap, sun_elevation_rad_const)
+    });
+    println!(
+        "compute_shadow_gpu: {:.2}s",
+        ticks as f64 / counter_frequency()
     );
 
     // evict heightmap from cach
@@ -438,6 +462,32 @@ fn main() {
     image::RgbaImage::from_raw(pic_width, pic_height, fb)
         .unwrap()
         .save("artifacts/render_gpu[texture].png")
+        .unwrap();
+
+    let (ticks, fb) = profiling::timed("render_gpu[combined]", || {
+        render_gpu::render_gpu_combined(
+            &heightmap,
+            &shadow_mask,
+            [cam_col * dx, cam_row * dy, 3341.0],
+            [cam_col * dx + 19_627.0, cam_row * dy - 1_718.0, -131.0],
+            100.0,
+            pic_width as f32 / pic_height as f32,
+            sun_dir,
+            pic_width,
+            pic_height,
+            heightmap.dx_meters as f32 / step_size,
+            200_000.0,
+        )
+    });
+    println!(
+        "render_gpu BIG [combined] {}x{}: {:.2}s",
+        pic_width,
+        pic_height,
+        ticks as f64 / counter_frequency()
+    );
+    image::RgbaImage::from_raw(pic_width, pic_height, fb)
+        .unwrap()
+        .save("artifacts/render_gpu[combined].png")
         .unwrap();
 
     pic_width = 2000;
