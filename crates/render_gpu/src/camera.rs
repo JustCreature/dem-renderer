@@ -15,6 +15,8 @@ pub struct CameraUniforms {
     pub _pad2: f32,
     pub up: [f32; 3],
     pub _pad3: f32,
+    pub sun_dir: [f32; 3],
+    pub _pad4: f32,
     pub half_w: f32,
     pub half_h: f32,
     pub img_width: u32,
@@ -22,11 +24,15 @@ pub struct CameraUniforms {
     pub hm_cols: u32,
     pub hm_rows: u32,
     pub dx_meters: f32,
+    pub dy_meters: f32,
     pub step_m: f32,
     pub t_max: f32,
-    pub _pad4: f32, // pad to 16-byte boundary
-    pub _pad5: f32,
+    pub _pad5: f32, // pad to 16-byte boundary
     pub _pad6: f32,
+    pub _pad7: f32,
+    pub _pad8: f32,
+    pub _pad9: f32,
+    pub _pad10: f32,
 }
 
 impl CameraUniforms {
@@ -36,6 +42,7 @@ impl CameraUniforms {
         fov_deg: f32,
         aspect: f32,
         hm: &Heightmap,
+        sun_dir: [f32; 3],
         img_width: u32,
         img_height: u32,
         step_m: f32,
@@ -52,11 +59,13 @@ impl CameraUniforms {
             origin,
             _pad0: 0.0,
             forward,
-            right,
-            up,
             _pad1: 0.0,
+            right,
             _pad2: 0.0,
+            up,
             _pad3: 0.0,
+            sun_dir,
+            _pad4: 0.0,
             half_w,
             half_h,
             img_width,
@@ -64,11 +73,15 @@ impl CameraUniforms {
             hm_cols: hm.cols as u32,
             hm_rows: hm.rows as u32,
             dx_meters: hm.dx_meters as f32,
+            dy_meters: hm.dy_meters as f32,
             step_m,
             t_max,
-            _pad4: 0.0,
             _pad5: 0.0,
             _pad6: 0.0,
+            _pad7: 0.0,
+            _pad8: 0.0,
+            _pad9: 0.0,
+            _pad10: 0.0,
         }
     }
 }
