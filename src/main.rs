@@ -507,6 +507,19 @@ fn main() {
 
     // render_gif::render_gif(tile_path);
 
+    // -- Phase 6 benchmarks
+    println!("---------- Phase 6 Benchmarks ----------");
+
+    // evict before phase 6
+    let evict: Vec<i32> = (0..100 * 1024 * 1024).map(|i| i as i32).collect();
+    std::hint::black_box(evict);
+
+    bench_tile_size_sweep(&heightmap);
+    bench_thread_count_scaling(&heightmap);
+    bench_thread_count_scaling_readonly(&heightmap);
+
+    run_phase_6_benchmarks(&heightmap, &normal_map, &data);
+
     // -- Valley render
     // Camera: 47°03'52.84"N 11°42'26.24"E, alt 3284m, heading 165°, tilt 72° from nadir
     // Google Earth cursor alt 2339m → used as look-at altitude
@@ -550,4 +563,39 @@ fn main() {
             .save("artifacts/valley.png")
             .unwrap();
     }
+}
+
+fn run_phase_6_benchmarks(heightmap: &Heightmap, normal_map: &NormalMap, data: &Vec<f32>) {
+    // evict before exp 4
+    let evict: Vec<i32> = (0..100 * 1024 * 1024).map(|i| i as i32).collect();
+    std::hint::black_box(evict);
+
+    bench_aos_vs_soa(&normal_map);
+
+    // evict before exp 5
+    let evict: Vec<i32> = (0..100 * 1024 * 1024).map(|i| i as i32).collect();
+    std::hint::black_box(evict);
+
+    bench_morton_vs_rowmajor(&heightmap);
+
+    // evict before exp 6/7
+    let evict: Vec<i32> = (0..100 * 1024 * 1024).map(|i| i as i32).collect();
+    std::hint::black_box(evict);
+
+    bench_software_prefetch(&data);
+
+    let evict: Vec<i32> = (0..100 * 1024 * 1024).map(|i| i as i32).collect();
+    std::hint::black_box(evict);
+
+    bench_neon_accumulators(&normal_map);
+
+    let evict: Vec<i32> = (0..100 * 1024 * 1024).map(|i| i as i32).collect();
+    std::hint::black_box(evict);
+
+    bench_gather_ray_packets(&heightmap);
+
+    let evict: Vec<i32> = (0..100 * 1024 * 1024).map(|i| i as i32).collect();
+    std::hint::black_box(evict);
+
+    bench_tlb_sweep(&data);
 }

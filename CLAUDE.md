@@ -36,7 +36,7 @@ A learning-first, cache-optimized terrain + sunlight renderer in Rust using real
 
 ## Status
 
-**Current phase: Phase 6** (Phases 0, 1, 2, 3, 4, 5 complete)
+**Current phase: Phase 7** (Phases 0, 1, 2, 3, 4, 5, 6 complete)
 
 Phase 0 artifacts:
 - `crates/profiling/src/lib.rs` — `now()` (cntvct_el0 via inline asm), `timed()`, tests
@@ -157,11 +157,40 @@ Phase 5 lessons:
 - The GPU readback floor (~88ms for 85 MB) limits max frame rate; eliminating it requires a display/swap-chain architecture
 - Workgroup size (shape or thread count 64→256) has no effect: all variants ±3% because the 85 MB readback dominates; dispatch itself is ~5–10 ms
 
-Known open items from Phase 5:
-- GPU shadow via parallel prefix scan not implemented — would potentially match CPU NEON for cardinal direction
-- Occupancy analysis via Instruments/Metal GPU trace deferred — requires full Xcode.app; not a priority since workgroup tuning shows no effect with readback dominating
-- GIF rendering uses CPU readback + GIF encoding; the 85 MB readback dominates per-frame cost
-- `render_gif::render_gif` is commented out in main.rs — re-enable when generating animations
+Phase 6 artifacts:
+- `src/benchmarks/phase6.rs` — all 9 experiments: `bench_tile_size_sweep`, `bench_thread_count_scaling`, `bench_thread_count_scaling_readonly`, `bench_aos_vs_soa`, `bench_morton_vs_rowmajor`, `bench_software_prefetch`, `bench_neon_accumulators`, `bench_gather_ray_packets`, `bench_tlb_sweep`
+- `docs/sessions/phase-6/main-session.md` — session log (2 sessions)
+- `docs/lessons/phase-6/long-report.md` — comprehensive Phase 6 student textbook
+- `docs/lessons/phase-6/short-report.md` — Phase 6 reference card
+- `skills/learning-guide.skill` — repackaged with stricter code-exception enforcement
+
+Phase 6 key numbers (M4 Max, 3601×3601, cold cache, 2026-04-06):
+- Stencil row-major scalar: 60–72 GB/s (auto-vectorised 8-wide NEON, confirmed in assembly)
+- Stencil tiled (all T=32→256): ~11 GB/s flat — `continue` branch blocks auto-vectorisation
+- Thread scaling with writes: linear to 8 threads (85 GB/s), flattens at 12 threads (101 GB/s)
+- Thread scaling read-only: linear to 10 threads (259 GB/s), flattens at 12 (247 GB/s)
+- Write path is ~3× narrower than read path on M4 Max at all thread counts
+- DRAM read ceiling: ~259 GB/s sustained (~65% of 400 GB/s peak)
+- AoS vs SoA (12 Mpix dot product): 1.00× single-thread (compute-bound); 1.13× at 10 threads
+- Morton vs row-major tiled: 1.00× — OOO ROB hides L2 latency inside scalar compute
+- Software prefetch (256 MB random): +14% max at D=64 — OOO ROB makes explicit prfm redundant
+- NEON 1-acc: 18 GB/s (slower than auto-vec 23.7 GB/s — vfmaq latency 4–5 vs fadd 3 cycles)
+- NEON 4-acc: 71 GB/s (DRAM-bound); NEON 8-acc: 120 GB/s (SLC-bound)
+- Ray packet gather: adjacent cols 0.57 ns/pix (3×), strided rows 0.76 ns/pix (2.2×), random 1.03 ns/pix (1.65×)
+- TLB knees: 4 MB (L1 DTLB full, 256 entries × 16KB) and 16–64 MB (L2 TLB exhaust, ~48 MB)
+
+Phase 6 lessons:
+- Vectorisation gates everything — a single `continue` cut throughput 6× and made tile size and Morton ordering irrelevant
+- Write path (store buffer → writeback → L3 → DRAM) saturates at ~8 cores; read path at ~10 cores (~3× asymmetry)
+- Serial reduction chains are compute-bound (fadd dep chain), not memory-bound — multiple accumulators are the fix
+- M4 Max ROB (~600 instructions) makes software prefetch largely redundant for simple loop patterns
+- macOS 16KB pages: L1 DTLB covers ~4 MB, L2 TLB covers ~48 MB — 4× more than x86 4KB pages
+- Ray packet gather wins 3× per pixel but divergence absorbs the gain in the full render
+
+Known open items carried into Phase 7:
+- GPU shadow via parallel prefix scan not implemented — would potentially match CPU NEON for cardinal direction (deferred from Phase 5)
+- `render_gif::render_gif` is commented out in main.rs — re-enable when generating animations (deferred from Phase 5)
+- Occupancy analysis via Instruments/Metal GPU trace deferred — requires full Xcode.app (deferred from Phase 5)
 
 Known open items from Phase 4:
 - Supersampled ray optimization considered but not implemented: march 1 reference ray, approximate 3 neighbor heights via `h ≈ h_center + grad_x * Δcol + grad_y * Δrow` (using Phase 2 normal map). Would reduce gather 4→1 per step. Breaks at sharp discrete peaks.

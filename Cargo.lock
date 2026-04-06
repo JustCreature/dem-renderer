@@ -324,6 +324,7 @@ dependencies = [
  "dem_io",
  "image",
  "profiling 0.1.0",
+ "rayon",
  "render_cpu",
  "render_gpu",
  "terrain",
