@@ -1,17 +1,25 @@
 mod camera;
 mod raymarch;
+#[cfg(target_arch = "x86_64")]
+mod raymarch_avx2;
 #[cfg(target_arch = "aarch64")]
 mod raymarch_neon;
 mod render;
+#[cfg(target_arch = "x86_64")]
+mod render_avx2;
 #[cfg(target_arch = "aarch64")]
 mod render_neon;
 mod vector_utils;
 
 pub use camera::{Camera, Ray};
 pub use raymarch::raymarch;
+#[cfg(target_arch = "x86_64")]
+pub use raymarch_avx2::{RayPacketAvx2, raymarch_avx2};
 #[cfg(target_arch = "aarch64")]
 pub use raymarch_neon::{RayPacket, raymarch_neon};
 pub use render::{render, render_par};
+#[cfg(target_arch = "x86_64")]
+pub use render_avx2::{render_avx2, render_avx2_par};
 #[cfg(target_arch = "aarch64")]
 pub use render_neon::{render_neon, render_neon_par};
 
@@ -27,22 +35,7 @@ pub fn render_vector(
     t_max: f32,
 ) -> Vec<u8> {
     #[cfg(target_arch = "aarch64")]
-    return unsafe {
-        render_neon(
-            cam,
-            hm,
-            normals,
-            shadow_mask,
-            sun_dir,
-            width,
-            height,
-            step_m,
-            t_max,
-        )
-    };
-    // TODO: replace with render_avx2 once implemented
-    #[cfg(not(target_arch = "aarch64"))]
-    return render(
+    return render_neon(
         cam,
         hm,
         normals,
@@ -53,6 +46,43 @@ pub fn render_vector(
         step_m,
         t_max,
     );
+
+    #[cfg(target_arch = "x86_64")]
+    if is_x86_feature_detected!("avx2") && width % 8 == 0 {
+        return unsafe {
+            render_avx2(
+                cam,
+                hm,
+                normals,
+                shadow_mask,
+                sun_dir,
+                width,
+                height,
+                step_m,
+                t_max,
+            )
+        };
+    }
+
+    // Fallback: scalar (any platform without SIMD, or x86_64 without AVX2, or odd width)
+    #[cfg(not(target_arch = "aarch64"))]
+    {
+        #[cfg(target_arch = "x86_64")]
+        eprintln!("[SCALAR FALLBACK] render_vector: AVX2 not detected or width ({width}) not divisible by 8");
+        #[cfg(not(target_arch = "x86_64"))]
+        eprintln!("[SCALAR FALLBACK] render_vector: no SIMD for this architecture");
+        return render(
+            cam,
+            hm,
+            normals,
+            shadow_mask,
+            sun_dir,
+            width,
+            height,
+            step_m,
+            t_max,
+        );
+    }
 }
 
 pub fn render_vector_par(
@@ -67,22 +97,7 @@ pub fn render_vector_par(
     t_max: f32,
 ) -> Vec<u8> {
     #[cfg(target_arch = "aarch64")]
-    return unsafe {
-        render_neon_par(
-            cam,
-            hm,
-            normals,
-            shadow_mask,
-            sun_dir,
-            width,
-            height,
-            step_m,
-            t_max,
-        )
-    };
-    // TODO: replace with render_avx2_par once implemented
-    #[cfg(not(target_arch = "aarch64"))]
-    return render_par(
+    return render_neon_par(
         cam,
         hm,
         normals,
@@ -93,6 +108,43 @@ pub fn render_vector_par(
         step_m,
         t_max,
     );
+
+    #[cfg(target_arch = "x86_64")]
+    if is_x86_feature_detected!("avx2") && width % 8 == 0 {
+        return unsafe {
+            render_avx2_par(
+                cam,
+                hm,
+                normals,
+                shadow_mask,
+                sun_dir,
+                width,
+                height,
+                step_m,
+                t_max,
+            )
+        };
+    }
+
+    // Fallback: scalar parallel
+    #[cfg(not(target_arch = "aarch64"))]
+    {
+        #[cfg(target_arch = "x86_64")]
+        eprintln!("[SCALAR FALLBACK] render_vector_par: AVX2 not detected or width ({width}) not divisible by 8");
+        #[cfg(not(target_arch = "x86_64"))]
+        eprintln!("[SCALAR FALLBACK] render_vector_par: no SIMD for this architecture");
+        return render_par(
+            cam,
+            hm,
+            normals,
+            shadow_mask,
+            sun_dir,
+            width,
+            height,
+            step_m,
+            t_max,
+        );
+    }
 }
 
 use crate::vector_utils::normalize;

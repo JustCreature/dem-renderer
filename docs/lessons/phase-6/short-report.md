@@ -191,3 +191,49 @@ Cache line geometry (64 bytes = 32 × i16, row = 7202 bytes):
 | prfm D=64 → 8–16× random read speedup | +14% only | ROB already provides hardware MLP for simple loops |
 | NEON 1-acc ≥ auto-vec scalar | NEON 1-acc is 24% slower | vfmaq latency 4–5 cycles vs fadd 3 cycles |
 | AoS nz-only → 3× slower than SoA | single-thread 1.00×; 10T 1.13× | compute-bound (dep chain); bus not saturated |
+
+---
+
+## Appendix: AVX2 Cross-Platform Port
+
+All kernels ported to AVX2 (x86_64, 8 × f32) to enable benchmarking on Intel/AMD hardware.
+
+### Files added
+- `crates/terrain/src/row_major_avx2.rs` — normals, 8-wide
+- `crates/terrain/src/tiled_avx2.rs` — tiled normals, 8-wide
+- `crates/terrain/src/shadow_avx2.rs` — shadow sweep, 8-wide row interleave + DDA azimuth
+- `crates/render_cpu/src/raymarch_avx2.rs` — `RayPacketAvx2`, `raymarch_avx2`, 8-wide
+- `crates/render_cpu/src/render_avx2.rs` — `render_avx2`, `render_avx2_par`
+- AVX2 `seq_read`/`random_read` added to `src/benchmarks/seq_read_write.rs`
+
+### Key intrinsic mapping (NEON → AVX2)
+
+| NEON | AVX2 | Gotcha |
+|---|---|---|
+| `vdupq_n_f32(x)` | `_mm256_set1_ps(x)` | — |
+| `vld1q_f32(ptr)` | `_mm256_loadu_ps(ptr)` | — |
+| `vmaxq_f32` | `_mm256_max_ps` | — |
+| `vcltq_f32(a,b)` | `_mm256_cmp_ps::<1>(a,b)` | `_CMP_LT_OS = 1` |
+| `vbicq_u32(a,b)` = a&!b | `_mm256_andnot_si256(b,a)` | args **reversed** |
+| `vbslq_f32(m,t,f)` | `_mm256_blendv_ps(f,t,m)` | — |
+| manual array + `vld1q_f32` | `_mm256_i32gather_ps(ptr,vi,4)` | true hw gather |
+| `vmovl_s16`+`vcvtq_f32_s32` | `_mm256_cvtepi16_epi32`+`_mm256_cvtepi32_ps` | needs `_mm_loadu_si128` first |
+| `vgetq_lane_f32::<N>` | store to `[f32;8]`, index | no lane-extract in AVX2 |
+
+### Dispatch + scalar fallback
+
+```
+aarch64 → NEON (always available)
+x86_64  → AVX2 if is_x86_feature_detected!("avx2")
+x86_64  → scalar + eprintln!("[SCALAR FALLBACK] fn: AVX2 not detected")
+other   → scalar + eprintln!("[SCALAR FALLBACK] fn: no SIMD for this architecture")
+```
+
+`render_vector` also falls back when `width % 8 != 0` (message includes the actual width).
+
+### rsqrt Newton-Raphson (both platforms)
+
+```
+NEON:  vrsqrteq_f32 (~11-bit) + vrsqrtsq_f32 NR step
+AVX2:  _mm256_rsqrt_ps (~14-bit) + manual NR: y1 = y0 * (1.5 - 0.5·x·y0²)
+```

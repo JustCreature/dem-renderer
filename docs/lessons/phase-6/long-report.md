@@ -537,3 +537,79 @@ SoA dot product, 12 Mpix, 155 MB total.
 - **macOS 16KB pages give 4× TLB coverage vs x86**: L1 DTLB covers ~4 MB (not 1 MB); L2 TLB covers ~48 MB (not 12 MB). The 26 MB heightmap fits in L2 TLB, avoiding page table walks. The 256 MB benchmark array spills to page walks, adding ~50 cycles per unique page.
 
 - **Ray packet memory gain (3×) is absorbed by compute divergence**: adjacent-column gathers share cache lines and deliver 3× pixels/ns, but rays diverge within ~50 steps, converting to strided/random access. The compute portion of each step (height comparison, ray advancement) doesn't vectorise as cleanly as the gather, netting 1.00× for the full render.
+
+---
+
+## Appendix: AVX2 Cross-Platform Port (added 2026-04-06)
+
+After completing the 9 experiments on M4 Max (aarch64/NEON), all hot-path kernels were ported to AVX2 (x86_64, 256-bit, 8 × f32). This makes every benchmark reproducible on Intel/AMD hardware.
+
+### What was ported
+
+| NEON (aarch64) | AVX2 (x86_64) | Width | Notes |
+|---|---|---|---|
+| `compute_normals_neon` | `compute_normals_avx2` | 4→8 | i16→f32 via `_mm256_cvtepi16_epi32` + `_mm256_cvtepi32_ps` |
+| `compute_normals_neon_tiled` | `compute_normals_avx2_tiled` | 4→8 | same tiled loop structure |
+| `compute_shadow_neon` | `compute_shadow_avx2` | 8 rows | 8-wide row interleave, `_mm256_max_ps` running max |
+| `compute_shadow_neon_parallel` | `compute_shadow_avx2_parallel` | 8 rows | rayon par + 8-wide inner |
+| `compute_shadow_neon_parallel_with_azimuth` | `compute_shadow_avx2_parallel_with_azimuth` | 8 rays | reuses shared `dda_setup` from `shadow.rs` |
+| `raymarch_neon` (4-wide) | `raymarch_avx2` (8-wide) | 4→8 | OOB masking via `_mm256_andnot_si256`, gather via store+index |
+| `render_neon`, `render_neon_par` | `render_avx2`, `render_avx2_par` | 4→8 | `step_by(8)`, asserts `width % 8 == 0` |
+| `seq_read_simd`, `random_read_simd` | `seq_read_avx2`, `random_read_avx2` | 4→8 | random uses `_mm256_i32gather_ps` (true hardware gather) |
+
+All functions require `#[target_feature(enable = "avx2")]` and `unsafe fn`. Runtime dispatch uses `is_x86_feature_detected!("avx2")`.
+
+### Key NEON → AVX2 intrinsic mapping
+
+| Operation | NEON | AVX2 |
+|---|---|---|
+| broadcast | `vdupq_n_f32(x)` | `_mm256_set1_ps(x)` |
+| load | `vld1q_f32(ptr)` | `_mm256_loadu_ps(ptr)` |
+| store | `vst1q_f32(ptr, v)` | `_mm256_storeu_ps(ptr, v)` |
+| add | `vaddq_f32` | `_mm256_add_ps` |
+| multiply | `vmulq_f32` | `_mm256_mul_ps` |
+| max | `vmaxq_f32` | `_mm256_max_ps` |
+| compare LT | `vcltq_f32(a,b)` | `_mm256_cmp_ps::<1>(a, b)` |
+| compare GE | `vcgeq_f32(a,b)` | `_mm256_cmp_ps::<13>(a, b)` |
+| blend | `vbslq_f32(mask,t,f)` | `_mm256_blendv_ps(f, t, mask)` |
+| and-not | `vbicq_u32(a, b)` = a&!b | `_mm256_andnot_si256(b, a)` (order reversed!) |
+| all-zero test | `vmaxvq_u32(x) == 0` | `_mm256_testz_si256(x, x) != 0` |
+| rsqrt | `vrsqrteq_f32` + `vrsqrtsq_f32` (NR) | `_mm256_rsqrt_ps` + manual NR step |
+| gather | manual array + `vld1q_f32` | `_mm256_i32gather_ps(ptr, vindex, scale=4)` |
+| i16→f32 | `vmovl_s16` + `vcvtq_f32_s32` | `_mm256_cvtepi16_epi32` + `_mm256_cvtepi32_ps` |
+| lane extract | `vgetq_lane_f32::<N>` | `_mm256_storeu_ps(arr)` then `arr[N]` |
+
+### Notable differences from NEON
+
+**Register width**: AVX2 uses 256-bit registers (8 × f32) vs NEON's 128-bit (4 × f32). This doubles throughput for the same number of instructions, assuming the memory system can keep up.
+
+**`_mm256_andnot_si256(b, a)` — argument order is reversed vs NEON**: `vbicq_u32(a, b)` computes `a & !b`. AVX2's `_mm256_andnot_si256(b, a)` also computes `a & !b`, but the argument labelled "b" is the one negated and it comes *first*. This is a common source of bugs when porting.
+
+**`_mm256_i32gather_ps`** provides true hardware scatter-gather in one instruction. NEON has no equivalent — the NEON "random read" must build an array and call `vld1q_f32`. On x86_64, this enables cleaner random-access kernels, though gather throughput is lower than sequential load on current CPUs.
+
+**`_mm256_rsqrt_ps` precision**: ~14-bit approximation (vs NEON's ~11-bit `vrsqrteq_f32`). One Newton-Raphson step (`y1 = y0 * (1.5 - 0.5 * x * y0²)`) brings both to ~23-bit (single-precision full).
+
+**`unsafe fn` scope**: every AVX2 function requires `#[target_feature(enable = "avx2")]` and `unsafe fn`. Unlike NEON on aarch64 (always present), AVX2 is not universal on x86_64 — pre-Haswell CPUs lack it. The runtime `is_x86_feature_detected!("avx2")` guard is mandatory for safe dispatch.
+
+### Platform dispatch pattern
+
+Each public API (e.g. `compute_normals_vector`) dispatches at runtime:
+
+```
+aarch64 → NEON (always available, compile-time guaranteed)
+x86_64  → AVX2 if is_x86_feature_detected!("avx2") [runtime]
+x86_64  → scalar + eprintln!("[SCALAR FALLBACK] ...: AVX2 not detected") otherwise
+other   → scalar + eprintln!("[SCALAR FALLBACK] ...: no SIMD for this architecture")
+```
+
+The `[SCALAR FALLBACK]` log lines make fallback paths visible in production logs. An x86_64 CPU running without AVX2 is unusual (AVX2 arrived in 2013 with Haswell) but the detection is required by Rust's safety model.
+
+### The `render_vector` / `render_vector_par` special case
+
+The AVX2 render path requires `width % 8 == 0` (packet width = 8 lanes). If the image width is not divisible by 8, the fallback message includes the actual width:
+
+```
+[SCALAR FALLBACK] render_vector: AVX2 not detected or width (1920) not divisible by 8
+```
+
+This reveals two distinct fallback reasons at a glance.

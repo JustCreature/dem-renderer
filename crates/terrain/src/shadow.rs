@@ -9,14 +9,20 @@ use rayon::{
 
 // ── shared DDA helpers ───────────────────────────────────────────────────────
 
-struct DdaSetup {
-    dc_step: f32,
-    dr_step: f32,
-    dist_per_step: f32,
-    starting_pixels: Vec<(f32, f32)>,
+pub(crate) struct DdaSetup {
+    pub(crate) dc_step: f32,
+    pub(crate) dr_step: f32,
+    pub(crate) dist_per_step: f32,
+    pub(crate) starting_pixels: Vec<(f32, f32)>,
 }
 
-fn dda_setup(rows: usize, cols: usize, sun_azimuth_rad: f32, dx: f32, dy: f32) -> DdaSetup {
+pub(crate) fn dda_setup(
+    rows: usize,
+    cols: usize,
+    sun_azimuth_rad: f32,
+    dx: f32,
+    dy: f32,
+) -> DdaSetup {
     let dc = -sun_azimuth_rad.sin();
     let dr = sun_azimuth_rad.cos();
 
