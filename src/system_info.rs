@@ -376,11 +376,36 @@ fn windows_gpu() -> Option<String> {
         .output()
         .ok()?;
     let text = String::from_utf8(out.stdout).ok()?;
-    text.lines()
-        .map(|l| l.trim())
-        .filter(|l| !l.is_empty() && *l != "Name")
-        .next()
-        .map(|s| s.to_string())
+    let names: Vec<String> = text
+        .lines()
+        .map(|l| l.trim().to_string())
+        .filter(|l| !l.is_empty() && l != "Name")
+        .collect();
+
+    if names.is_empty() {
+        return None;
+    }
+
+    // Prefer discrete GPU (NVIDIA / AMD dedicated) over integrated.
+    // On Optimus laptops wmic lists both; integrated often comes first.
+    let discrete = names.iter().find(|n| {
+        let u = n.to_uppercase();
+        u.contains("NVIDIA")
+            || u.contains("GEFORCE")
+            || u.contains("QUADRO")
+            || u.contains("RADEON RX")
+            || u.contains("RADEON PRO")
+    });
+    let integrated = names.iter().find(|n| {
+        let u = n.to_uppercase();
+        u.contains("INTEL") || u.contains("UHD") || u.contains("IRIS")
+    });
+
+    match (discrete, integrated) {
+        (Some(d), Some(i)) => Some(format!("{d} [discrete]  +  {i} [integrated]")),
+        (Some(d), None) => Some(d.clone()),
+        _ => Some(names.join(", ")),
+    }
 }
 
 // ── utilities ────────────────────────────────────────────────────────────────

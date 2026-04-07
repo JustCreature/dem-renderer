@@ -4,6 +4,20 @@ mod render_gif;
 mod system_info;
 mod utils;
 
+// Tell the NVIDIA Optimus and AMD Hybrid driver to route this process through the discrete GPU.
+// The driver checks for these exported symbols at process load time, before any D3D12/Vulkan
+// calls are made.  Without this, Optimus may route compute dispatches through the iGPU even
+// when the correct wgpu adapter is selected in software.
+#[cfg(target_os = "windows")]
+#[unsafe(no_mangle)]
+#[used]
+pub static NvOptimusEnablement: u32 = 1;
+
+#[cfg(target_os = "windows")]
+#[unsafe(no_mangle)]
+#[used]
+pub static AmdPowerXpressRequestHighPerformance: u32 = 1;
+
 use std::path::Path;
 
 use crate::benchmarks::*;

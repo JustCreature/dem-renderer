@@ -35,6 +35,9 @@ $env:RUSTFLAGS="-C target-cpu=x86-64-v3"
 cargo build --release
 ```
 
+NVIDIA Control Panel → Manage 3D Settings → Program Settings → add dem_renderer.exe → set OpenGL rendering GPU and
+  Preferred graphics processor to High-performance NVIDIA processor.
+
 ### Linux
 
 ```sh
