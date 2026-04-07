@@ -61,7 +61,7 @@ pub(crate) fn render_3d_pic_cpu(tile_path: &Path) {
 
     image::RgbImage::from_raw(pic_width, pic_height, fb)
         .unwrap()
-        .save("artifacts/render_cpu[CPU|shadows_SCALAR_PARALLEL].png")
+        .save("artifacts/render_cpu_CPU_shadows_SCALAR_PARALLEL.png")
         .unwrap();
 }
 
@@ -118,6 +118,6 @@ pub(crate) fn render_3d_pic_gpu(tile_path: &Path) {
 
     image::RgbaImage::from_raw(pic_width, pic_height, fb)
         .unwrap()
-        .save("artifacts/render_gpu[GPU].png")
+        .save("artifacts/render_gpu_GPU.png")
         .unwrap();
 }

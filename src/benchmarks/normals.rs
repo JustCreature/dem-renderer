@@ -51,7 +51,7 @@ pub(crate) fn benchmark_normal_map_vectorised(heightmap: &Heightmap) -> NormalMa
         .collect();
     image::GrayImage::from_raw(heightmap.cols as u32, heightmap.rows as u32, pixels)
         .unwrap()
-        .save("artifacts/[vectotized]normals_nz.png")
+        .save("artifacts/vectotized_normals_nz.png")
         .unwrap();
 
     normal_map_vec
@@ -78,7 +78,7 @@ pub(crate) fn benchmark_normal_map_parallel_vectorised(heightmap: &Heightmap) ->
         .collect();
     image::GrayImage::from_raw(heightmap.cols as u32, heightmap.rows as u32, pixels)
         .unwrap()
-        .save("artifacts/[parallel_vectotized]normals_nz.png")
+        .save("artifacts/parallel_vectotized_normals_nz.png")
         .unwrap();
 
     normal_map_vec

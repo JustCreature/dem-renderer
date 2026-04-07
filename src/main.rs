@@ -313,7 +313,7 @@ fn main() {
 
     image::RgbImage::from_raw(pic_width, pic_height, fb)
         .unwrap()
-        .save("artifacts/render_cpu[parallel].png")
+        .save("artifacts/render_cpu_parallel.png")
         .unwrap();
 
     let (ticks, fb) = profiling::timed("render_cpu[VECTOR]", || {
@@ -337,7 +337,7 @@ fn main() {
     );
     image::RgbImage::from_raw(pic_width, pic_height, fb)
         .unwrap()
-        .save("artifacts/render_cpu[VECTOR].png")
+        .save("artifacts/render_cpu_VECTOR.png")
         .unwrap();
 
     let (ticks, fb) = profiling::timed("render_cpu_VECTOR_parallel", || {
@@ -362,7 +362,7 @@ fn main() {
 
     image::RgbImage::from_raw(pic_width, pic_height, fb)
         .unwrap()
-        .save("artifacts/render_cpu[VECTOR_parallel].png")
+        .save("artifacts/render_cpu_VECTOR_parallel.png")
         .unwrap();
 
     render_3d_pic_cpu(tile_path);
@@ -461,7 +461,7 @@ fn main() {
 
     image::RgbaImage::from_raw(pic_width, pic_height, fb)
         .unwrap()
-        .save("artifacts/render_gpu[texture].png")
+        .save("artifacts/render_gpu_texture.png")
         .unwrap();
 
     let (ticks, fb) = profiling::timed("render_gpu[combined]", || {
@@ -488,7 +488,7 @@ fn main() {
     );
     image::RgbaImage::from_raw(pic_width, pic_height, fb)
         .unwrap()
-        .save("artifacts/render_gpu[combined].png")
+        .save("artifacts/render_gpu_combined.png")
         .unwrap();
 
     // -- Multi-frame benchmark
