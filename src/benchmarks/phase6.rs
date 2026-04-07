@@ -14,8 +14,10 @@
 // Border pixels (global row/col 0 and last) are skipped in all variants.
 
 use crate::utils::*;
-use dem_io::{Heightmap, TiledHeightmap};
+use dem_io::Heightmap;
+use dem_io::TiledHeightmap;
 use rayon::prelude::*;
+use terrain::{NormalMap, ShadowMask};
 
 fn evict_cache() {
     // ~100 MB eviction — flushes L1/L2/L3 before each timed run
@@ -1264,4 +1266,97 @@ pub(crate) fn bench_tile_size_sweep(hm: &Heightmap) {
     println!("  T= 64 tile:   8 KB input  — fits L1D with room for output");
     println!("  T=128 tile:  32 KB input  — fits L1D, output pressure starts");
     println!("  T=256 tile: 128 KB input  — fills entire L1D, spills to L2");
+}
+
+// ---------------------------------------------------------------------------
+// FPS benchmark — 1600×533, 30 frames, CPU parallel vs GPU combined
+// ---------------------------------------------------------------------------
+
+const FPS_WIDTH: u32 = 1600;
+const FPS_HEIGHT: u32 = 533;
+const FPS_FRAMES: usize = 30;
+const FPS_FOV: f32 = 100.0;
+const FPS_STEP: f32 = 1.0;
+const FPS_T_MAX: f32 = 200_000.0;
+const FPS_SUN_DIR: [f32; 3] = [0.4, 0.5, 0.7];
+
+fn fps_cam(i: usize, dx: f32, dy: f32) -> ([f32; 3], [f32; 3]) {
+    let pan = i as f32 * 200.0;
+    let origin = [2457.0 * dx + pan, 3328.0 * dy, 3341.0];
+    let look_at = [2457.0 * dx + 19_627.0 + pan, 3328.0 * dy - 1_718.0, 3341.0 - 131.0];
+    (origin, look_at)
+}
+
+pub(crate) fn bench_fps(
+    hm: &Heightmap,
+    normal_map: &NormalMap,
+    shadow_mask: &ShadowMask,
+    gpu_ctx: &render_gpu::GpuContext,
+) {
+    let dx = hm.dx_meters as f32;
+    let dy = hm.dy_meters as f32;
+    let step_m = hm.dx_meters as f32 / FPS_STEP;
+    let aspect = FPS_WIDTH as f32 / FPS_HEIGHT as f32;
+    let pixels = FPS_WIDTH as usize * FPS_HEIGHT as usize;
+
+    println!("--- FPS Benchmark: {}×{}, {} frames ---", FPS_WIDTH, FPS_HEIGHT, FPS_FRAMES);
+    println!("  gentle pan: camera moves 200 m east per frame");
+    println!();
+
+    // ── CPU scalar parallel ──────────────────────────────────────────────────
+    // warm-up
+    {
+        let (origin, look_at) = fps_cam(0, dx, dy);
+        let cam = render_cpu::Camera::new(origin, look_at, FPS_FOV, aspect);
+        let _ = render_cpu::render_par(&cam, hm, normal_map, shadow_mask, FPS_SUN_DIR,
+            FPS_WIDTH, FPS_HEIGHT, step_m, FPS_T_MAX);
+    }
+
+    let t0 = profiling::now();
+    for i in 0..FPS_FRAMES {
+        let (origin, look_at) = fps_cam(i, dx, dy);
+        let cam = render_cpu::Camera::new(origin, look_at, FPS_FOV, aspect);
+        std::hint::black_box(render_cpu::render_par(
+            &cam, hm, normal_map, shadow_mask, FPS_SUN_DIR,
+            FPS_WIDTH, FPS_HEIGHT, step_m, FPS_T_MAX,
+        ));
+    }
+    let cpu_s = (profiling::now() - t0) as f64 / counter_frequency();
+    let cpu_fps = FPS_FRAMES as f64 / cpu_s;
+    let cpu_ms = cpu_s / FPS_FRAMES as f64 * 1000.0;
+    println!(
+        "  CPU scalar parallel:  {:>6.1} ms/frame  ({:.2} fps)  [{} Mpix/s]",
+        cpu_ms, cpu_fps,
+        (pixels as f64 * cpu_fps / 1e6) as u64,
+    );
+
+    // ── GPU combined ─────────────────────────────────────────────────────────
+    // warm-up
+    {
+        let (origin, look_at) = fps_cam(0, dx, dy);
+        let _ = render_gpu::render_gpu_combined(
+            gpu_ctx, hm, shadow_mask, origin, look_at, FPS_FOV, aspect,
+            FPS_SUN_DIR, FPS_WIDTH, FPS_HEIGHT, step_m, FPS_T_MAX,
+        );
+    }
+
+    let t0 = profiling::now();
+    for i in 0..FPS_FRAMES {
+        let (origin, look_at) = fps_cam(i, dx, dy);
+        std::hint::black_box(render_gpu::render_gpu_combined(
+            gpu_ctx, hm, shadow_mask, origin, look_at, FPS_FOV, aspect,
+            FPS_SUN_DIR, FPS_WIDTH, FPS_HEIGHT, step_m, FPS_T_MAX,
+        ));
+    }
+    let gpu_s = (profiling::now() - t0) as f64 / counter_frequency();
+    let gpu_fps = FPS_FRAMES as f64 / gpu_s;
+    let gpu_ms = gpu_s / FPS_FRAMES as f64 * 1000.0;
+    println!(
+        "  GPU combined:         {:>6.1} ms/frame  ({:.2} fps)  [{} Mpix/s]",
+        gpu_ms, gpu_fps,
+        (pixels as f64 * gpu_fps / 1e6) as u64,
+    );
+
+    println!();
+    println!("  GPU speedup: {:.1}×", gpu_fps / cpu_fps);
 }

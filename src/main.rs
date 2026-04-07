@@ -515,6 +515,9 @@ fn main() {
 
     run_phase_6_benchmarks(&heightmap, &normal_map, &data);
 
+    println!("---------- FPS Benchmark ----------");
+    bench_fps(&heightmap, &normal_map, &shadow_mask, &gpu_ctx);
+
     // -- Valley render
     // Camera: 47°03'52.84"N 11°42'26.24"E, alt 3284m, heading 165°, tilt 72° from nadir
     // Google Earth cursor alt 2339m → used as look-at altitude
