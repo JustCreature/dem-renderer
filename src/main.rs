@@ -1,6 +1,7 @@
 mod benchmarks;
 mod frame_render_final;
 mod render_gif;
+mod system_info;
 mod utils;
 
 use std::path::Path;
@@ -13,6 +14,7 @@ use dem_io::{Heightmap, TiledHeightmap};
 use terrain::{NormalMap, ShadowMask};
 
 fn main() {
+    system_info::print_system_info();
     println!("dem_renderer");
     let data: Vec<f32> = (0..N).map(|i| i as f32).collect();
 
