@@ -9,6 +9,11 @@ pub struct GpuContext {
 }
 
 impl GpuContext {
+    /// Returns `None` if no GPU adapter is available or device creation fails.
+    pub fn try_new() -> Option<Self> {
+        std::panic::catch_unwind(std::panic::AssertUnwindSafe(Self::new)).ok()
+    }
+
     pub fn new() -> Self {
         pollster::block_on(async {
             let instance = wgpu::Instance::default();
