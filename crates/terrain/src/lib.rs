@@ -86,10 +86,10 @@ pub fn compute_normals_vector_tiled(tiled_hm: &dem_io::TiledHeightmap) -> Normal
     #[cfg(not(target_arch = "aarch64"))]
     {
         #[cfg(target_arch = "x86_64")]
-        eprintln!("[SCALAR FALLBACK] compute_normals_vector_tiled: AVX2 not detected — no scalar tiled fallback, will panic");
+        eprintln!("[SCALAR FALLBACK] compute_normals_vector_tiled: AVX2 not detected — using scalar via get()");
         #[cfg(not(target_arch = "x86_64"))]
-        eprintln!("[SCALAR FALLBACK] compute_normals_vector_tiled: no SIMD for this architecture — no scalar tiled fallback, will panic");
-        unimplemented!("compute_normals_vector_tiled: no scalar fallback for tiled layout yet");
+        eprintln!("[SCALAR FALLBACK] compute_normals_vector_tiled: no SIMD for this architecture — using scalar via get()");
+        return tiled::compute_normals_scalar_tiled(tiled_hm);
     }
 }
 
@@ -105,10 +105,10 @@ pub fn compute_normals_vector_tiled_par(tiled_hm: &dem_io::TiledHeightmap) -> No
     #[cfg(not(target_arch = "aarch64"))]
     {
         #[cfg(target_arch = "x86_64")]
-        eprintln!("[SCALAR FALLBACK] compute_normals_vector_tiled_par: AVX2 not detected — no scalar tiled fallback, will panic");
+        eprintln!("[SCALAR FALLBACK] compute_normals_vector_tiled_par: AVX2 not detected — using scalar via get()");
         #[cfg(not(target_arch = "x86_64"))]
-        eprintln!("[SCALAR FALLBACK] compute_normals_vector_tiled_par: no SIMD for this architecture — no scalar tiled fallback, will panic");
-        unimplemented!("compute_normals_vector_tiled_par: no scalar fallback for tiled layout yet");
+        eprintln!("[SCALAR FALLBACK] compute_normals_vector_tiled_par: no SIMD for this architecture — using scalar via get()");
+        return tiled::compute_normals_scalar_tiled(tiled_hm);
     }
 }
 
