@@ -300,3 +300,89 @@ page-walk latency. macOS's 16KB pages push both TLB knees 4× further out vs x86
 
 - GPU shadow via parallel prefix scan (deferred from Phase 5)
 - `render_gif` commented out in `main.rs`
+
+---
+
+## Session 3 — 2026-04-09
+
+### Overview
+
+Cross-system synthesis session. Ran all benchmark files from 3 additional machines
+(Win Acer Nitro i5+GTX1650, Mac Intel i7-1068NG7, Asus Pentium N3700), structured all
+data into CSV files, generated an interactive HTML report + MD report with cross-system
+analysis, added tooltips/glossary to both reports, and updated Phase 6 reports and CLAUDE.md
+with cross-system findings.
+
+---
+
+### New Hardware Benchmarked
+
+| System | CPU | DRAM | GPU | OS |
+|---|---|---|---|---|
+| Win Acer Nitro | i5-9300H, 4C/8T | 31 GB DDR4 | GTX 1650 (PCIe Gen3 ×4, 4 GB GDDR6) | Windows 10 |
+| Mac Intel | i7-1068NG7, 4C/8T | 32 GB LPDDR4X | Iris Plus (unified) | macOS |
+| Asus Pentium | N3700, 4C/4T | 3 GB DDR3L | HD 405 (unified) | Linux Mint |
+
+---
+
+### Cross-System Findings
+
+**Universal auto-vectorization penalty (continue branch):**
+- M4: 72→11 GB/s (6.5×) | Win: 22→3 GB/s (7×) | Mac i7: 33→4 GB/s (8×) | Asus: 9→0.9 GB/s (10×)
+- ISA doesn't matter — the penalty is universal and equally severe everywhere
+
+**Write/read asymmetry:**
+- M4: 259/104 GB/s (0.40) | Mac i7: 68/18 (0.26) | Asus: 18/6 (0.33) | Win: 43/6.8 (0.16)
+- Cause: write-allocate RFO + store buffer saturation
+
+**TLB sweep cross-system:**
+- x86 exhausts L1 DTLB at 1 MB (64 entries × 4 KB = 256 KB capacity)
+- M4 exhausts L1 DTLB at 4 MB (256 entries × 16 KB = 4 MB capacity)
+- At 26 MB heightmap: x86 in full TLB-miss territory; M4 partially covered by L2 TLB (~48 MB)
+
+**FPS benchmark (1600×533, 30-frame pan):**
+- M4: 46.4 fps | Win GTX1650: 15.2 fps | Mac i7: 11.8 fps | Asus: 4.5 fps
+- GTX1650: ~20 ms GPU compute + ~47 ms PCIe readback = 67 ms total → 15 fps (measures PCIe, not shader)
+- M4 unified memory: no readback cost → 46 fps from ~22 ms GPU compute alone
+
+**SoA advantage scales with bandwidth starvation:**
+- M4 parallel: 1.13× | Win: 2.3× | Asus: 2.7× — invisible when compute-bound
+
+---
+
+### New Artifacts
+
+- `docs/benchmark_results/report_1/systems.csv` — hardware profiles all 4 machines
+- `docs/benchmark_results/report_1/memory_bandwidth.csv`
+- `docs/benchmark_results/report_1/normals.csv`
+- `docs/benchmark_results/report_1/shadows.csv`
+- `docs/benchmark_results/report_1/rendering.csv`
+- `docs/benchmark_results/report_1/fps_benchmark.csv`
+- `docs/benchmark_results/report_1/phase6_exp1_tile_sweep.csv` through `phase6_exp9_tlb.csv`
+- `docs/benchmark_results/report_1/report_1.md` — full cross-system analysis with glossary
+- `docs/benchmark_results/report_1/report_1.html` — interactive Chart.js report with tooltips + glossary tab
+- `docs/lessons/phase-6/long-report.md` — updated with Part 12: Cross-System Synthesis
+- `docs/lessons/phase-6/short-report.md` — updated with cross-system tables
+- `docs/planning/viewer-plan.md` — interactive viewer design (Phase 7 first goal)
+
+---
+
+### Q&A Concepts Covered
+
+- **RFO / write-allocate**: every cold write fetches the 64-byte cache line first; doubles DRAM traffic
+- **Store buffer**: ~50–80 entry queue for pending stores; stalls pipeline when full
+- **TLB deep dive**: L1 DTLB → L2 TLB → hardware page walker → PGD→PUD→PMD→PTE
+- **x86-64 page table**: 48-bit VA split [9][9][9][9][12]; each level = potential DRAM read on miss
+- **PCIe**: Gen3 ×4 = ~4 GB/s; GTX1650 on laptop uses ×4 lane; 3.4 MB readback → ~47 ms practical
+- **Unified memory**: M4 CPU and GPU share same DRAM pool; no PCIe crossing to present frames
+- **Stack vs heap**: stack = LIFO compiler-managed (1 instruction allocate); heap = Vec/Box, flexible size
+
+---
+
+### Open Items for Phase 7
+
+- Interactive viewer: `src/viewer.rs`, winit 0.30, wgpu Surface, WASD camera, no readback (plan in `docs/planning/viewer-plan.md`)
+- GPU timestamp queries for bench_fps (after viewer exists)
+- Fix tiled vectorization: replace `continue` with masked conditional write
+- GPU shadow parallel prefix scan (deferred from Phase 5)
+- `render_gif` commented out in `main.rs`

@@ -233,6 +233,61 @@ other   → scalar + eprintln!("[SCALAR FALLBACK] fn: no SIMD for this architect
 
 ### rsqrt Newton-Raphson (both platforms)
 
+---
+
+## Cross-System Synthesis (2026-04-09)
+
+> Win Acer Nitro i5+GTX1650 (DDR4, PCIe Gen3 ×4) · Mac Intel i7 (32 GB LPDDR4X) · Asus Pentium N3700 (3 GB DDR3L)
+
+### Auto-vec penalty — universal
+
+| Machine | Row-major | Tiled (vec blocked) | Penalty |
+|---|---|---|---|
+| M4 Max | 72 GB/s | 11 GB/s | 6.5× |
+| Win Nitro | 22 GB/s | 3 GB/s | 7× |
+| Mac i7 | 33 GB/s | 4 GB/s | 8× |
+| Asus Pentium | 9 GB/s | 0.9 GB/s | 10× |
+
+### Write/read asymmetry
+
+| Machine | Read ceiling | Write ceiling | Ratio |
+|---|---|---|---|
+| M4 Max | 259 GB/s | 104 GB/s | 0.40 |
+| Win Nitro | 43 GB/s | 6.8 GB/s | 0.16 |
+| Mac i7 | 68 GB/s | 18 GB/s | 0.26 |
+| Asus Pentium | 18 GB/s | 6.0 GB/s | 0.33 |
+
+Cause: write-allocate RFO — every cold write fetches the 64-byte cache line first. Store buffer stalls the pipeline when full. Write saturates at fewer cores than read on every machine.
+
+### TLB sweep — cross-system
+
+M4 16 KB pages: L1 DTLB reach 4 MB. x86 4 KB pages: L1 DTLB reach 256 KB.
+
+| Working set | M4 | Asus | Mac i7 | Win |
+|---|---|---|---|---|
+| 1 MB | 6.55 | **0.19** | 2.63 | 2.03 GB/s | ← x86 TLB exhausted |
+| 4 MB | 6.87 | 0.12 | 2.05 | 1.37 GB/s | ← M4 L1 DTLB full |
+| 256 MB | 1.31 | 0.03 | 0.31 | 0.33 GB/s |
+
+### FPS benchmark (1600×533, 30-frame pan)
+
+| System | CPU fps | GPU fps | GPU/CPU |
+|---|---|---|---|
+| M4 Max | 3.0 | **46.4** | 15.5× |
+| Win + GTX 1650 | 0.5 | **15.2** | 30.4× |
+| Mac Intel i7 | 1.2 | **11.8** | 9.8× |
+| Asus Pentium | 0.2 | **4.5** | 22.5× |
+
+GTX 1650 compute ~20 ms, but PCIe readback ~47 ms → total 67 ms → 15 fps. Fix: wgpu Surface (no readback) → expected ~50 fps.
+
+### SoA advantage scales with bandwidth starvation
+
+| Machine | Single-thread | Parallel |
+|---|---|---|
+| M4 Max | 1.00× | 1.13× |
+| Win Nitro | 1.14× | 2.3× |
+| Asus Pentium | 1.0× | 2.7× |
+
 ```
 NEON:  vrsqrteq_f32 (~11-bit) + vrsqrtsq_f32 NR step
 AVX2:  _mm256_rsqrt_ps (~14-bit) + manual NR: y1 = y0 * (1.5 - 0.5·x·y0²)

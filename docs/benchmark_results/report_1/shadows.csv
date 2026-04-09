@@ -1,0 +1,11 @@
+benchmark,unit,m4_mac,asus_pentium,mac_intel_i7,win_nitro_i5_gtx1650,notes
+scalar_cardinal,GB/s,7.6,0.3,2.3,1.2,scalar shadow sweep (cardinal sun direction)
+vector_cardinal,GB/s,8.5,0.3,2.6,2.7,SIMD shadow sweep (cardinal)
+vector_parallel_cardinal,GB/s,7.0,0.3,7.5,5.5,SIMD parallel shadow sweep (cardinal)
+scalar_azimuth,GB/s,3.1,0.1,0.7,0.5,scalar shadow with azimuth angle
+scalar_azimuth_sunrise,GB/s,3.1,0.1,0.5,0.5,scalar sunrise azimuth
+scalar_azimuth_sunset,GB/s,3.2,0.1,0.5,0.5,scalar sunset azimuth (diagonal direction)
+vector_parallel_azimuth_sunset,GB/s,27.2,0.1,2.0,1.5,SIMD parallel sunset azimuth
+gpu_shadow_s,seconds,0.035,0.996,0.205,0.155,GPU shadow sweep
+azimuth_penalty_m4,,2.5,,,,cardinal to azimuth degradation (M4): 27.2 → 7.0 with azimuth
+cpu_vs_gpu_speedup_m4,,0.8,,,,CPU NEON parallel (7.0 GB/s) vs GPU (0.035s) on M4 — CPU wins because serial dep

@@ -1,0 +1,6 @@
+layout,m4_mac_gbs,asus_pentium_gbs,mac_intel_i7_gbs,win_nitro_gbs,notes
+row_major_vectorised,69.34,1.62,32.88,10.44,baseline fully vectorised row-major
+tiled_row_major_T64,10.53,0.87,3.75,2.35,tiled row-major (T=64 tiles)
+tiled_morton_T64,10.94,0.79,3.73,2.35,Morton Z-order tiled (T=64)
+morton_vs_tiled_ratio,1.04,0.91,0.99,1.00,Morton / row-major tiled — essentially identical everywhere
+tiling_penalty_vs_rowmajor,6.6,1.9,8.8,4.4,row_major / tiled_row_major — tiling overhead from continue branch

@@ -613,3 +613,94 @@ The AVX2 render path requires `width % 8 == 0` (packet width = 8 lanes). If the 
 ```
 
 This reveals two distinct fallback reasons at a glance.
+
+---
+
+## Part 12: Cross-System Benchmark Synthesis
+
+> Additional hardware tested: Windows Acer Nitro i5-9300H + GTX 1650 (DDR4, PCIe Gen3 ×4),
+> Mac Intel i7-1068NG7 (32 GB LPDDR4X, Iris Plus iGPU), Asus Pentium N3700 (3 GB DDR3L, HD 405 iGPU).
+> All four machines ran the same binary with `-C target-cpu=native`. Date: 2026-04-09.
+
+### 12.1 System Profiles
+
+| Property | M4 Max | Win Nitro | Mac i7 | Asus Pentium |
+|---|---|---|---|---|
+| ISA | AArch64 | x86-64 | x86-64 | x86-64 |
+| Cores | 14 (10P+4E) | 4C/8T | 4C/8T | 4C/4T |
+| DRAM | LPDDR5X unified | DDR4 | LPDDR4X | DDR3L |
+| Peak BW | ~400 GB/s | ~43 GB/s | ~68 GB/s | ~20 GB/s |
+| GPU | Built-in (shared mem) | GTX 1650 (PCIe ×4) | Iris Plus (shared) | HD 405 (shared) |
+| OS page size | **16 KB** | 4 KB | 4 KB | 4 KB |
+| L1 DTLB reach | **4 MB** | 256 KB | 256 KB | 256 KB |
+
+### 12.2 Auto-Vectorization Penalty — Universal Across All ISAs
+
+The `continue` branch in the tiled stencil inner loop cut throughput by 7–10× on every machine:
+
+| Machine | Row-major (auto-vec) | Tiled (vec blocked) | Penalty |
+|---|---|---|---|
+| M4 Max | 60–72 GB/s | ~11 GB/s | **6.5×** |
+| Win Nitro | ~22 GB/s | ~3 GB/s | **7×** |
+| Mac i7 | ~33 GB/s | ~4 GB/s | **8×** |
+| Asus Pentium | ~9 GB/s | ~0.9 GB/s | **10×** |
+
+Auto-vectorization is not an optimization — it is the baseline. A single unpredictable branch in the inner loop negates tile size, memory layout, thread count, and ISA differences simultaneously.
+
+### 12.3 Write/Read Asymmetry — Every Machine
+
+Write-allocate RFO policy: before writing to a cold cache line, the CPU must read the full 64-byte line first (to avoid overwriting neighboring bytes it doesn't own). Every write miss generates a read. Store buffer (~50–80 entries) drains this traffic; when full, the pipeline stalls.
+
+| Machine | Read ceiling | Write ceiling | Write/read ratio |
+|---|---|---|---|
+| M4 Max | 259 GB/s | 104 GB/s | 0.40 |
+| Win Nitro | 43 GB/s | 6.8 GB/s | 0.16 |
+| Mac i7 | 68 GB/s | 18 GB/s | 0.26 |
+| Asus Pentium | 18 GB/s | 6.0 GB/s | 0.33 |
+
+Write ceiling saturates at fewer threads than read ceiling on every machine. M4 write saturates at 8 threads (104 GB/s), read at 10 threads (259 GB/s) — 3× asymmetry.
+
+### 12.4 TLB Working Set Sweep — Cross-System
+
+M4's 16 KB pages give 4× TLB reach vs x86's 4 KB pages. L1 DTLB reach: M4 = 4 MB, x86 = 256 KB.
+
+| Working set | M4 BW | Asus BW | Mac i7 BW | Win BW |
+|---|---|---|---|---|
+| 16 KB | 8.13 GB/s | 1.41 GB/s | 3.53 GB/s | 1.88 GB/s |
+| 256 KB | 8.31 GB/s | 0.93 GB/s | 3.22 GB/s | 2.29 GB/s |
+| 1 MB | 6.55 GB/s | **0.19 GB/s** | 2.63 GB/s | 2.03 GB/s | ← x86 TLB exhausted |
+| 4 MB | 6.87 GB/s | 0.12 GB/s | 2.05 GB/s | 1.37 GB/s | ← M4 L1 DTLB full |
+| 16 MB | 3.30 GB/s | 0.11 GB/s | 0.79 GB/s | 0.52 GB/s |
+| 256 MB | 1.31 GB/s | 0.03 GB/s | 0.31 GB/s | 0.33 GB/s |
+
+The 26 MB heightmap sits in full TLB-miss territory on x86 but is partially covered by M4's L2 TLB (~48 MB reach).
+
+### 12.5 SoA Advantage Scales With Bandwidth Pressure
+
+| Machine | Single-thread | Parallel |
+|---|---|---|
+| M4 Max | 1.00× | 1.13× |
+| Win Nitro | 1.14× | **2.3×** |
+| Asus Pentium | 1.0× | **2.7×** |
+
+SoA advantage is invisible when compute-bound (OOO hides load latency). Under parallel bandwidth pressure, SoA loads 1 float per pixel instead of 3 → 3× less data.
+
+### 12.6 PCIe Readback — The GPU fps Bottleneck on Discrete Hardware
+
+| System | GPU compute | PCIe readback (3.4 MB) | Total | fps |
+|---|---|---|---|---|
+| M4 Max (unified) | ~22 ms | 0 ms | ~22 ms | **46.4 fps** |
+| Win GTX 1650 (PCIe ×4) | ~20 ms | ~47 ms | ~67 ms | **15.2 fps** |
+| Mac Intel i7 (iGPU) | — | 0 ms | ~85 ms | **11.8 fps** |
+| Asus Pentium (iGPU) | — | 0 ms | ~222 ms | **4.5 fps** |
+
+GTX 1650 computes frames faster than M4 (~20 ms vs ~22 ms) yet achieves 3× lower fps because PCIe readback costs 47 ms — more than the render itself. The fps number measures PCIe bandwidth, not shader throughput. Fix: wgpu Surface (swap chain) eliminates readback entirely; expected GTX 1650 fps ≈ 50.
+
+### 12.7 GPU vs CPU Win Conditions
+
+| Workload | Winner | Reason |
+|---|---|---|
+| Raymarching (17.7× GPU) | GPU | Embarrassingly parallel; massive thread-level parallelism |
+| Shadow sweep (17× CPU) | CPU | Serial running-max dependency; GPU clock lower, no ILP benefit |
+
+Multi-frame per-frame: CPU parallel 1730 ms → GPU scene 98 ms (17.7× speedup).

@@ -1,0 +1,7 @@
+benchmark,resolution,unit,m4_mac,asus_pentium,mac_intel_i7,win_nitro_i5_gtx1650,notes
+cpu_scalar_parallel_ms,1600x533,ms_per_frame,66.4,6761.8,698.9,1132.1,CPU parallel 30-frame pan benchmark
+cpu_scalar_parallel_fps,1600x533,fps,15.07,0.148,1.430,0.883,
+gpu_combined_ms,1600x533,ms_per_frame,21.5,1469.0,215.3,65.8,GPU combined 30-frame pan benchmark
+gpu_combined_fps,1600x533,fps,46.42,0.681,4.644,15.194,
+gpu_speedup,,ratio,3.1,4.6,3.2,17.2,GPU/CPU fps ratio
+valley_render_s,,seconds,0.083,6.775,0.646,0.238,single-frame valley render
