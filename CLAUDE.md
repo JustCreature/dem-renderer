@@ -191,10 +191,30 @@ Phase 6 lessons:
 - PCIe readback is the fps ceiling on discrete GPU; unified memory (M4) eliminates this tax entirely
 - Serial reduction chains need multiple accumulators; Morton ordering needs DRAM pressure to matter
 
+Phase 7 artifacts (in progress):
+- `src/viewer.rs` — interactive swap-chain viewer: winit 0.30 `ApplicationHandler`, WASD + mouse look, vsync toggle (`--vsync`), immersive mode (Q), left-click drag look, FPS counter
+- `src/main.rs` — `--view` / `--vsync` CLI flags
+- `crates/render_gpu/src/scene.rs` — added `dispatch_frame(&mut encoder, ...)`, `get_output_buffer()`, `get_gpu_ctx()`, `get_dx_meters()`, `get_dy_meters()`
+- `crates/render_gpu/src/context.rs` — added `pub instance` and `pub adapter` fields to `GpuContext`
+- `crates/render_gpu/src/shader_texture.wgsl` — BGRA byte order for Metal `Bgra8Unorm` surface
+- `docs/sessions/phase-7/main-session.md` — session log
+
+Phase 7 key numbers (M4 Max, 2026-04-11):
+- Viewer swap-chain (no readback): **470 fps** (2.1ms/frame) vs bench_fps 10fps — 46× difference proves readback was the bottleneck
+- Command overhead floor: ~2.1ms (~470fps) — fixed cost regardless of shader work
+- Shader-bound threshold: step_m ≈ dx/20 → 85fps at 1600×533
+- Texture cache experiment (fixed step_m=4.0m, factors 1/2/4): identical fps — compute-bound on M4, not texture-bandwidth-bound
+- 8000×2667 default step_m: **21 fps** (47ms) — true compute floor; Phase 5 "10ms compute" was wrong (readback overlapped)
+- vsync on: 100fps (display-capped); vsync off: 470fps at 1600×533
+
 Known open items carried into Phase 7:
 - GPU shadow via parallel prefix scan not implemented — would potentially match CPU NEON for cardinal direction (deferred from Phase 5)
 - `render_gif::render_gif` is commented out in main.rs — re-enable when generating animations (deferred from Phase 5)
 - Occupancy analysis via Instruments/Metal GPU trace deferred — requires full Xcode.app (deferred from Phase 5)
+- GPU timestamp queries (measure per-pass GPU time without frame overhead) not yet implemented
+- Picture quality: bilinear height sampling (`textureSampleLevel`), smooth color bands (`smoothstep`/`mix`), normal interpolation — plan saved in viewer-plan.md
+- HUD text overlay (`glyphon`) — plan saved in viewer-plan.md
+- Window resize handling (`WindowEvent::Resized`) not implemented
 
 Known open items from Phase 4:
 - Supersampled ray optimization considered but not implemented: march 1 reference ray, approximate 3 neighbor heights via `h ≈ h_center + grad_x * Δcol + grad_y * Δrow` (using Phase 2 normal map). Would reduce gather 4→1 per step. Breaks at sharp discrete peaks.

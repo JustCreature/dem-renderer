@@ -34,8 +34,14 @@ fn main() {
     let tile_path = Path::new("n47_e011_1arc_v3_bil/n47_e011_1arc_v3.bil");
     const WIDTH: u32 = 1600;
     const HEIGHT: u32 = 533;
+    // const WIDTH: u32 = 8000;
+    // const HEIGHT: u32 = 2667;
+    let mut vsync: bool = false;
+    if args.contains(&"--vsync".to_string()) {
+        vsync = true;
+    }
     if args.contains(&"--view".to_string()) {
-        viewer::run(tile_path, WIDTH, HEIGHT);
+        viewer::run(tile_path, WIDTH, HEIGHT, vsync);
 
         return;
     }
