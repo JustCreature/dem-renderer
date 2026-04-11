@@ -199,3 +199,62 @@ no-readback fps is 260. The GPU was always fast; readback hid it completely.
 - Picture quality: bilinear height sampling (`textureSampleLevel`), smooth color bands, normal interpolation
 - HUD text overlay (`glyphon`)
 - Window resize handling (`WindowEvent::Resized`)
+
+---
+
+## 2026-04-11 (session 4)
+
+### What was covered
+
+**Bilinear height sampling via `textureSampleLevel`** — replaced both `textureLoad` call sites
+in `shader_texture.wgsl` with `textureSampleLevel(hm_tex, hm_sampler, uv, 0.0).r`.
+UV computed as `(pos.x / dx + 0.5) / hm_cols` (half-texel offset for centre alignment).
+
+**Three-layer fix required to enable bilinear filtering:**
+1. Shader: `textureLoad` → `textureSampleLevel` + UV coordinates
+2. Rust sampler: `SamplerDescriptor::default()` (Nearest) → `mag_filter/min_filter: Linear`
+3. Bind group layout: `TextureSampleType::Float { filterable: false }` → `filterable: true`
+   (both `normals_init_bgl` and `render_bgl` in `scene.rs`)
+4. Texture format: `R32Float` → `R16Float` — `R32Float` is not filterable on all platforms
+   without `FLOAT32_FILTERABLE` device feature; `R16Float` is always filterable.
+   Required adding `half = { version = "2", features = ["bytemuck"] }` to `render_gpu/Cargo.toml`
+   and converting `Vec<f32>` → `Vec<f16>` before upload; `bytes_per_row` halved to `cols * 2`.
+
+**Bilinear normal interpolation** — replaced single `shadow[idx]` / `nx[idx]` lookups with
+manual 4-texel bilinear blend using fractional offsets `fx`/`fy` derived from `pos.x`/`pos.y`.
+`normalize(mix(mix(n00, n10, fx), mix(n01, n11, fx), fy))` — normalize after blend is required
+because lerping two unit vectors produces a shorter-than-unit vector.
+
+**Bilinear shadow interpolation** — same pattern, scalar blend:
+`mix(mix(s00, s10, fx), mix(s01, s11, fx), fy)` — gives soft shadow edges instead of hard
+square boundaries.
+
+**Smooth elevation color bands** — replaced hard `if/else` ladder with `smoothstep` + `mix`:
+- 4 base colors: green, light_green, rock, snow
+- 3 transition zones ±100m around original thresholds (1900, 2100, 2700m)
+- `mix(mix(mix(green, light_green, t1), rock, t2), snow, t3)`
+
+**Atmospheric fog** — blends distant terrain toward sky color based on march distance `t`:
+- `smoothstep(15000.0, 60000.0, t)` — fog starts at 15km, fully haze at 60km
+- Applied after brightness, before pixel pack: `mix(f32(r), sky.x, fog_t)`
+- Hides hard color band lines at distance (root cause: at distance each screen pixel spans
+  many DEM cells, so a 200m smoothstep zone is sub-pixel and invisible without fog)
+
+### Key concepts
+
+- **`textureSampleLevel` requires a filtering sampler AND a filterable texture format** —
+  three separate API objects must all agree: sampler `FilterMode`, bind group layout
+  `filterable` flag, and the texture format itself. Missing any one gives a wgpu validation error.
+- **`R32Float` is not universally filterable** — requires `FLOAT32_FILTERABLE` device feature
+  (not available on all hardware). `R16Float` is always filterable; sufficient for terrain heights.
+- **Bilinear normal interpolation**: lerp 4 neighbours, then normalize — lerp alone shortens
+  the vector.
+- **`mix(a, b, t)`** = lerp. Works element-wise on `vec3`. `smoothstep(e0, e1, x)` gives
+  cubic ease 0→1 across [e0, e1].
+- **Fog as distance-based blend** masks sub-pixel color transitions at distance more effectively
+  than noise/threshold variation.
+
+### Open items for this phase
+- GPU timestamp queries (measure per-pass GPU time without frame overhead)
+- HUD text overlay (`glyphon`)
+- Window resize handling (`WindowEvent::Resized`)

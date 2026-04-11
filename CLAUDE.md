@@ -196,7 +196,8 @@ Phase 7 artifacts (in progress):
 - `src/main.rs` — `--view` / `--vsync` CLI flags
 - `crates/render_gpu/src/scene.rs` — added `dispatch_frame(&mut encoder, ...)`, `get_output_buffer()`, `get_gpu_ctx()`, `get_dx_meters()`, `get_dy_meters()`
 - `crates/render_gpu/src/context.rs` — added `pub instance` and `pub adapter` fields to `GpuContext`
-- `crates/render_gpu/src/shader_texture.wgsl` — BGRA byte order for Metal `Bgra8Unorm` surface
+- `crates/render_gpu/src/shader_texture.wgsl` — BGRA byte order; bilinear height sampling (`textureSampleLevel` + UV); bilinear normal interpolation (4-texel manual blend); bilinear shadow interpolation; smooth elevation color bands (`smoothstep`/`mix`); atmospheric fog (`smoothstep` 15–60km)
+- `crates/render_gpu/Cargo.toml` — added `half = { version = "2", features = ["bytemuck"] }` for R16Float upload
 - `src/benchmarks/phase6.rs` — added GPU scene no-readback variant to `bench_fps` (`dispatch_frame` + `poll(Wait)`)
 - `docs/benchmark_results/report_1/fps_no_readback.csv` — no-readback fps data for all 4 systems
 - `docs/benchmark_results/report_1/report_1.md` — updated section 6 with no-readback table
@@ -223,7 +224,7 @@ Known open items carried into Phase 7:
 - `render_gif::render_gif` is commented out in main.rs — re-enable when generating animations (deferred from Phase 5)
 - Occupancy analysis via Instruments/Metal GPU trace deferred — requires full Xcode.app (deferred from Phase 5)
 - GPU timestamp queries (measure per-pass GPU time without frame overhead) not yet implemented
-- Picture quality: bilinear height sampling (`textureSampleLevel`), smooth color bands (`smoothstep`/`mix`), normal interpolation — plan saved in viewer-plan.md
+- Picture quality: ✅ bilinear height sampling, ✅ smooth color bands, ✅ normal interpolation, ✅ atmospheric fog — all implemented in shader_texture.wgsl
 - HUD text overlay (`glyphon`) — plan saved in viewer-plan.md
 - Window resize handling (`WindowEvent::Resized`) not implemented
 

@@ -50,7 +50,11 @@ impl GpuScene {
         height: u32,
     ) -> Self {
         // heightmap texture
-        let hm_f32: Vec<f32> = hm.data.iter().map(|&v| v as f32).collect();
+        let hm_data: Vec<half::f16> = hm
+            .data
+            .iter()
+            .map(|&v| half::f16::from_f32(v as f32))
+            .collect();
         let hm_texture = gpu_ctx.device.create_texture(&wgpu::TextureDescriptor {
             label: Some("scene_hm_tex"),
             size: wgpu::Extent3d {
@@ -61,16 +65,16 @@ impl GpuScene {
             mip_level_count: 1,
             sample_count: 1,
             dimension: wgpu::TextureDimension::D2,
-            format: wgpu::TextureFormat::R32Float,
+            format: wgpu::TextureFormat::R16Float,
             usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
             view_formats: &[],
         });
         gpu_ctx.queue.write_texture(
             hm_texture.as_image_copy(),
-            bytemuck::cast_slice(&hm_f32),
+            bytemuck::cast_slice(&hm_data),
             wgpu::TexelCopyBufferLayout {
                 offset: 0,
-                bytes_per_row: Some(hm.cols as u32 * 4),
+                bytes_per_row: Some(hm.cols as u32 * 2),
                 rows_per_image: None,
             },
             wgpu::Extent3d {
@@ -80,9 +84,11 @@ impl GpuScene {
             },
         );
         let hm_view = hm_texture.create_view(&wgpu::TextureViewDescriptor::default());
-        let hm_sampler = gpu_ctx
-            .device
-            .create_sampler(&wgpu::SamplerDescriptor::default());
+        let hm_sampler = gpu_ctx.device.create_sampler(&wgpu::SamplerDescriptor {
+            mag_filter: wgpu::FilterMode::Linear,
+            min_filter: wgpu::FilterMode::Linear,
+            ..Default::default()
+        });
 
         // normals buffers
         let nm_size = (hm.rows * hm.cols * 4) as u64;
@@ -139,7 +145,7 @@ impl GpuScene {
                             binding: 1,
                             visibility: wgpu::ShaderStages::COMPUTE,
                             ty: wgpu::BindingType::Texture {
-                                sample_type: wgpu::TextureSampleType::Float { filterable: false },
+                                sample_type: wgpu::TextureSampleType::Float { filterable: true },
                                 view_dimension: wgpu::TextureViewDimension::D2,
                                 multisampled: false,
                             },
@@ -148,7 +154,7 @@ impl GpuScene {
                         wgpu::BindGroupLayoutEntry {
                             binding: 2,
                             visibility: wgpu::ShaderStages::COMPUTE,
-                            ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::NonFiltering),
+                            ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
                             count: None,
                         },
                         wgpu::BindGroupLayoutEntry {
@@ -316,7 +322,7 @@ impl GpuScene {
                             binding: 1,
                             visibility: wgpu::ShaderStages::COMPUTE,
                             ty: wgpu::BindingType::Texture {
-                                sample_type: wgpu::TextureSampleType::Float { filterable: false },
+                                sample_type: wgpu::TextureSampleType::Float { filterable: true },
                                 view_dimension: wgpu::TextureViewDimension::D2,
                                 multisampled: false,
                             },
@@ -325,7 +331,7 @@ impl GpuScene {
                         wgpu::BindGroupLayoutEntry {
                             binding: 2,
                             visibility: wgpu::ShaderStages::COMPUTE,
-                            ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::NonFiltering),
+                            ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
                             count: None,
                         },
                         wgpu::BindGroupLayoutEntry {
