@@ -566,6 +566,77 @@ impl GpuScene {
         result
     }
 
+    /// Dispatches one frame. Only writes 128 bytes (camera uniform) then dispatches.
+    pub fn dispatch_frame(
+        &self,
+        encoder: &mut wgpu::CommandEncoder,
+        origin: [f32; 3],
+        look_at: [f32; 3],
+        fov_deg: f32,
+        aspect: f32,
+        sun_dir: [f32; 3],
+        step_m: f32,
+        t_max: f32,
+    ) {
+        // Build camera uniforms inline (no hm needed — scalars stored in scene)
+        let forward = crate::vector_utils::normalize(crate::vector_utils::sub(look_at, origin));
+        let right =
+            crate::vector_utils::normalize(crate::vector_utils::cross(forward, [0.0, 0.0, 1.0]));
+        let up = crate::vector_utils::cross(right, forward);
+        let half_w = (fov_deg / 2.0_f32).to_radians().tan();
+        let half_h = half_w / aspect;
+
+        let cam = CameraUniforms {
+            origin,
+            _pad0: 0.0,
+            forward,
+            _pad1: 0.0,
+            right,
+            _pad2: 0.0,
+            up,
+            _pad3: 0.0,
+            sun_dir,
+            _pad4: 0.0,
+            half_w,
+            half_h,
+            img_width: self.width,
+            img_height: self.height,
+            hm_cols: self.hm_cols,
+            hm_rows: self.hm_rows,
+            dx_meters: self.dx_meters,
+            dy_meters: self.dy_meters,
+            step_m,
+            t_max,
+            _pad5: 0.0,
+            _pad6: 0.0,
+            _pad7: 0.0,
+            _pad8: 0.0,
+            _pad9: 0.0,
+            _pad10: 0.0,
+        };
+
+        self.gpu_ctx
+            .queue
+            .write_buffer(&self.cam_buf, 0, bytemuck::bytes_of(&cam));
+
+        // let mut encoder =
+        //     self.gpu_ctx
+        //         .device
+        //         .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+        //             label: Some("render_enc"),
+        //         });
+        {
+            let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                label: Some("render_pass"),
+                timestamp_writes: None,
+            });
+            pass.set_pipeline(&self.render_pipeline);
+            pass.set_bind_group(0, &self.render_bg, &[]);
+            pass.dispatch_workgroups((self.width + 7) / 8, (self.height + 7) / 8, 1);
+        }
+        // self.gpu_ctx.queue.submit([encoder.finish()]);
+    }
+
     /// Re-upload shadow mask (call when sun direction changes).
     pub fn update_shadow(&self, shadow_mask: &ShadowMask) {
         self.gpu_ctx.queue.write_buffer(
@@ -573,5 +644,20 @@ impl GpuScene {
             0,
             bytemuck::cast_slice(&shadow_mask.data),
         );
+    }
+
+    pub fn get_output_buffer(&self) -> &wgpu::Buffer {
+        &self.output_buf
+    }
+
+    pub fn get_gpu_ctx(&self) -> &GpuContext {
+        &self.gpu_ctx
+    }
+
+    pub fn get_dx_meters(&self) -> f32 {
+        self.dx_meters
+    }
+    pub fn get_dy_meters(&self) -> f32 {
+        self.dy_meters
     }
 }

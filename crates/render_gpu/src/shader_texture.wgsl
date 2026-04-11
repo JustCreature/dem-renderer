@@ -145,10 +145,12 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
         let r = u32(clamp(base_r * brightness, 0.0, 255.0));
         let g = u32(clamp(base_g * brightness, 0.0, 255.0));
         let b = u32(clamp(base_b * brightness, 0.0, 255.0));
-        output[gid.y * cam.img_width + gid.x] = r | (g << 8u) | (b << 16u) | (255u << 24u);
+        // output[gid.y * cam.img_width + gid.x] = r | (g << 8u) | (b << 16u) | (255u << 24u);
+        output[gid.y * cam.img_width + gid.x] = b | (g << 8u) | (r << 16u) | (255u << 24u);  // bgra format
     } else {
         // sky blue
-        output[gid.y * cam.img_width + gid.x] = 135u | (206u << 8u) | (235u << 16u) | (255u << 24u);
+        // output[gid.y * cam.img_width + gid.x] = 135u | (206u << 8u) | (235u << 16u) | (255u << 24u);
+        output[gid.y * cam.img_width + gid.x] = 235u | (206u << 8u) | (135u << 16u) | (255u << 24u);  // bgra format
     }
 }
 
