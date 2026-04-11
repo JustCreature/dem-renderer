@@ -197,6 +197,10 @@ Phase 7 artifacts (in progress):
 - `crates/render_gpu/src/scene.rs` — added `dispatch_frame(&mut encoder, ...)`, `get_output_buffer()`, `get_gpu_ctx()`, `get_dx_meters()`, `get_dy_meters()`
 - `crates/render_gpu/src/context.rs` — added `pub instance` and `pub adapter` fields to `GpuContext`
 - `crates/render_gpu/src/shader_texture.wgsl` — BGRA byte order for Metal `Bgra8Unorm` surface
+- `src/benchmarks/phase6.rs` — added GPU scene no-readback variant to `bench_fps` (`dispatch_frame` + `poll(Wait)`)
+- `docs/benchmark_results/report_1/fps_no_readback.csv` — no-readback fps data for all 4 systems
+- `docs/benchmark_results/report_1/report_1.md` — updated section 6 with no-readback table
+- `docs/benchmark_results/report_1/report_1.html` — updated FPS tab with no-readback stats and chart
 - `docs/sessions/phase-7/main-session.md` — session log
 
 Phase 7 key numbers (M4 Max, 2026-04-11):
@@ -206,6 +210,13 @@ Phase 7 key numbers (M4 Max, 2026-04-11):
 - Texture cache experiment (fixed step_m=4.0m, factors 1/2/4): identical fps — compute-bound on M4, not texture-bandwidth-bound
 - 8000×2667 default step_m: **21 fps** (47ms) — true compute floor; Phase 5 "10ms compute" was wrong (readback overlapped)
 - vsync on: 100fps (display-capped); vsync off: 470fps at 1600×533
+
+bench_fps no-readback cross-system (1600×533, 2026-04-11):
+- M4: GPU no-rdback **477 fps** (2.1ms) | readback overhead 10.3× | GPU speedup vs CPU 32×
+- Win GTX1650: GPU no-rdback **260 fps** (3.8ms) | readback overhead 24.1× | GPU speedup vs CPU 298×
+- Mac i7: GPU no-rdback **53 fps** (18.9ms) | readback overhead 11.3× | GPU speedup vs CPU 36×
+- Asus: GPU no-rdback **4.9 fps** (205.8ms) | readback overhead 7.1× | GPU speedup vs CPU 32×
+- Win GTX Phase 6 "~50fps prediction" was 5× wrong — actual 260fps; nvidia-smi SM utilisation was misleading
 
 Known open items carried into Phase 7:
 - GPU shadow via parallel prefix scan not implemented — would potentially match CPU NEON for cardinal direction (deferred from Phase 5)

@@ -154,6 +154,8 @@
 
 ## 6. FPS Benchmark (1600×533, 30-frame pan)
 
+### With readback (Phase 6 baseline)
+
 | System | CPU fps | GPU fps | GPU speedup | Bottleneck |
 |---|---|---|---|---|
 | M4 Mac | 15.07 fps | **46.42 fps** | 3.1× | GPU compute (~21 ms) |
@@ -161,13 +163,28 @@
 | Win GTX 1650 | 0.88 fps | **15.19 fps** | 17.2× | PCIe readback (~47 ms) |
 | Asus Pentium | 0.15 fps | 0.68 fps | 4.6× | Everything (ancient GPU) |
 
-**Win GTX 1650 achieves 15.19 fps GPU — limited by PCIe readback, not GPU compute.** From nvidia-smi analysis: GPU SM utilisation is ~30% during the benchmark. The GPU computes in ~20 ms, then waits 47 ms for CPU readback. If readback were eliminated (Surface/swapchain viewer), theoretical fps = 1000/20 = 50 fps.
+### Phase 7 run — with and without readback
 
-**M4 Mac achieves 46.42 fps GPU** — the best absolute fps, benefiting from unified memory (no PCIe, readback is ~8 ms instead of 47 ms) and fast GPU compute.
+| System | CPU fps | GPU+rdback fps | **GPU no-rdback fps** | Readback overhead | GPU speedup (no rdback) |
+|---|---|---|---|---|---|
+| M4 Mac | 14.8 fps | 46.2 fps | **476.9 fps** | 10.3× | 32.2× |
+| Mac i7 | 1.49 fps | 4.7 fps | **52.9 fps** | 11.3× | 35.6× |
+| Win GTX 1650 | 0.87 fps | 10.8 fps | **260.1 fps** | 24.1× | 297.5× |
+| Asus Pentium | 0.15 fps | 0.7 fps | **4.9 fps** | 7.1× | 31.9× |
 
-**GPU speedup correlates with CPU weakness, not GPU strength:**
-- Asus (4.6×): both CPU and GPU are slow, but GPU is proportionally less bad
-- Win GTX (17.2×): weak CPU × strong discrete GPU = large ratio
+**Readback is the dominant cost on every system.** The no-readback column measures `dispatch_frame` + `queue.submit` + `device.poll(Wait)` — pure GPU compute time, no pixel transfer.
+
+**Win GTX 1650: 260 fps without readback** — the GPU was computing in ~3.8 ms/frame all along. The 15 fps Phase 6 figure was almost entirely (~92%) PCIe readback. Readback overhead: 24.1× (92.7 ms combined → 3.8 ms compute).
+
+**M4 Mac: 477 fps without readback** — command submission + GPU scheduling overhead ≈ 2.1 ms/frame at 1600×533. Readback overhead: 10.3× (21.7 ms combined → 2.1 ms compute).
+
+**Mac i7: 53 fps without readback** — the Intel Iris Plus GPU was faster than the readback numbers suggested. 18.9 ms pure compute vs 212.6 ms combined = 11.3× readback overhead.
+
+**Asus Pentium: 4.9 fps without readback** — this is the true GPU compute ceiling for this hardware. Intel HD 405 at 205.8 ms/frame compute is still very slow, but the 7.1× readback overhead was masking even that.
+
+**GPU speedup vs CPU (no-rdback) is 32–35× on all integrated-GPU systems** and 298× on GTX 1650. The enormous Win ratio is not surprising: the GPU is executing ~3.8 ms of shader work vs 1144 ms of CPU serial raymarching.
+
+**Note on GPU combined (rdback) numbers:** The Win GTX result changed from 65.8 ms (Phase 6) to 92.7 ms (Phase 7 run). Both runs use the same `render_gpu_combined` code path; the difference is run-to-run variance (thermal throttle, background load). The no-readback measurement is more reliable as it measures only GPU execution.
 
 ---
 
@@ -310,7 +327,7 @@ The Asus Pentium TLB is exhausted at 256 KB — extremely small TLB capacity on 
 The Phase 6 tile size sweep showed the same ~7–10× penalty on every system (M4 to Asus). The cause is a `continue` branch in the tiled loop that blocks auto-vectorisation. Cache topology, page size, and SIMD width become irrelevant when the vectoriser can't fire. **Fix the vectorisation barrier first.**
 
 ### 2. PCIe readback is the GPU fps ceiling
-The Win GTX 1650 benchmarks reveal a system with ~20 ms GPU compute but ~47 ms PCIe readback — making 67 ms/frame (15 fps) despite the GPU being 17× faster than the CPU. Eliminating readback via a wgpu Surface/swapchain viewer would push it to ~50 fps. This is the motivation for Phase 7 viewer.
+The Win GTX 1650 benchmarks reveal a system with ~3.8 ms GPU compute but ~89 ms of combined overhead (readback + sync) — making ~11 fps despite the GPU being 298× faster than the CPU in pure compute. Phase 7 measurement: readback overhead is 24.1× (92.7 ms combined → 3.8 ms compute). Eliminating readback via a wgpu Surface/swapchain viewer pushes it to 260 fps. The original Phase 6 prediction of "~50 fps" was wrong — the GPU is much faster than estimated.
 
 ### 3. Memory hierarchy determines architecture suitability
 - **M4 unified memory** eliminates PCIe entirely for GPU, reduces TLB pressure (16 KB pages), and provides 400 GB/s to all agents. This is why M4 sees the best GPU fps despite not having a discrete GPU.

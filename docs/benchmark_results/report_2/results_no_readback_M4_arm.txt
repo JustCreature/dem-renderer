@@ -1,0 +1,401 @@
+=== System Info ===
+Hostname       : ZALANDO-87372
+OS             : macOS 26.4
+Arch           : aarch64
+CPU            : Apple M4 Max
+CPU freq       : 4 MHz
+Cores          : 14 physical / 14 logical
+Cache          : L1D 64 KB  L2 4 MB
+NUMA nodes     : 1 (macOS unified memory, no NUMA)
+Power mode     : Normal
+RAM            : 36 GB
+GPU            : Apple M4 Max
+Build profile  : release
+rustc          : rustc 1.94.0 (4a4ef493e 2026-03-02)
+===================
+
+dem_renderer
+seq_read,3191679
+wall clock: 0.0032 seconds
+seq_read_simd: 88.3 GB/s
+--------
+seq_read,48556092
+wall clock: 0.0486 seconds
+seq_read: 5.8 GB/s
+--------
+random_read_simd,202381911
+wall clock: 0.2024 seconds
+random_read_simd: 1.4 GB/s
+--------
+seq_read,520542372
+wall clock: 0.5206 seconds
+random_read: 0.5 GB/s
+--------
+seq_read,17469138
+wall clock: 0.0175 seconds
+seq_write: 16.1 GB/s
+--------
+seq_read,571696017
+wall clock: 0.5717 seconds
+random_write: 0.5 GB/s
+--------
+hdr_map: HdrMeta { rows: 3601, cols: 3601, little_endian: true, nodata: -32767, origin_lon: 11.0, origin_lat: 48.0, x_dim: 0.000277777777777778, y_dim: 0.000277777777777778 }
+nodata cells — before: 654864, after: 0
+elevation range check: Some(472) to Some(3477) metres
+build heightmap,119413450
+wall clock: 0.1194 seconds
+--------
+row_major,2352979
+wall clock: 0.0024 seconds
+row_major: 46.3 GB/s
+row_major,27440386
+wall clock: 0.0274 seconds
+tiled: 4.0 GB/s
+row_major,37233571
+wall clock: 0.0372 seconds
+tiled_walk_tiles_order: 2.9 GB/s
+--------
+---------- NORMALS ----------
+build normals map from row-major hm,10440511
+wall clock: 0.0104 seconds
+compute_normals_scalar_from_row_major_hm: 26.1 GB/s
+[vectotized] build normals map from row-major hm,10552165
+wall clock: 0.0106 seconds
+[vectotized]compute_normals_scalar_from_row_major_hm: 25.8 GB/s
+[parallel_vectotized] build normals map from row-major hm,2986414
+wall clock: 0.0030 seconds
+[parallel_vectotized]compute_normals_scalar_from_row_major_hm: 91.2 GB/s
+[tiled_vectorised] build normals map from tiled hm,8903717
+wall clock: 0.0089 seconds
+[tiled_vectorised]compute_normals_vector_tiled: 30.6 GB/s
+[tiled_parallel_vectorised] build normals map from tiled hm,2409972
+wall clock: 0.0024 seconds
+[tiled_parallel_vectorised]compute_normals_vector_tiled_parallel: 113.0 GB/s
+  [GPU] found: Apple M4 Max (IntegratedGpu)
+  [GPU] selected: Apple M4 Max (IntegratedGpu)
+compute_normals_gpu,29607110
+wall clock: 0.0296 seconds
+compute_normals_gpu: 0.03s
+---------- SHADOWS ----------
+build shadow mask SCALAR from row-major hm,10474946
+wall clock: 0.0105 seconds
+compute_shadows_scalar_from_row_major_hm: 7.8 GB/s
+build shadow mask VECTOR from row-major hm,7540008
+wall clock: 0.0075 seconds
+compute_shadows_vector_from_row_major_hm: 10.8 GB/s
+build shadow mask VECTOR parallel from row-major hm,1442244
+wall clock: 0.0014 seconds
+compute_shadows_vector_parallel_from_row_major_hm: 56.7 GB/s
+build shadow mask SCALAR with_azimuth from row-major hm,27814114
+wall clock: 0.0278 seconds
+compute_shadows_scalar_with_azimuth_from_row_major_hm: 2.9 GB/s
+[[ sunrise ]] build shadow mask SCALAR with_azimuth from row-major hm,27655884
+wall clock: 0.0277 seconds
+compute_shadows_scalar_with_azimuth_labeled_from_row_major_hm: 3.0 GB/s
+[[ sunset ]] build shadow mask SCALAR with_azimuth from row-major hm,27020115
+wall clock: 0.0270 seconds
+compute_shadows_scalar_with_azimuth_labeled_from_row_major_hm: 3.0 GB/s
+[[ sunset ]] build shadow mask VECTOR parallel with_azimuth from row-major hm,3220387
+wall clock: 0.0032 seconds
+compute_shadows_vector_parallel_labeled_from_row_major_hm: 25.4 GB/s
+compute_shadow_gpu,27309525
+wall clock: 0.0273 seconds
+compute_shadow_gpu: 0.03s
+---------- Camera CPU Renderer ----------
+center ray dir: [0.9810798, -0.08517345, -0.17386141]
+top-left ray dir: [0.7732183, -0.6248294, 0.10826679]
+hit: Some([53845.457, 102648.05, 2808.0])
+render_cpu_parallel,84121212
+wall clock: 0.0841 seconds
+render_cpu PARALLEL 2000x900: 0.08s
+render_cpu[VECTOR],884431640
+wall clock: 0.8844 seconds
+render_cpu [VECTOR] 2000x900: 0.84s
+render_cpu_VECTOR_parallel,84970313
+wall clock: 0.0850 seconds
+render_cpu VECTOR PARALLEL 2000x900: 0.08s
+hdr_map: HdrMeta { rows: 3601, cols: 3601, little_endian: true, nodata: -32767, origin_lon: 11.0, origin_lat: 48.0, x_dim: 0.000277777777777778, y_dim: 0.000277777777777778 }
+nodata cells — before: 654864, after: 0
+elevation range check: Some(472) to Some(3477) metres
+render_cpu[CPU|shadows_SCALAR_PARALLEL],84494758
+wall clock: 0.0845 seconds
+render_cpu CPU|shadows_SCALAR_PARALLEL 2000x900: 0.08s
+hdr_map: HdrMeta { rows: 3601, cols: 3601, little_endian: true, nodata: -32767, origin_lon: 11.0, origin_lat: 48.0, x_dim: 0.000277777777777778, y_dim: 0.000277777777777778 }
+nodata cells — before: 654864, after: 0
+elevation range check: Some(472) to Some(3477) metres
+  [GPU] found: Apple M4 Max (IntegratedGpu)
+  [GPU] selected: Apple M4 Max (IntegratedGpu)
+render_gpu[GPU],61580889
+wall clock: 0.0616 seconds
+render_gpu GPU 2000x900: 0.06s
+render_cpu,1379303478
+wall clock: 1.3793 seconds
+render_cpu BIG PARALLEL 8000x2667: 1.31s
+---------- Camera GPU Renderer ----------
+render_gpu,134961896
+wall clock: 0.1350 seconds
+render_gpu BIG 8000x2667: 0.13s
+render_gpu[texture],119776495
+wall clock: 0.1198 seconds
+render_gpu BIG [texture] 8000x2667: 0.11s
+render_gpu[combined],97219754
+wall clock: 0.0972 seconds
+render_gpu BIG [combined] 8000x2667: 0.09s
+---------- Multi-frame benchmark ----------
+multi_frame GPU_separate    8000x2667: 135.1ms/frame  (1.35s total, 10 frames)
+multi_frame GPU_combined    8000x2667: 119.5ms/frame  (1.19s total, 10 frames)
+  [GPU] found: Apple M4 Max (IntegratedGpu)
+  [GPU] selected: Apple M4 Max (IntegratedGpu)
+multi_frame GPU_scene       8000x2667:  97.6ms/frame  (0.98s total, 10 frames)
+---------- Rendering GIF 1600x533 × 60 frames ----------
+hdr_map: HdrMeta { rows: 3601, cols: 3601, little_endian: true, nodata: -32767, origin_lon: 11.0, origin_lat: 48.0, x_dim: 0.000277777777777778, y_dim: 0.000277777777777778 }
+nodata cells — before: 654864, after: 0
+elevation range check: Some(472) to Some(3477) metres
+  [GPU] found: Apple M4 Max (IntegratedGpu)
+  [GPU] selected: Apple M4 Max (IntegratedGpu)
+  frame 10/60 — 0.5s elapsed
+  frame 20/60 — 1.0s elapsed
+  frame 30/60 — 1.5s elapsed
+  frame 40/60 — 1.9s elapsed
+  frame 50/60 — 2.5s elapsed
+  frame 60/60 — 2.9s elapsed
+GIF saved to artifacts/animation.gif  (60 frames, 49.2ms/frame, 2.9s total)
+---------- Phase 6 Benchmarks ----------
+--- Phase 6 / Exp 1: Tile Size Sweep ---
+  kernel: 5-point stencil sum, cold cache, 12 Mpix
+  logical bytes/run: 181 MB
+
+stencil_rowmajor,2880295
+wall clock: 0.0029 seconds
+  row-major (baseline):  66.12 GB/s
+stencil_tiled,18514754
+wall clock: 0.0185 seconds
+  tiled  T= 32 (   2 KB/tile):  10.29 GB/s
+stencil_tiled,18110466
+wall clock: 0.0181 seconds
+  tiled  T= 64 (   8 KB/tile):  10.52 GB/s
+stencil_tiled,18052346
+wall clock: 0.0181 seconds
+  tiled  T=128 (  32 KB/tile):  10.55 GB/s
+stencil_tiled,18143417
+wall clock: 0.0182 seconds
+  tiled  T=256 ( 128 KB/tile):  10.50 GB/s
+
+  L1D = 128 KB (M4 Max per perf core)
+  T= 32 tile:   2 KB input  — trivially fits L1D
+  T= 64 tile:   8 KB input  — fits L1D with room for output
+  T=128 tile:  32 KB input  — fits L1D, output pressure starts
+  T=256 tile: 128 KB input  — fills entire L1D, spills to L2
+--- Phase 6 / Exp 2: Thread Count Scaling ---
+  kernel: row-major stencil (vectorised baseline), cold cache
+  M4 Max: 12 perf cores, ~400 GB/s peak bandwidth
+
+stencil_parallel,16750859
+wall clock: 0.0168 seconds
+   1 thread :   11.4 GB/s  (0.2× vs single)
+stencil_parallel,8374024
+wall clock: 0.0084 seconds
+   2 threads:   22.7 GB/s  (0.4× vs single)
+stencil_parallel,4483209
+wall clock: 0.0045 seconds
+   4 threads:   42.5 GB/s  (0.7× vs single)
+stencil_parallel,2797391
+wall clock: 0.0028 seconds
+   6 threads:   68.1 GB/s  (1.1× vs single)
+stencil_parallel,2307069
+wall clock: 0.0023 seconds
+   8 threads:   82.6 GB/s  (1.4× vs single)
+stencil_parallel,1953292
+wall clock: 0.0020 seconds
+  10 threads:   97.5 GB/s  (1.6× vs single)
+stencil_parallel,1862740
+wall clock: 0.0019 seconds
+  12 threads:  102.2 GB/s  (1.7× vs single)
+
+  bandwidth ceiling: ~400 GB/s total / 14 bytes/pixel ≈ 28 Gpix/s theoretical
+  single-thread ceiling: ~60 GB/s / 14 bytes ≈ 4.3 Gpix/s
+--- Phase 6 / Exp 3: Thread Scaling (read-only, no output write) ---
+  hypothesis: flattening at 8+ threads is write-path pressure, not DRAM BW
+
+stencil_readonly,4393906
+wall clock: 0.0044 seconds
+   1 thread :   31.0 GB/s  (2.7× vs 1-thread)
+stencil_readonly,2133772
+wall clock: 0.0021 seconds
+   2 threads:   63.8 GB/s  (5.5× vs 1-thread)
+stencil_readonly,1096883
+wall clock: 0.0011 seconds
+   4 threads:  124.0 GB/s  (10.8× vs 1-thread)
+stencil_readonly,744506
+wall clock: 0.0007 seconds
+   6 threads:  182.7 GB/s  (15.9× vs 1-thread)
+stencil_readonly,588750
+wall clock: 0.0006 seconds
+   8 threads:  231.1 GB/s  (20.1× vs 1-thread)
+stencil_readonly,594292
+wall clock: 0.0006 seconds
+  10 threads:  228.9 GB/s  (19.9× vs 1-thread)
+stencil_readonly,563876
+wall clock: 0.0006 seconds
+  12 threads:  241.3 GB/s  (21.0× vs 1-thread)
+
+  if write-path is the bottleneck: scaling should continue past 8 threads
+  if DRAM BW is the bottleneck: scaling flattens at same point as Exp 2
+--- Phase 6 / Exp 4: AoS vs SoA Normal Storage ---
+  12 Mpix  |  SoA: 3×Vec<f32> (51 MB each)  |  AoS: Vec<[f32;3]> (155 MB total)
+
+soa_dot,6827855
+wall clock: 0.0068 seconds
+aos_dot,6956323
+wall clock: 0.0070 seconds
+  dot(normal, sun)  — 12 bytes/pixel
+    SoA:   23.9 GB/s
+    AoS:   23.5 GB/s  (0.98× vs SoA)
+
+soa_nz,6553429
+wall clock: 0.0066 seconds
+aos_nz,6610422
+wall clock: 0.0066 seconds
+  nz-only  — 4 bytes/pixel SoA, 12 bytes/pixel AoS (logical 4 reported)
+    SoA:    8.3 GB/s  (51 MB read)
+    AoS:    8.2 GB/s  (actual cache traffic: 24.7 GB/s for 155 MB)
+    SoA advantage: 1.0×
+
+  L1D = 128 KB (M4 Max per perf core)
+  AoS nz-only wastes 2/3 of every cache line — nx and ny loaded but discarded
+
+soa_nz_par,987622
+wall clock: 0.0010 seconds
+aos_nz_par,857325
+wall clock: 0.0009 seconds
+  nz-only parallel (10 threads) — dependency chain broken
+    SoA:   55.2 GB/s  (51 MB read)
+    AoS:   63.5 GB/s  (actual: 190.6 GB/s, 155 MB read)
+    SoA advantage: 0.9×
+--- Phase 6 / Exp 5: Morton vs Row-major Tile Ordering ---
+  tile_size=64, 57×57 tiles  |  row-major: 26 MB  |  Morton (dim=64): 33 MB (+26% overhead)
+  N/S tile gap — row-major: 57 tiles = 456 KB  |  Morton: 1–4 tiles = 8–32 KB
+  M4 Max L1D=128 KB, L2=16 MB — row-major N/S gap fits in L2 but not L1
+
+stencil_rowmajor,2939395
+wall clock: 0.0029 seconds
+  row-major (vectorised baseline):  64.80 GB/s
+stencil_tiled_rowmajor,18018597
+wall clock: 0.0180 seconds
+  tiled row-major T=64 :           10.57 GB/s
+stencil_morton,19088419
+wall clock: 0.0191 seconds
+  tiled Morton    T=64 :            9.98 GB/s  (0.94× vs row-major tiled)
+
+  if Morton ≈ row-major tiled: bottleneck is scalar loop (continue branch),
+    not N/S tile cache distance — layout is irrelevant at this throughput
+  if Morton > row-major tiled: N/S cache miss was a real contributor
+--- Phase 6 / Exp 6: Software Prefetch (random access) ---
+  67 M random reads, 268 MB array (> all cache levels)
+  prfm pldl1keep: non-blocking L1 prefetch — keeps D misses in flight
+  M4 Max: ~80 ns DRAM latency, ~20 fill buffers → ceiling ~16 GB/s
+
+rand_nopf,202148062
+wall clock: 0.2022 seconds
+  no prefetch:     1.39 GB/s  (1 miss in flight, latency-bound)
+rand_pf4,212934327
+wall clock: 0.2129 seconds
+  prefetch D= 4:   1.32 GB/s
+rand_pf16,202354352
+wall clock: 0.2024 seconds
+  prefetch D=16:   1.39 GB/s
+rand_pf64,193648259
+wall clock: 0.1937 seconds
+  prefetch D=64:   1.46 GB/s
+
+  sequential ceiling (Exp 1): ~68 GB/s — bandwidth-limited, not latency-limited
+--- Phase 6 / Exp 7: NEON Accumulators — break serial dep chain ---
+  dot(normal, sun) over 12 Mpix, 155 MB total (3 × SoA arrays)
+  Exp 4 result: auto-vec = 24 GB/s → compute-bound (fadd latency)
+  This exp: explicit NEON 1/4/8 independent accumulators
+
+shade_soa_autovec,7057602
+wall clock: 0.0071 seconds
+  auto-vec scalar (1 acc):   23.2 GB/s
+shade_vector_1acc,9170065
+wall clock: 0.0092 seconds
+  NEON explicit 1 acc:       17.8 GB/s  (4 f32/iter, serial dep)
+shade_vector_4acc,2344853
+wall clock: 0.0023 seconds
+  NEON explicit 4 acc:       69.7 GB/s  (16 f32/iter, 4 parallel chains)
+shade_vector_8acc,1339939
+wall clock: 0.0013 seconds
+  NEON explicit 8 acc:      122.0 GB/s  (32 f32/iter, 8 parallel chains)
+
+  single-thread memory ceiling: ~68 GB/s (Exp 1 row-major baseline)
+  if 4acc >> 1acc: original was compute-bound, not memory-bound
+  if 4acc ≈ 8acc:  memory-bound — adding more accumulators doesn't help
+--- Phase 6 / Exp 8: Ray Packet Gather Cost ---
+  2 M random positions in 3601×3601 heightmap (25 MB)
+  cache line = 64 bytes = 32 i16 values — adjacent pixels share a line
+  row stride  = 3601 × 2 = 7202 bytes — different rows always on different lines
+
+gather_1w,3163620
+wall clock: 0.0032 seconds
+  1-wide  (scalar):         1.39 GB/s  ~1 miss/step
+gather_4w_adj,4938764
+wall clock: 0.0050 seconds
+  4-wide  adjacent cols:    3.57 GB/s  same cache line → 2.6× bytes, ~0.6× time
+gather_4w_str,6968650
+wall clock: 0.0070 seconds
+  4-wide  strided rows:     2.53 GB/s  separate lines  → 1.8× bytes, ~0.5× time
+gather_4w_rand,2293086
+wall clock: 0.0023 seconds
+  4-wide  fully random:     7.68 GB/s  max divergence  → 5.5× bytes, ~1.4× time
+
+  NEON 4-ray packet starts adjacent (screen pixels), diverges after ~10–50 steps
+  → most of the 506 avg steps/ray are in strided/random regime
+  → gather cost ≈ 4× per step, SIMD gain ≈ 4×, net: no speedup (Phase 4 confirmed)
+--- Phase 6 / Exp 9: TLB Working Set Sweep ---
+  macOS/M4: 16KB base pages (not 4KB like x86)
+  L1 DTLB: ~256 entries × 16KB = ~4 MB  |  L2 TLB: ~3000 × 16KB = ~48 MB
+  1 M random reads per size, 4 bytes each
+
+tlb_sweep,664203
+wall clock: 0.0007 seconds
+   16 KB  (    1 16KB-pages):  6.63 GB/s  ← L1 DTLB
+tlb_sweep,526424
+wall clock: 0.0005 seconds
+   64 KB  (    4 16KB-pages):  8.37 GB/s  ← L1 DTLB
+tlb_sweep,514965
+wall clock: 0.0005 seconds
+  256 KB  (   16 16KB-pages):  8.55 GB/s  ← L1 DTLB
+tlb_sweep,577918
+wall clock: 0.0006 seconds
+    1 MB  (   64 16KB-pages):  7.62 GB/s  ← L1 DTLB
+tlb_sweep,737964
+wall clock: 0.0007 seconds
+    4 MB  (  256 16KB-pages):  5.97 GB/s  ← L1 DTLB
+tlb_sweep,1250512
+wall clock: 0.0013 seconds
+   16 MB  ( 1024 16KB-pages):  3.52 GB/s  ← L2 TLB
+tlb_sweep,2312128
+wall clock: 0.0023 seconds
+   64 MB  ( 4096 16KB-pages):  1.91 GB/s  ← TLB miss + page walk
+tlb_sweep,3262363
+wall clock: 0.0033 seconds
+  256 MB  (16384 16KB-pages):  1.35 GB/s  ← TLB miss + page walk
+
+  heightmap (26 MB): 1625 pages → fits L2 TLB (~48 MB), no full page walks
+  256 MB array: 16384 pages → exceeds L2 TLB → page walks add ~50 cycles/access
+  huge pages (2MB on x86, 32MB on M4) would reduce 256 MB to ~128 entries → L1 DTLB
+---------- FPS Benchmark ----------
+--- FPS Benchmark: 1600×533, 30 frames ---
+  gentle pan: camera moves 200 m east per frame
+
+  CPU scalar parallel:    67.6 ms/frame  (14.80 fps)  [12 Mpix/s]
+  GPU combined (rdback):   21.7 ms/frame  (46.2 fps)  [39 Mpix/s]
+  [GPU] found: Apple M4 Max (IntegratedGpu)
+  [GPU] selected: Apple M4 Max (IntegratedGpu)
+  GPU scene (no rdback):    2.1 ms/frame  (476.9 fps)  [406 Mpix/s]
+
+  GPU speedup vs CPU:            32.2×
+  readback overhead (scene/comb): 10.3×
+render valley,117643556
+wall clock: 0.1177 seconds
+valley render: 0.11s

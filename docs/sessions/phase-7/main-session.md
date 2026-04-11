@@ -145,3 +145,57 @@ HUD plan (glyphon), quality improvement plan with WGSL code snippets.
 - GPU timestamp queries to measure per-pass GPU time without frame overhead (not yet started)
 - Remove debug prints (`if self.frame_count == 0 { println!(...) }`) from viewer.rs before phase finalisation
 - Fix step_m back to `scene.get_dx_meters() / 0.8` (default) after texture cache experiment
+
+---
+
+## 2026-04-11 (session 3)
+
+### What was covered
+
+**Fixed `wgpu::PollType::Wait` struct variant error** in `src/benchmarks/phase6.rs`.
+wgpu 29 changed `PollType::Wait` from a unit variant to a struct variant requiring
+`{ submission_index: Option<T>, timeout: Option<T> }`. Both occurrences replaced:
+```rust
+ctx.device.poll(wgpu::PollType::Wait { submission_index: None, timeout: None })
+```
+Build now clean (warnings only, no errors).
+
+**Ran `bench_fps` with the new GPU-scene-no-readback variant on all 4 systems.**
+Results saved to `docs/benchmark_results/report_1/no_readbacks_fps/`.
+
+**Extracted no-readback data to `fps_no_readback.csv`** — new file with 8 rows:
+CPU fps, GPU combined (rdback) fps, GPU scene (no rdback) fps, GPU speedup vs CPU,
+readback overhead ratio — for all 4 systems.
+
+**Updated `report_1.md`** — section 6 split into two sub-tables:
+- Phase 6 baseline (with readback)
+- Phase 7 no-readback table with readback overhead column
+- Conclusion 2 updated with actual measured numbers (Win GTX ~50fps prediction corrected to 260fps)
+
+**Updated `report_1.html`**:
+- FPS tab: no-readback section moved to top (primary), with-readback baseline below
+- New stat boxes: 477/260/52.9/4.9 fps no-rdback for all systems
+- New chart `chart_fps_no_rdback` — 3-series log-scale bar (CPU / GPU+rdback / GPU no-rdback)
+- Overview chart updated: 3 datasets + log scale to accommodate 477fps range
+- Overview headline stat updated: 46.4 → 477 fps (no-rdback)
+- 3 insight boxes: readback 24.1× overhead on Win GTX, M4 477fps explanation,
+  original prediction correction
+
+### Key numbers measured (all systems, 1600×533, 30-frame pan)
+
+| System | CPU fps | GPU+rdback fps | GPU no-rdback fps | Readback overhead |
+|---|---|---|---|---|
+| M4 Mac | 14.8 | 46.2 | **476.9** | 10.3× |
+| Win GTX 1650 | 0.87 | 10.8 | **260.1** | 24.1× |
+| Mac i7 | 1.49 | 4.7 | **52.9** | 11.3× |
+| Asus Pentium | 0.15 | 0.7 | **4.9** | 7.1× |
+
+**Key insight:** Win GTX 1650 was spending 96% of each frame waiting for CPU readback.
+True GPU compute = 3.8 ms/frame. Phase 6 "~50 fps prediction" was 5× wrong — actual
+no-readback fps is 260. The GPU was always fast; readback hid it completely.
+
+### Open items for this phase
+- GPU timestamp queries (measure per-pass GPU time without frame overhead)
+- Picture quality: bilinear height sampling (`textureSampleLevel`), smooth color bands, normal interpolation
+- HUD text overlay (`glyphon`)
+- Window resize handling (`WindowEvent::Resized`)

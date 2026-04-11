@@ -1,0 +1,32 @@
+=== System Info ===
+Hostname       : nikita-X540SA
+OS             : Linux (Linux Mint 22.3)
+Arch           : x86_64
+CPU            : Intel(R) Pentium(R) CPU  N3700  @ 1.60GHz
+CPU freq       : 480 MHz
+Cores          : 4 physical / 4 logical
+NUMA nodes     : 1
+Power mode     : schedutil
+RAM            : 3 GB
+GPU            : Intel Corporation Atom/Celeron/Pentium Processor x5-E8000/J3xxx/N3xxx Integrated Graphics Controller (rev 21)
+Build profile  : release
+rustc          : rustc 1.94.1 (e408947bf 2026-03-25)
+===================
+
+---------- FPS Benchmark ----------
+--- FPS Benchmark: 1600×533, 30 frames ---
+  gentle pan: camera moves 200 m east per frame
+
+  CPU scalar parallel:  6561.1 ms/frame  (0.15 fps)  [0 Mpix/s]
+  GPU combined (rdback): 1457.1 ms/frame  (0.7 fps)  [0 Mpix/s]
+  [GPU] found: Intel(R) HD Graphics 405 (BSW) (IntegratedGpu)
+  [GPU] found: llvmpipe (LLVM 20.1.2, 128 bits) (Cpu)
+  [GPU] found: Mesa Intel(R) HD Graphics 405 (BSW) (IntegratedGpu)
+  [GPU] selected: Intel(R) HD Graphics 405 (BSW) (IntegratedGpu)
+  GPU scene (no rdback):  205.8 ms/frame  (4.9 fps)  [4 Mpix/s]
+
+  GPU speedup vs CPU:            31.9×
+  readback overhead (scene/comb): 7.1×
+render valley,10593942640
+wall clock: 6.6213 seconds
+valley render: 6.61s
