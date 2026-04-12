@@ -13,6 +13,8 @@ use winit::{
     window::{Window, WindowAttributes},
 };
 
+use crate::utils::N;
+
 struct Viewer {
     scene: Option<GpuScene>,
     window: Option<Arc<Window>>,
@@ -34,6 +36,14 @@ struct Viewer {
     keys_held: std::collections::HashSet<winit::keyboard::KeyCode>,
     mouse_look: bool,
     immersive_mode: bool,
+    // hud
+    font_system: glyphon::FontSystem,
+    swash_cache: glyphon::SwashCache,
+    text_atlas: glyphon::TextAtlas,
+    text_renderer: glyphon::TextRenderer,
+    fps_buffer: glyphon::Buffer,
+    hint_buffer: glyphon::Buffer,
+    viewport: glyphon::Viewport,
 }
 
 impl ApplicationHandler for Viewer {
@@ -87,7 +97,7 @@ impl ApplicationHandler for Viewer {
         }
 
         let config: wgpu::SurfaceConfiguration = wgpu::SurfaceConfiguration {
-            usage: wgpu::TextureUsages::COPY_DST,
+            usage: wgpu::TextureUsages::COPY_DST | wgpu::TextureUsages::RENDER_ATTACHMENT,
             format,
             width: self.width,
             height: self.height,
@@ -208,6 +218,92 @@ impl ApplicationHandler for Viewer {
                         depth_or_array_layers: 1,
                     },
                 );
+
+                // HUD
+                self.fps_buffer.set_text(
+                    &mut self.font_system,
+                    &format!(
+                        "{:.0} fps  {:.1} ms",
+                        self.fps,
+                        1000.0 / self.fps.max(0.001)
+                    ),
+                    &glyphon::Attrs::new(),
+                    glyphon::Shaping::Basic,
+                    None,
+                );
+                self.viewport.update(
+                    &scene.get_gpu_ctx().queue,
+                    glyphon::Resolution {
+                        width: self.width,
+                        height: self.height,
+                    },
+                );
+                self.text_renderer
+                    .prepare(
+                        &ctx.device,
+                        &ctx.queue,
+                        &mut self.font_system,
+                        &mut self.text_atlas,
+                        &self.viewport,
+                        [
+                            glyphon::TextArea {
+                                buffer: &self.fps_buffer,
+                                left: 10.0,
+                                top: 10.0,
+                                scale: 1.0,
+                                bounds: glyphon::TextBounds {
+                                    left: 0,
+                                    top: 0,
+                                    right: self.width as i32,
+                                    bottom: self.height as i32,
+                                },
+                                default_color: glyphon::Color::rgb(255, 255, 255),
+                                custom_glyphs: &[],
+                            },
+                            glyphon::TextArea {
+                                buffer: &self.hint_buffer,
+                                left: 0.0,
+                                top: self.height as f32 - 30.0,
+                                scale: 1.0,
+                                bounds: glyphon::TextBounds {
+                                    left: 0,
+                                    top: 0,
+                                    right: self.width as i32,
+                                    bottom: self.height as i32,
+                                },
+                                default_color: glyphon::Color::rgb(255, 255, 255),
+                                custom_glyphs: &[],
+                            },
+                        ],
+                        &mut self.swash_cache,
+                    )
+                    .unwrap();
+                let view = surface_texture
+                    .texture
+                    .create_view(&wgpu::TextureViewDescriptor::default());
+                let mut rpass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                    label: Some("hud"),
+                    color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                        view: &view,
+                        resolve_target: None,
+                        ops: wgpu::Operations {
+                            load: wgpu::LoadOp::Load,
+                            store: wgpu::StoreOp::Store,
+                        },
+                        depth_slice: None,
+                    })],
+                    depth_stencil_attachment: None,
+                    timestamp_writes: None,
+                    occlusion_query_set: None,
+                    multiview_mask: None,
+                });
+                self.text_renderer
+                    .render(&self.text_atlas, &self.viewport, &mut rpass)
+                    .unwrap();
+                // begin_render_pass borrows encoder mutably, which means you can't use encoder again until the pass is dropped.
+                // The explicit drop(rpass) releases that borrow before encoder.finish().
+                drop(rpass);
+
                 ctx.queue.submit([encoder.finish()]);
                 surface_texture.present();
 
@@ -317,6 +413,13 @@ impl ApplicationHandler for Viewer {
                     // surface.configure keeps using self.width (actual)
                     scene.resize(self.render_width, self.height);
                 }
+
+                // update hint hud
+                self.hint_buffer.set_size(
+                    &mut self.font_system,
+                    Some(new_size.width as f32),
+                    Some(40.0),
+                );
             }
             _ => {}
         }
@@ -350,6 +453,45 @@ pub fn run(tile_path: &Path, width: u32, height: u32, vsync: bool) {
     let dy: f32 = scene.get_dy_meters();
 
     let event_loop = EventLoop::new().expect("error creating winit event loop");
+
+    // HUD
+    let mut font_system: glyphon::FontSystem = glyphon::FontSystem::new();
+    let mut swash_cache: glyphon::SwashCache = glyphon::SwashCache::new();
+    let mut cache: glyphon::Cache = glyphon::Cache::new(&scene.get_gpu_ctx().device);
+    let mut text_atlas: glyphon::TextAtlas = glyphon::TextAtlas::new(
+        &scene.get_gpu_ctx().device,
+        &scene.get_gpu_ctx().queue,
+        &cache,
+        wgpu::TextureFormat::Bgra8Unorm,
+    );
+    let text_renderer: glyphon::TextRenderer = glyphon::TextRenderer::new(
+        &mut text_atlas,
+        &scene.get_gpu_ctx().device,
+        wgpu::MultisampleState::default(),
+        None,
+    );
+    let mut fps_buffer: glyphon::Buffer =
+        glyphon::Buffer::new(&mut font_system, glyphon::Metrics::new(18.0, 20.0));
+    fps_buffer.set_size(&mut font_system, Some(400.0), Some(40.0));
+    fps_buffer.set_text(
+        &mut font_system,
+        "0 fps",
+        &glyphon::Attrs::new(),
+        glyphon::Shaping::Basic,
+        None,
+    );
+    let mut hint_buffer: glyphon::Buffer =
+        glyphon::Buffer::new(&mut font_system, glyphon::Metrics::new(18.0, 20.0));
+    hint_buffer.set_size(&mut font_system, Some(width as f32), Some(40.0));
+    hint_buffer.set_text(
+        &mut font_system,
+        "Q - activate/deactivate immersive mode",
+        &glyphon::Attrs::new(),
+        glyphon::Shaping::Basic,
+        Some(glyphon::cosmic_text::Align::Center),
+    );
+    let viewport: glyphon::Viewport = glyphon::Viewport::new(&scene.get_gpu_ctx().device, &cache);
+
     let mut viewer: Viewer = Viewer {
         scene: Some(scene),
         window: None,
@@ -371,6 +513,13 @@ pub fn run(tile_path: &Path, width: u32, height: u32, vsync: bool) {
         keys_held: std::collections::HashSet::new(),
         mouse_look: false,
         immersive_mode: false,
+        font_system,
+        swash_cache,
+        text_atlas,
+        text_renderer,
+        fps_buffer,
+        hint_buffer,
+        viewport,
     };
     event_loop
         .run_app(&mut viewer)

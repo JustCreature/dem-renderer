@@ -28,3 +28,4 @@ rayon = "1"
 sysinfo = "0.33.1"
 winit = "0.30"
 wgpu = "29.0.1"
+glyphon = { git = "https://github.com/grovesNL/glyphon", branch = "main" }

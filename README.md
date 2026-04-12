@@ -126,3 +126,16 @@ WGPU_BACKEND=vulkan ./dem_renderer
 
 Note: disabling hangcheck means a truly stuck GPU will hang the machine instead of
 recovering. Re-enable it (`enable_hangcheck=1`) after benchmarking if desired.
+
+## Cargo git fetch behind proxy
+
+If `cargo build` fails with a network error when
+resolving a git dependency, Cargo's default `libgit2` backend doesn't use the system
+proxy. Fix by switching to the system `git` CLI:
+
+Add to `~/.cargo/config.toml`:
+
+```toml
+[net]
+git-fetch-with-cli = true
+```
