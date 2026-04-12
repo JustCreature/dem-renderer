@@ -39,6 +39,7 @@ struct Viewer {
     immersive_mode: bool,
     // hud
     hud_renderer: Option<HudRenderer>,
+    hud_visible: bool,
 }
 
 impl ApplicationHandler for Viewer {
@@ -226,17 +227,19 @@ impl ApplicationHandler for Viewer {
                 );
 
                 // HUD
-                let surface_view = surface_texture
-                    .texture
-                    .create_view(&wgpu::TextureViewDescriptor::default());
-                self.hud_renderer.as_mut().expect("no hud renderer").draw(
-                    &scene.get_gpu_ctx().queue,
-                    &scene.get_gpu_ctx().device,
-                    &mut encoder,
-                    &surface_view,
-                    self.fps as f32,
-                    1000.0,
-                );
+                if self.hud_visible {
+                    let surface_view = surface_texture
+                        .texture
+                        .create_view(&wgpu::TextureViewDescriptor::default());
+                    self.hud_renderer.as_mut().expect("no hud renderer").draw(
+                        &scene.get_gpu_ctx().queue,
+                        &scene.get_gpu_ctx().device,
+                        &mut encoder,
+                        &surface_view,
+                        self.fps as f32,
+                        1000.0,
+                    );
+                }
 
                 ctx.queue.submit([encoder.finish()]);
                 surface_texture.present();
@@ -259,18 +262,11 @@ impl ApplicationHandler for Viewer {
                     .as_ref()
                     .expect("no window for window event")
                     .request_redraw();
-
-                // let _ = self
-                //     .window
-                //     .as_ref()
-                //     .unwrap()
-                //     .set_cursor_grab(winit::window::CursorGrabMode::Locked);
-                // self.window.as_ref().unwrap().set_cursor_visible(false);
             }
             WindowEvent::KeyboardInput {
-                device_id,
+                device_id: _,
                 event,
-                is_synthetic,
+                is_synthetic: _,
             } => {
                 if let winit::keyboard::PhysicalKey::Code(kc) = event.physical_key {
                     if kc == KeyCode::KeyQ && event.state == winit::event::ElementState::Pressed {
@@ -292,6 +288,10 @@ impl ApplicationHandler for Viewer {
                             self.window.as_ref().unwrap().set_cursor_visible(true);
                         }
 
+                        return;
+                    }
+                    if kc == KeyCode::KeyE && event.state == winit::event::ElementState::Pressed {
+                        self.hud_visible = !self.hud_visible;
                         return;
                     }
                     match event.state {
@@ -418,6 +418,7 @@ pub fn run(tile_path: &Path, width: u32, height: u32, vsync: bool) {
         mouse_look: false,
         immersive_mode: false,
         hud_renderer: None,
+        hud_visible: true,
     };
     event_loop
         .run_app(&mut viewer)
