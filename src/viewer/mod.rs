@@ -520,7 +520,7 @@ fn prepare_scene(tile_path: &Path, width: u32, height: u32) -> (GpuScene, Arc<He
         ),
     };
 
-    // let normals_map: NormalMap = terrain::compute_normals_vector_par(&hm);
+    let normal_map = terrain::compute_normals_vector_par(&hm);
 
     const SUN_DIR: [f32; 3] = [0.4, 0.5, 0.7];
     let sun_azimuth_rad = (SUN_DIR[0]).atan2(-SUN_DIR[1]);
@@ -530,7 +530,7 @@ fn prepare_scene(tile_path: &Path, width: u32, height: u32) -> (GpuScene, Arc<He
 
     let gpu_ctx: GpuContext = GpuContext::new();
     let hm = Arc::new(hm);
-    let scene: GpuScene = GpuScene::new(gpu_ctx, &hm, &shadow_mask, width, height);
+    let scene: GpuScene = GpuScene::new(gpu_ctx, &hm, &normal_map, &shadow_mask, width, height);
 
     (scene, hm, sun_azimuth_rad, sun_elevation_rad)
 }

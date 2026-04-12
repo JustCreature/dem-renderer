@@ -42,12 +42,12 @@ pub(crate) fn render_gif(tile_path: &Path) {
 
     let shadow_mask =
         compute_shadow_vector_par_with_azimuth(&heightmap, sun_azimuth_rad, sun_elevation_rad, 200.0);
-    let _normal_map = compute_normals_vector_par(&heightmap);
+    let normal_map = compute_normals_vector_par(&heightmap);
 
-    // Build scene once: heightmap uploaded, normals computed on GPU
     let scene = render_gpu::GpuScene::new(
         render_gpu::GpuContext::new(),
         &heightmap,
+        &normal_map,
         &shadow_mask,
         GIF_WIDTH,
         GIF_HEIGHT,

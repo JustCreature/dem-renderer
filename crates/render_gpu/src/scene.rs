@@ -1,10 +1,9 @@
 use dem_io::Heightmap;
-use terrain::ShadowMask;
+use terrain::{NormalMap, ShadowMask};
 use wgpu::util::DeviceExt;
 
 use crate::camera::CameraUniforms;
 use crate::context::GpuContext;
-use crate::normals_gpu::NormalsUniforms;
 
 /// Persistent GPU scene: static data uploaded once, only camera uniform
 /// written per frame.  Shadow can be updated cheaply via `update_shadow`.
@@ -46,6 +45,7 @@ impl GpuScene {
     pub fn new(
         gpu_ctx: GpuContext,
         hm: &Heightmap,
+        normal_map: &NormalMap,
         shadow_mask: &ShadowMask,
         width: u32,
         height: u32,
@@ -91,185 +91,28 @@ impl GpuScene {
             ..Default::default()
         });
 
-        // normals buffers
-        let nm_size = (hm.rows * hm.cols * 4) as u64;
-        let nx_buf = gpu_ctx.device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("nx"),
-            size: nm_size,
-            mapped_at_creation: false,
-            usage: wgpu::BufferUsages::STORAGE,
-        });
-        let ny_buf = gpu_ctx.device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("ny"),
-            size: nm_size,
-            mapped_at_creation: false,
-            usage: wgpu::BufferUsages::STORAGE,
-        });
-        let nz_buf = gpu_ctx.device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("nz"),
-            size: nm_size,
-            mapped_at_creation: false,
-            usage: wgpu::BufferUsages::STORAGE,
-        });
-
-        // compute normals once, then discard the pipeline
-        {
-            let nu = NormalsUniforms {
-                hm_cols: hm.cols as u32,
-                hm_rows: hm.rows as u32,
-                dx_meters: hm.dx_meters as f32,
-                dy_meters: hm.dy_meters as f32,
-            };
-            let nu_buf = gpu_ctx
-                .device
-                .create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                    label: Some("normals_ub"),
-                    contents: bytemuck::bytes_of(&nu),
-                    usage: wgpu::BufferUsages::UNIFORM,
-                });
-            let bgl = gpu_ctx
-                .device
-                .create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-                    label: Some("normals_init_bgl"),
-                    entries: &[
-                        wgpu::BindGroupLayoutEntry {
-                            binding: 0,
-                            visibility: wgpu::ShaderStages::COMPUTE,
-                            ty: wgpu::BindingType::Buffer {
-                                ty: wgpu::BufferBindingType::Uniform,
-                                has_dynamic_offset: false,
-                                min_binding_size: None,
-                            },
-                            count: None,
-                        },
-                        wgpu::BindGroupLayoutEntry {
-                            binding: 1,
-                            visibility: wgpu::ShaderStages::COMPUTE,
-                            ty: wgpu::BindingType::Texture {
-                                sample_type: wgpu::TextureSampleType::Float { filterable: true },
-                                view_dimension: wgpu::TextureViewDimension::D2,
-                                multisampled: false,
-                            },
-                            count: None,
-                        },
-                        wgpu::BindGroupLayoutEntry {
-                            binding: 2,
-                            visibility: wgpu::ShaderStages::COMPUTE,
-                            ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
-                            count: None,
-                        },
-                        wgpu::BindGroupLayoutEntry {
-                            binding: 3,
-                            visibility: wgpu::ShaderStages::COMPUTE,
-                            ty: wgpu::BindingType::Buffer {
-                                ty: wgpu::BufferBindingType::Storage { read_only: false },
-                                has_dynamic_offset: false,
-                                min_binding_size: None,
-                            },
-                            count: None,
-                        },
-                        wgpu::BindGroupLayoutEntry {
-                            binding: 4,
-                            visibility: wgpu::ShaderStages::COMPUTE,
-                            ty: wgpu::BindingType::Buffer {
-                                ty: wgpu::BufferBindingType::Storage { read_only: false },
-                                has_dynamic_offset: false,
-                                min_binding_size: None,
-                            },
-                            count: None,
-                        },
-                        wgpu::BindGroupLayoutEntry {
-                            binding: 5,
-                            visibility: wgpu::ShaderStages::COMPUTE,
-                            ty: wgpu::BindingType::Buffer {
-                                ty: wgpu::BufferBindingType::Storage { read_only: false },
-                                has_dynamic_offset: false,
-                                min_binding_size: None,
-                            },
-                            count: None,
-                        },
-                    ],
-                });
-            let bg = gpu_ctx
-                .device
-                .create_bind_group(&wgpu::BindGroupDescriptor {
-                    label: Some("normals_init_bg"),
-                    layout: &bgl,
-                    entries: &[
-                        wgpu::BindGroupEntry {
-                            binding: 0,
-                            resource: nu_buf.as_entire_binding(),
-                        },
-                        wgpu::BindGroupEntry {
-                            binding: 1,
-                            resource: wgpu::BindingResource::TextureView(&hm_view),
-                        },
-                        wgpu::BindGroupEntry {
-                            binding: 2,
-                            resource: wgpu::BindingResource::Sampler(&hm_sampler),
-                        },
-                        wgpu::BindGroupEntry {
-                            binding: 3,
-                            resource: nx_buf.as_entire_binding(),
-                        },
-                        wgpu::BindGroupEntry {
-                            binding: 4,
-                            resource: ny_buf.as_entire_binding(),
-                        },
-                        wgpu::BindGroupEntry {
-                            binding: 5,
-                            resource: nz_buf.as_entire_binding(),
-                        },
-                    ],
-                });
-            let shader = gpu_ctx
-                .device
-                .create_shader_module(wgpu::ShaderModuleDescriptor {
-                    label: Some("normals_init_shader"),
-                    source: wgpu::ShaderSource::Wgsl(include_str!("shader_normals.wgsl").into()),
-                });
-            let pl = gpu_ctx
-                .device
-                .create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-                    label: Some("normals_init_pl"),
-                    bind_group_layouts: &[Some(&bgl)],
-                    immediate_size: 0,
-                });
-            let pipeline =
-                gpu_ctx
-                    .device
-                    .create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
-                        label: Some("normals_init_pipeline"),
-                        layout: Some(&pl),
-                        module: &shader,
-                        entry_point: Some("main"),
-                        compilation_options: wgpu::PipelineCompilationOptions::default(),
-                        cache: None,
-                    });
-            let mut enc = gpu_ctx
-                .device
-                .create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                    label: Some("normals_init_enc"),
-                });
-            {
-                let mut pass = enc.begin_compute_pass(&wgpu::ComputePassDescriptor {
-                    label: Some("normals_init_pass"),
-                    timestamp_writes: None,
-                });
-                pass.set_pipeline(&pipeline);
-                pass.set_bind_group(0, &bg, &[]);
-                pass.dispatch_workgroups((hm.cols as u32 + 7) / 8, (hm.rows as u32 + 7) / 8, 1);
-            }
-            gpu_ctx.queue.submit([enc.finish()]);
-            // Wait: nx/ny/nz must be filled before the render BG is used.
-            gpu_ctx
-                .device
-                .poll(wgpu::PollType::Wait {
-                    submission_index: None,
-                    timeout: None,
-                })
-                .unwrap();
-        }
+        // normals buffers — uploaded from CPU-computed NormalMap
+        let nx_buf = gpu_ctx
+            .device
+            .create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some("nx"),
+                contents: bytemuck::cast_slice(&normal_map.nx),
+                usage: wgpu::BufferUsages::STORAGE,
+            });
+        let ny_buf = gpu_ctx
+            .device
+            .create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some("ny"),
+                contents: bytemuck::cast_slice(&normal_map.ny),
+                usage: wgpu::BufferUsages::STORAGE,
+            });
+        let nz_buf = gpu_ctx
+            .device
+            .create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some("nz"),
+                contents: bytemuck::cast_slice(&normal_map.nz),
+                usage: wgpu::BufferUsages::STORAGE,
+            });
 
         // shadow buffer (COPY_DST so update_shadow can write_buffer)
         let shadow_buf = gpu_ctx

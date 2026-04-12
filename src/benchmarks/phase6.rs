@@ -1407,7 +1407,7 @@ pub(crate) fn bench_fps(
     const FPS_FRAMES_G: usize = 30 * 10;
     {
         let scene_ctx = render_gpu::GpuContext::new();
-        let scene = render_gpu::GpuScene::new(scene_ctx, hm, shadow_mask, FPS_WIDTH, FPS_HEIGHT);
+        let scene = render_gpu::GpuScene::new(scene_ctx, hm, normal_map, shadow_mask, FPS_WIDTH, FPS_HEIGHT);
         let ctx = scene.get_gpu_ctx();
 
         // warm-up

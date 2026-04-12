@@ -160,6 +160,7 @@ pub(crate) fn benchmark_multi_frame_gpu_separate(
 pub(crate) fn benchmark_multi_frame_gpu_scene(
     gpu_ctx: render_gpu::GpuContext,
     heightmap: &Heightmap,
+    normal_map: &terrain::NormalMap,
     shadow_mask: &ShadowMask,
 ) {
     let dx = heightmap.dx_meters as f32;
@@ -167,8 +168,7 @@ pub(crate) fn benchmark_multi_frame_gpu_scene(
     let step_m = heightmap.dx_meters as f32 / STEP_SIZE;
     let aspect = PIC_WIDTH as f32 / PIC_HEIGHT as f32;
 
-    // new() uploads heightmap + computes normals once
-    let scene = render_gpu::GpuScene::new(gpu_ctx, heightmap, shadow_mask, PIC_WIDTH, PIC_HEIGHT);
+    let scene = render_gpu::GpuScene::new(gpu_ctx, heightmap, normal_map, shadow_mask, PIC_WIDTH, PIC_HEIGHT);
 
     // Warm-up: Metal compiles the render pipeline on first dispatch
     {
