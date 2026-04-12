@@ -37,6 +37,7 @@ struct Viewer {
     keys_held: std::collections::HashSet<winit::keyboard::KeyCode>,
     mouse_look: bool,
     immersive_mode: bool,
+    speed_boost: bool,
     // hud
     hud_renderer: Option<HudRenderer>,
     hud_visible: bool,
@@ -148,7 +149,8 @@ impl ApplicationHandler for Viewer {
                 // cam movements
                 // delta time for frame-rate-independent movement
                 let dt = self.last_frame.elapsed().as_secs_f32();
-                let speed = 500.0_f32; // meters per second
+                let speed_boost_value = if self.speed_boost { 10.0 } else { 1.0 };
+                let speed = 500.0_f32 * speed_boost_value; // meters per second
 
                 // horizontal movement vectors from yaw only
                 let forward_h = [self.yaw.sin(), -self.yaw.cos(), 0.0_f32];
@@ -294,6 +296,17 @@ impl ApplicationHandler for Viewer {
                         self.hud_visible = !self.hud_visible;
                         return;
                     }
+                    if kc == KeyCode::SuperLeft || kc == KeyCode::AltLeft {
+                        match event.state {
+                            winit::event::ElementState::Pressed => {
+                                self.speed_boost = true;
+                            }
+                            winit::event::ElementState::Released => {
+                                self.speed_boost = false;
+                            }
+                        }
+                        return;
+                    }
                     match event.state {
                         winit::event::ElementState::Pressed => self.keys_held.insert(kc),
                         winit::event::ElementState::Released => self.keys_held.remove(&kc),
@@ -417,6 +430,7 @@ pub fn run(tile_path: &Path, width: u32, height: u32, vsync: bool) {
         keys_held: std::collections::HashSet::new(),
         mouse_look: false,
         immersive_mode: false,
+        speed_boost: false,
         hud_renderer: None,
         hud_visible: true,
     };
