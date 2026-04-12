@@ -263,6 +263,7 @@ square boundaries.
 
 ## 2026-04-12 (session 5)
 
+
 ### What was covered
 
 **Updated `shader_buffer.wgsl` and CPU shading to match `shader_texture.wgsl` quality.**
@@ -360,6 +361,53 @@ align; binary search then refines to sub-step precision.
   explicitly tracked (`t_prev`). `t - step_m` would give the wrong bracket when step was large.
 - **Sky early exit**: with small step_m, sky rays can iterate ~200,000 times before `t > t_max`.
   Early exit at `pos.z > 4000.0 && dir.z > 0.0` cuts this to ~O(1) for sky pixels.
+
+### Open items for this phase
+- GPU timestamp queries (measure per-pass GPU time without frame overhead)
+- HUD text overlay (`glyphon`)
+
+---
+
+## 2026-04-12 (session 6)
+
+### What was covered
+
+**Investigated residual staircase artifact after sphere tracing.**
+
+After sphere tracing + binary search + bilinear normal interpolation, a "ripped stair" look
+remained: staircase pattern starts on a slope then is cut off mid-way. Increasing binary
+search iterations (8→16) and lowering the safety factor (0.5→0.3) had minimal effect.
+
+**Root cause diagnosed: C1 discontinuity in the bilinear height field.**
+
+The terrain height is bilinearly interpolated (C0 — value continuous) but NOT C1 — the slope
+(first derivative) changes abruptly at every DEM grid line (~20m spacing). This creates
+visible crease lines in the 3D geometry, independent of normals or shading.
+
+Normal smoothing addresses the shading layer; the geometry crease is visible regardless.
+
+**Attempted fix 1: GPU normal smoothing pass.**
+Implemented `shader_smooth_normals.wgsl` — 5×5 separable Gaussian on nx/ny/nz storage
+buffers, renormalize after blend. Added smooth pass + 3 smooth buffer fields to
+`GpuScene::new()`; render BG pointed at smooth buffers. **Reverted by user** — terrain
+became too soft, unacceptable detail loss.
+
+**Attempted fix 2: CPU heightmap smoothing.**
+Applied same 5×5 Gaussian to `hm.data` (as `Vec<f32>`) before GPU texture upload; shadow
+pass used original data unchanged. **Reverted by user** — same reason.
+
+**Decision: accept DEM resolution as the hard floor.**
+~20m/cell SRTM data has inherent C1 discontinuities. `shader_smooth_normals.wgsl` deleted.
+No smoothing applied anywhere in the pipeline.
+
+### Key concepts
+
+- **C0 vs C1 continuity**: bilinear interpolation is C0 (height continuous) but not C1
+  (slope jumps at every DEM grid boundary). These slope jumps are geometry creases that no
+  normal or shading fix can remove.
+- **The inescapable trade-off**: any kernel wide enough to eliminate grid-line creases also
+  softens real ridgelines. For 20m SRTM data there is no free lunch. The correct fix is
+  bicubic height interpolation or higher-resolution source data.
 
 ### Open items for this phase
 - GPU timestamp queries (measure per-pass GPU time without frame overhead)

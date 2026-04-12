@@ -229,7 +229,7 @@ Known open items carried into Phase 7:
 - Picture quality: ✅ bilinear height sampling, ✅ smooth color bands, ✅ normal interpolation, ✅ atmospheric fog, ✅ sphere tracing (adaptive step + sky early exit) — all implemented
 - ✅ Window resize handling — implemented with `render_width` alignment
 - HUD text overlay (`glyphon`) — plan saved in viewer-plan.md
-- Normal map smoothing: current finite-difference normals are C0 (value-continuous, derivative-jumps at every DEM cell boundary), causing faint banding in shading that no marcher refinement can fix. Fix: Gaussian blur / box-filter the normal map (nx/ny/nz arrays) before GPU upload, or run a smoothing pass on GPU. Trade-off: blurring reduces sharpness of real ridgeline detail.
+- Normal map smoothing and heightmap smoothing: both tried and reverted. Gaussian blur on normals (GPU pass) and on height values (CPU pre-processing) both reduce the staircase artifact but soften real terrain detail too much. Accepted as a fundamental DEM resolution limitation (~20m/cell). Not worth the trade-off.
 
 Known open items from Phase 4:
 - Supersampled ray optimization considered but not implemented: march 1 reference ray, approximate 3 neighbor heights via `h ≈ h_center + grad_x * Δcol + grad_y * Δrow` (using Phase 2 normal map). Would reduce gather 4→1 per step. Breaks at sharp discrete peaks.
