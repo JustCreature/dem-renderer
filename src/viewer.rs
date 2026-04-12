@@ -20,6 +20,7 @@ struct Viewer {
     surface_config: Option<wgpu::SurfaceConfiguration>,
     width: u32,
     height: u32,
+    render_width: u32,
     vsync: bool,
     // fps counter
     fps_timer: std::time::Instant,
@@ -186,7 +187,7 @@ impl ApplicationHandler for Viewer {
                     70.0,
                     self.width as f32 / self.height as f32,
                     sun_dir,
-                    scene.get_dx_meters() / 0.8,
+                    scene.get_dx_meters() / 5.0,
                     200_000.0,
                 );
                 let output_buf: &Buffer = scene.get_output_buffer();
@@ -196,7 +197,7 @@ impl ApplicationHandler for Viewer {
                         buffer: &output_buf,
                         layout: wgpu::TexelCopyBufferLayout {
                             offset: 0,
-                            bytes_per_row: Some(self.width * 4), // 4 bytes per RGBA pixel
+                            bytes_per_row: Some(self.render_width * 4), // 4 bytes per RGBA pixel
                             rows_per_image: None,
                         },
                     },
@@ -293,6 +294,30 @@ impl ApplicationHandler for Viewer {
                     }
                 }
             }
+            WindowEvent::Resized(new_size) => {
+                // 1. guard against zero-size (happens on minimize on some platforms)
+                if new_size.width == 0 || new_size.height == 0 {
+                    return;
+                }
+
+                // 2. update stored dimensions
+                self.width = new_size.width;
+                self.render_width = (new_size.width + 63) & !63;
+                self.height = new_size.height;
+
+                // 3. reconfigure the surface
+                if let (Some(surface), Some(cfg), Some(scene)) =
+                    (&self.surface, &mut self.surface_config, &mut self.scene)
+                {
+                    cfg.width = new_size.width;
+                    cfg.height = new_size.height;
+                    surface.configure(&scene.get_gpu_ctx().device, cfg);
+
+                    // 4. reallocate output buffer in GpuScene
+                    // surface.configure keeps using self.width (actual)
+                    scene.resize(self.render_width, self.height);
+                }
+            }
             _ => {}
         }
     }
@@ -332,6 +357,7 @@ pub fn run(tile_path: &Path, width: u32, height: u32, vsync: bool) {
         surface_config: None,
         width,
         height,
+        render_width: width,
         vsync,
         // fps counter
         fps_timer: std::time::Instant::now(),

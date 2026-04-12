@@ -258,3 +258,109 @@ square boundaries.
 - GPU timestamp queries (measure per-pass GPU time without frame overhead)
 - HUD text overlay (`glyphon`)
 - Window resize handling (`WindowEvent::Resized`)
+
+---
+
+## 2026-04-12 (session 5)
+
+### What was covered
+
+**Updated `shader_buffer.wgsl` and CPU shading to match `shader_texture.wgsl` quality.**
+
+`shader_buffer.wgsl` — full rewrite:
+- Added `sample_hm(x, y)` helper: manual bilinear interpolation from storage buffer
+  (storage buffers have no sampler; must compute `col_f/row_f`, lerp 4 neighbours manually)
+- Bilinear normal interpolation (same `mix`/`normalize` pattern as texture shader)
+- Bilinear shadow interpolation
+- Smooth elevation color bands (`smoothstep` + `mix`, 4 colors)
+- Atmospheric fog (`smoothstep(15000, 60000, t)` blend to sky color)
+- Fixed pixel packing: buffer shader uses `Rgba8Unorm` output (non-display path), so RGBA not BGRA
+
+`crates/render_cpu/src/lib.rs` — `shade()` updated:
+- Bilinear normal lookup: `col0 = min(col_f as usize, hm.cols - 2)`, `fx/fy` fractional offsets,
+  4-neighbour blend + normalize
+- Bilinear shadow lookup: same `blerp` closure, 4-neighbour blend
+- Smooth elevation color bands: `smoothstep` closure + `lerp3`, matching GPU shader thresholds
+- CPU renders are PNG files, no camera distance available → fog not added (would need `t` passed in)
+
+**Window resize handling** — implemented `WindowEvent::Resized` in `src/viewer.rs`:
+- Added `render_width: u32` field to `Viewer` struct — aligned render width (actual width rounded
+  up to next multiple of 64)
+- `Resized` handler: guards against zero-size (minimize), updates `self.width`/`height`,
+  recomputes `render_width = (new_size.width + 63) & !63`, reconfigures surface,
+  calls `scene.resize(render_width, height)`
+- `bytes_per_row: Some(self.render_width * 4)` — stride uses aligned width
+- `Extent3d { width: self.width, ... }` — copy extent uses actual window width
+- Two bugs fixed during implementation:
+  1. `COPY_BYTES_PER_ROW_ALIGNMENT` panic: `wgpu` requires `bytes_per_row` to be a multiple of 256
+     (= 64 pixels × 4 bytes). Default 1600px window was fine; odd resize targets were not.
+     Fix: round up to 64-pixel boundary.
+  2. "Copy would overrun destination texture": aligned render_width (e.g. 1664) used as copy
+     extent but surface texture is only actual width (e.g. 1610) wide. Fix: use `self.width`
+     (actual) for `Extent3d`, use `self.render_width` only for `bytes_per_row` stride.
+
+**`GpuScene::resize()` implemented** in `crates/render_gpu/src/scene.rs`:
+- Added `render_bgl: wgpu::BindGroupLayout` field to `GpuScene` struct (stored to rebuild bind group)
+- `pub fn resize(&mut self, width: u32, height: u32)` reallocates:
+  - `output_buf`: `STORAGE | COPY_SRC`, size `width * height * 4`
+  - `readback_buf`: `MAP_READ | COPY_DST`, size `width * height * 4`
+  - Rebuilds `render_bg` against `self.render_bgl` with all 8 bindings
+
+**Bind group / bind group layout explanation covered:**
+- **BGL** = pipeline blueprint: describes *what type* of resource is at each binding slot.
+  Created once, lives in the shader pipeline. Read-only.
+- **BG** = live snapshot: holds the *actual GPU buffer/texture handles* for one dispatch.
+  Must be recreated whenever the output buffer changes size (new allocation = new GPU address).
+  The shader sees whatever BG is bound at dispatch time.
+- When `resize()` reallocates `output_buf`, the old BG still points to the old (now freed) buffer.
+  Rebuilding BG with the new buffer handle makes the shader write to the right memory.
+- Texture pipeline: BGL declares format+sample type; texture is pre-allocated at `new()` and
+  never resized (heightmap is fixed), so texture BG never needs rebuilding.
+
+**Sphere tracing (adaptive step size)** — implemented in `shader_texture.wgsl`:
+
+1. Sky ray early exit:
+   ```wgsl
+   if dir.z > 0.0 && pos.z > 4000.0 { break; }
+   ```
+   Prevents GPU timeout with small `step_m` — sky-pointing rays above 4km cannot hit terrain.
+
+2. Adaptive step (sphere tracing):
+   ```wgsl
+   t_prev = t;
+   t += max((pos.z - h) * 0.5, cam.step_m);
+   pos = cam.origin + dir * t;
+   ```
+   Step scales with height above terrain. Safety factor 0.5 is conservative for steep slopes.
+   `cam.step_m` is the minimum step to prevent stalling near-surface.
+
+3. Binary search bracket fixed:
+   ```wgsl
+   pos = binary_search_hit(t_prev, t, dir, 8);  // was: t - cam.step_m
+   ```
+   `t - cam.step_m` is only correct for fixed-size steps. With adaptive steps, the previous
+   bracket is `t_prev` which was saved just before advancing.
+
+Root cause of close-range staircase artifacts: iso-step contours. All rays with the same number
+of steps overshoot by the same distance, producing concentric contour lines that look like stairs
+on nearby terrain where one step ≈ many pixels. Adaptive steps vary per-ray so contours no longer
+align; binary search then refines to sub-step precision.
+
+### Key concepts
+
+- **`COPY_BYTES_PER_ROW_ALIGNMENT = 256`**: wgpu requires `bytes_per_row` to be a multiple of 256
+  bytes (= 64 pixels at 4 bytes each). Render buffer width must be rounded up to 64-pixel boundary.
+  Actual surface/copy extent uses real pixel width to avoid overrun.
+- **render_width vs width**: two separate values maintained in Viewer — `render_width` (aligned, for
+  buffer allocation and stride) and `width` (actual, for surface config and copy extent).
+- **Sphere tracing for heightmaps**: step = `max(dist_above_terrain * safety, min_step)`.
+  Works because the heightmap is a 2.5D surface (no overhangs); the step is always a safe lower
+  bound for how far the ray can travel before potentially entering terrain.
+- **Binary search bracket**: with variable step sizes, the "previous safe position" must be
+  explicitly tracked (`t_prev`). `t - step_m` would give the wrong bracket when step was large.
+- **Sky early exit**: with small step_m, sky rays can iterate ~200,000 times before `t > t_max`.
+  Early exit at `pos.z > 4000.0 && dir.z > 0.0` cuts this to ~O(1) for sky pixels.
+
+### Open items for this phase
+- GPU timestamp queries (measure per-pass GPU time without frame overhead)
+- HUD text overlay (`glyphon`)

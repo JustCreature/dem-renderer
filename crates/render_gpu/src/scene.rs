@@ -31,6 +31,7 @@ pub struct GpuScene {
     // Pipeline (compiled once)
     render_pipeline: wgpu::ComputePipeline,
     render_bg: wgpu::BindGroup,
+    render_bgl: wgpu::BindGroupLayout,
 
     // Dimensions and terrain scalars needed to build CameraUniforms
     width: u32,
@@ -386,6 +387,7 @@ impl GpuScene {
                         },
                     ],
                 });
+
         let render_bg = gpu_ctx
             .device
             .create_bind_group(&wgpu::BindGroupDescriptor {
@@ -466,6 +468,7 @@ impl GpuScene {
             readback_buf,
             render_pipeline,
             render_bg,
+            render_bgl,
             width,
             height,
             hm_cols: hm.cols as u32,
@@ -641,6 +644,67 @@ impl GpuScene {
             pass.dispatch_workgroups((self.width + 7) / 8, (self.height + 7) / 8, 1);
         }
         // self.gpu_ctx.queue.submit([encoder.finish()]);
+    }
+
+    pub fn resize(&mut self, width: u32, height: u32) {
+        self.width = width;
+        self.height = height;
+
+        self.output_buf = self.gpu_ctx.device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("output"),
+            size: (width * height * 4) as u64,
+            mapped_at_creation: false,
+            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
+        });
+
+        self.readback_buf = self.gpu_ctx.device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("readback"),
+            size: (width * height * 4) as u64,
+            mapped_at_creation: false,
+            usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
+        });
+
+        self.render_bg = self
+            .gpu_ctx
+            .device
+            .create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some("render_bg"),
+                layout: &self.render_bgl,
+                entries: &[
+                    wgpu::BindGroupEntry {
+                        binding: 0,
+                        resource: self.cam_buf.as_entire_binding(),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 1,
+                        resource: wgpu::BindingResource::TextureView(&self._hm_view),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 2,
+                        resource: wgpu::BindingResource::Sampler(&self._hm_sampler),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 3,
+                        resource: self.output_buf.as_entire_binding(),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 4,
+                        resource: self._nx_buf.as_entire_binding(),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 5,
+                        resource: self._ny_buf.as_entire_binding(),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 6,
+                        resource: self._nz_buf.as_entire_binding(),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 7,
+                        resource: self.shadow_buf.as_entire_binding(),
+                    },
+                ],
+            });
     }
 
     /// Re-upload shadow mask (call when sun direction changes).

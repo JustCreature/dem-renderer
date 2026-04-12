@@ -192,11 +192,13 @@ Phase 6 lessons:
 - Serial reduction chains need multiple accumulators; Morton ordering needs DRAM pressure to matter
 
 Phase 7 artifacts (in progress):
-- `src/viewer.rs` — interactive swap-chain viewer: winit 0.30 `ApplicationHandler`, WASD + mouse look, vsync toggle (`--vsync`), immersive mode (Q), left-click drag look, FPS counter
+- `src/viewer.rs` — interactive swap-chain viewer: winit 0.30 `ApplicationHandler`, WASD + mouse look, vsync toggle (`--vsync`), immersive mode (Q), left-click drag look, FPS counter, window resize handling (`render_width` alignment, `Resized` event)
 - `src/main.rs` — `--view` / `--vsync` CLI flags
-- `crates/render_gpu/src/scene.rs` — added `dispatch_frame(&mut encoder, ...)`, `get_output_buffer()`, `get_gpu_ctx()`, `get_dx_meters()`, `get_dy_meters()`
+- `crates/render_gpu/src/scene.rs` — added `dispatch_frame(&mut encoder, ...)`, `get_output_buffer()`, `get_gpu_ctx()`, `get_dx_meters()`, `get_dy_meters()`, `resize(width, height)`; stored `render_bgl` field; R16Float texture + `half` crate upload
 - `crates/render_gpu/src/context.rs` — added `pub instance` and `pub adapter` fields to `GpuContext`
-- `crates/render_gpu/src/shader_texture.wgsl` — BGRA byte order; bilinear height sampling (`textureSampleLevel` + UV); bilinear normal interpolation (4-texel manual blend); bilinear shadow interpolation; smooth elevation color bands (`smoothstep`/`mix`); atmospheric fog (`smoothstep` 15–60km)
+- `crates/render_gpu/src/shader_texture.wgsl` — BGRA byte order; bilinear height sampling (`textureSampleLevel` + UV); bilinear normal/shadow interpolation (4-texel manual blend); smooth elevation color bands (`smoothstep`/`mix`); atmospheric fog (15–60km); sphere tracing (adaptive step `max((pos.z-h)*0.5, step_m)`, sky early exit at 4km, `t_prev` binary search bracket)
+- `crates/render_gpu/src/shader_buffer.wgsl` — updated to match shader_texture: `sample_hm()` bilinear helper, bilinear normals/shadows, smooth color bands, fog
+- `crates/render_cpu/src/lib.rs` — `shade()` updated: bilinear normal/shadow interpolation, smooth elevation color bands
 - `crates/render_gpu/Cargo.toml` — added `half = { version = "2", features = ["bytemuck"] }` for R16Float upload
 - `src/benchmarks/phase6.rs` — added GPU scene no-readback variant to `bench_fps` (`dispatch_frame` + `poll(Wait)`)
 - `docs/benchmark_results/report_1/fps_no_readback.csv` — no-readback fps data for all 4 systems
@@ -224,9 +226,10 @@ Known open items carried into Phase 7:
 - `render_gif::render_gif` is commented out in main.rs — re-enable when generating animations (deferred from Phase 5)
 - Occupancy analysis via Instruments/Metal GPU trace deferred — requires full Xcode.app (deferred from Phase 5)
 - GPU timestamp queries (measure per-pass GPU time without frame overhead) not yet implemented
-- Picture quality: ✅ bilinear height sampling, ✅ smooth color bands, ✅ normal interpolation, ✅ atmospheric fog — all implemented in shader_texture.wgsl
+- Picture quality: ✅ bilinear height sampling, ✅ smooth color bands, ✅ normal interpolation, ✅ atmospheric fog, ✅ sphere tracing (adaptive step + sky early exit) — all implemented
+- ✅ Window resize handling — implemented with `render_width` alignment
 - HUD text overlay (`glyphon`) — plan saved in viewer-plan.md
-- Window resize handling (`WindowEvent::Resized`) not implemented
+- Normal map smoothing: current finite-difference normals are C0 (value-continuous, derivative-jumps at every DEM cell boundary), causing faint banding in shading that no marcher refinement can fix. Fix: Gaussian blur / box-filter the normal map (nx/ny/nz arrays) before GPU upload, or run a smoothing pass on GPU. Trade-off: blurring reduces sharpness of real ridgeline detail.
 
 Known open items from Phase 4:
 - Supersampled ray optimization considered but not implemented: march 1 reference ray, approximate 3 neighbor heights via `h ≈ h_center + grad_x * Δcol + grad_y * Δrow` (using Phase 2 normal map). Would reduce gather 4→1 per step. Breaks at sharp discrete peaks.

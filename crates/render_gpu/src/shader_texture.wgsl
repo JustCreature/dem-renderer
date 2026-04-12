@@ -94,10 +94,13 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
         let col = i32(pos.x / cam.dx_meters);
         let row = i32(pos.y / cam.dy_meters);
 
-        // bounds check — stop if ray left the heightmap                                                                                                           
+        // bounds check — stop if ray left the heightmap
         if col < 0 || row < 0 || col >= i32(cam.hm_cols) || row >= i32(cam.hm_rows) { break; }
-        // max distance check                                                                                                                                      
+        // max distance check
         if t > cam.t_max { break; }
+        // sky early exit — upward ray already above max terrain height
+        // 10k is the limit, since Everest is lower than 10k,
+        if dir.z > 0.0 && pos.z > 10000.0 { break; }
 
         let uv: vec2<f32> = vec2<f32>(
             (pos.x / cam.dx_meters + 0.5) / f32(cam.hm_cols),
@@ -107,15 +110,18 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
 
         if pos.z <= h {
             hit = true;
-
-            // refine hit position between t_prev (above) and t (below)
-            pos = binary_search_hit(t - cam.step_m, t, dir, 8);
-
+            // use t_prev as lower bracket (correct for adaptive steps)
+            // pos = binary_search_hit(t - cam.step_m, t, dir, 8);
+            pos = binary_search_hit(t_prev, t, dir, 32);
             break;
         }
 
+        // adaptive step: scale by distance above terrain (sphere tracing)
+        // safety factor 0.5 — conservative enough for steep mountain slopes
+        // cam.step_m is the minimum step to prevent stalling near-surface
         t_prev = t;
-        t += cam.step_m;
+        // t += cam.step_m;
+        t += max((pos.z - h) * 0.3, cam.step_m);
         pos = cam.origin + dir * t;
     }
 
