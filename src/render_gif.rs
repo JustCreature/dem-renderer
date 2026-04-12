@@ -41,7 +41,7 @@ pub(crate) fn render_gif(tile_path: &Path) {
     let sun_elevation_rad = SUN_DIR[2].atan2((SUN_DIR[0].powi(2) + SUN_DIR[1].powi(2)).sqrt());
 
     let shadow_mask =
-        compute_shadow_vector_par_with_azimuth(&heightmap, sun_azimuth_rad, sun_elevation_rad);
+        compute_shadow_vector_par_with_azimuth(&heightmap, sun_azimuth_rad, sun_elevation_rad, 200.0);
     let _normal_map = compute_normals_vector_par(&heightmap);
 
     // Build scene once: heightmap uploaded, normals computed on GPU

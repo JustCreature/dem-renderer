@@ -517,3 +517,109 @@ Refactored `src/viewer.rs` → `src/viewer/mod.rs` + `src/viewer/hud_background.
 
 ### Open items for this phase
 - GPU timestamp queries (measure per-pass GPU time without frame overhead)
+
+---
+
+## 2026-04-12 (session 9)
+
+### What was built
+
+**Moving sun animation with background shadow recomputation and soft shadows.**
+
+#### Sun animation (+/- keys)
+
+`Viewer` struct additions:
+- `sun_azimuth: f32` — current sun azimuth in radians, wraps `0..2π` via `rem_euclid`
+- `sun_elevation: f32` — fixed elevation angle (from initial `SUN_DIR` constant)
+- `shadow_tx: mpsc::SyncSender<(f32, f32)>` — sends (azimuth, elevation) to worker
+- `shadow_rx: mpsc::Receiver<ShadowMask>` — receives computed masks from worker
+- `shadow_computing: bool` — gate: prevents sending new work while worker is busy
+
+Angular velocity:
+- Normal: π/30 rad/s (180°/30 s)
+- Speed boost active: π/3 rad/s (10×, reuses existing `speed_boost` flag)
+- Keys: `KeyCode::Equal` (+) advances, `KeyCode::Minus` retreats
+
+`sun_dir` vector derived from azimuth/elevation each frame (zero-cost, no GPU upload):
+```rust
+let r = self.sun_elevation.cos();
+let sun_dir = [r * self.sun_azimuth.sin(), -r * self.sun_azimuth.cos(), self.sun_elevation.sin()];
+```
+
+#### Background shadow worker thread
+
+`prepare_scene` now returns `(GpuScene, Arc<Heightmap>, sun_azimuth, sun_elevation)`.
+`Arc<Heightmap>` keeps the CPU heightmap alive after `GpuScene::new()` (which only borrows it
+to upload to GPU, then drops it from `prepare_scene`'s stack).
+
+Worker thread spawned once in `run()`:
+```rust
+let (shadow_tx, worker_rx) = mpsc::sync_channel::<(f32, f32)>(1);
+let (worker_tx, shadow_rx) = mpsc::channel::<ShadowMask>();
+std::thread::spawn(move || {
+    while let Ok((azimuth, elevation)) = worker_rx.recv() {
+        let mask = terrain::compute_shadow_vector_par_with_azimuth(...);
+        if worker_tx.send(mask).is_err() { break; }
+    }
+});
+```
+
+Per-frame logic (in `RedrawRequested`):
+1. `try_recv()` — if shadow ready: `scene.update_shadow(&new_mask)`, `shadow_computing = false`
+2. If `!shadow_computing`: `shadow_tx.try_send((azimuth, elevation))` → `shadow_computing = true`
+
+Design rationale:
+- `sync_channel(1)` capacity: one pending job max; `try_send` drops stale angles silently
+- `shadow_computing` flag prevents queuing more than one job at a time
+- Worker finishes in ~1.5ms; frame period ≥ 2.1ms → shadow always ready next frame
+- On Win discrete GPU: 52 MB upload via `write_buffer` at ~15fps = ~780 MB/s, well below PCIe 3.0 x16 ceiling
+
+Channel lifecycle: worker's `recv()` returns `Err` when `shadow_tx` is dropped (Viewer destroyed)
+→ worker loop exits → thread terminates automatically.
+
+#### Soft shadows (penumbra_meters parameter)
+
+Added `penumbra_meters: f32` to `compute_shadow_vector_par_with_azimuth` and all underlying
+implementations (scalar, NEON parallel azimuth, AVX2 parallel azimuth).
+
+Core formula — replaces hard `data[i] = 0.0`:
+```rust
+let margin = running_max - h_eff;
+data[i] = (1.0 - margin / penumbra_meters).max(0.0);
+```
+
+NEON version (replaces `vcltq_f32` + `vbslq_f32`):
+```rust
+let inv_penumbra = 1.0 / penumbra_meters;
+let margin = vmaxq_f32(vsubq_f32(running_max, h_eff), vdupq_n_f32(0.0));
+let result = vmaxq_f32(
+    vsubq_f32(vdupq_n_f32(1.0), vmulq_n_f32(margin, inv_penumbra)),
+    vdupq_n_f32(0.0),
+);
+```
+
+AVX2 version: `_mm256_sub_ps` + `_mm256_mul_ps` + two `_mm256_max_ps` — 8-wide equivalent.
+Default `penumbra_meters = 200.0` at all call sites.
+
+Root cause of shadow jerking at slow sun speed: hard 0.0/1.0 mask. At 6°/s individual pixels
+on the shadow boundary flipped one at a time → visible jerk. Soft shadows eliminate aliasing
+by blending the transition zone.
+
+### Key concepts
+
+- **`Arc<T>` for shared immutable data across threads**: `Arc::clone` increments a reference count
+  (cheap); both threads can call `&T` methods concurrently without locks. Needed because `Heightmap`
+  never changes after loading.
+- **`mpsc::sync_channel(N)` vs `channel()`**: `sync_channel` is bounded — `try_send()` returns
+  `Err(Full)` immediately when at capacity. Capacity 1 = at most one pending job, no stale work queues.
+- **Channel closure**: dropping the `Sender` causes `recv()` to return `Err` on the receiver.
+  Background threads can use this for clean self-termination — no explicit kill signal needed.
+- **Shadow margin in metres**: `running_max - h_eff` is the effective-height gap between a pixel
+  and the shadow horizon. Normalising by a threshold (metres) gives a 0..1 penumbra blend factor.
+- **Rasterisation vs raymarching**: games use shadow maps (render scene from sun POV → depth compare).
+  Works for triangle meshes; not applicable to raw heightmaps. DDA horizon sweep is the
+  heightmap-equivalent. Shadow maps are embarrassingly parallel → GPU wins. DDA running-max is
+  serial per scan line → CPU NEON wins 17×.
+
+### Open items for this phase
+- GPU timestamp queries (explicitly deferred — low priority)

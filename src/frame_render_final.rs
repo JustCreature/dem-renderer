@@ -37,7 +37,7 @@ pub(crate) fn render_3d_pic_cpu(tile_path: &Path) {
     let normal_map: NormalMap = compute_normals_vector_par(&heightmap);
 
     let shadow_mask: ShadowMask =
-        compute_shadow_vector_par_with_azimuth(&heightmap, sun_azimuth_rad, sun_elevation_rad);
+        compute_shadow_vector_par_with_azimuth(&heightmap, sun_azimuth_rad, sun_elevation_rad, 200.0);
 
     let (ticks, fb) = profiling::timed("render_cpu[CPU|shadows_SCALAR_PARALLEL]", || {
         render_cpu::render_par(
@@ -88,7 +88,7 @@ pub(crate) fn render_3d_pic_gpu(tile_path: &Path) {
     let normal_map: NormalMap = compute_normals_vector_par(&heightmap);
 
     let shadow_mask: ShadowMask =
-        compute_shadow_vector_par_with_azimuth(&heightmap, sun_azimuth_rad, sun_elevation_rad);
+        compute_shadow_vector_par_with_azimuth(&heightmap, sun_azimuth_rad, sun_elevation_rad, 200.0);
 
     let gpu_ctx = render_gpu::GpuContext::new();
 

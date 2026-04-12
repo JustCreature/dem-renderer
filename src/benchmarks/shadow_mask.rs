@@ -43,7 +43,7 @@ pub(crate) fn benchmark_shadow_mask_scalar_with_azimuth(
 ) -> ShadowMask {
     let (ticks, shadow_mask) = profiling::timed(
         "build shadow mask SCALAR with_azimuth from row-major hm",
-        || compute_shadow_scalar_with_azimuth(&heightmap, sun_azimuth_rad, sun_elevation_rad),
+        || compute_shadow_scalar_with_azimuth(&heightmap, sun_azimuth_rad, sun_elevation_rad, 200.0),
     );
     let gb_per_second: f64 = count_gb_per_sec(
         ticks,
@@ -78,7 +78,7 @@ pub(crate) fn benchmark_shadow_mask_scalar_with_azimuth_labeled(
             "[[ {} ]] build shadow mask SCALAR with_azimuth from row-major hm",
             cur_label
         ),
-        || compute_shadow_scalar_with_azimuth(&heightmap, sun_azimuth_rad, sun_elevation_rad),
+        || compute_shadow_scalar_with_azimuth(&heightmap, sun_azimuth_rad, sun_elevation_rad, 200.0),
     );
     let gb_per_second: f64 = count_gb_per_sec(
         ticks,
@@ -176,7 +176,7 @@ pub(crate) fn benchmark_shadow_mask_vector_parallel_with_azimuth_labeled(
             "[[ {} ]] build shadow mask VECTOR parallel with_azimuth from row-major hm",
             cur_label
         ),
-        || compute_shadow_vector_par_with_azimuth(&heightmap, sun_azimuth_rad, sun_elevation_rad),
+        || compute_shadow_vector_par_with_azimuth(&heightmap, sun_azimuth_rad, sun_elevation_rad, 200.0),
     );
     let gb_per_second: f64 = count_gb_per_sec(
         ticks,

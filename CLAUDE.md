@@ -225,13 +225,16 @@ Known open items carried into Phase 7:
 - GPU shadow via parallel prefix scan not implemented — would potentially match CPU NEON for cardinal direction (deferred from Phase 5)
 - `render_gif::render_gif` is commented out in main.rs — re-enable when generating animations (deferred from Phase 5)
 - Occupancy analysis via Instruments/Metal GPU trace deferred — requires full Xcode.app (deferred from Phase 5)
-- GPU timestamp queries (measure per-pass GPU time without frame overhead) not yet implemented
+- GPU timestamp queries (measure per-pass GPU time without frame overhead) — explicitly deferred, low priority
 - Picture quality: ✅ bilinear height sampling, ✅ smooth color bands, ✅ normal interpolation, ✅ atmospheric fog, ✅ sphere tracing (adaptive step + sky early exit) — all implemented
 - ✅ Window resize handling — implemented with `render_width` alignment
 - ✅ HUD text overlay (`glyphon`) — fps counter top-left, hint bottom-center, semi-transparent background quads
 - `src/viewer/hud_renderer.rs` — `HudBackground` (pipeline, vertex/uniform buffers, draw), `HudRenderer` (all HUD state, `new/update_size/draw`), `shader_hud_bg.wgsl`
 - HUD toggle: E key shows/hides HUD (`hud_visible: bool`)
 - Speed boost: Cmd (Mac) / Alt (Win) held → 5000 m/s movement speed (`speed_boost: bool`)
+- ✅ Sun animation: +/- keys rotate azimuth at 6°/s (60°/s speed boost); `sun_azimuth`/`sun_elevation` fields; `sun_dir` derived each frame
+- ✅ Background shadow thread: `Arc<Heightmap>` shared with persistent worker via `mpsc::sync_channel(1)`; `shadow_computing` gate; shadow updates every frame with ~0 visual lag
+- ✅ Soft shadows: `penumbra_meters: f32` added to all shadow variants; formula `(1.0 - margin/T).max(0.0)`; default 200.0m; eliminates shadow boundary aliasing at slow sun speed
 - Normal map smoothing and heightmap smoothing: both tried and reverted. Gaussian blur on normals (GPU pass) and on height values (CPU pre-processing) both reduce the staircase artifact but soften real terrain detail too much. Accepted as a fundamental DEM resolution limitation (~20m/cell). Not worth the trade-off.
 
 Known open items from Phase 4:

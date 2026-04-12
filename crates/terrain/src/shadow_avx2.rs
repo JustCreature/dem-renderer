@@ -177,8 +177,10 @@ pub unsafe fn compute_shadow_avx2_parallel_with_azimuth(
     hm: &Heightmap,
     sun_azimuth_rad: f32,
     sun_elevation_rad: f32,
+    penumbra_meters: f32,
 ) -> ShadowMask {
     use core::arch::x86_64::*;
+    let inv_penumbra = 1.0 / penumbra_meters;
 
     let mut data: Vec<f32> = vec![1.0f32; hm.rows * hm.cols];
     let dx = hm.dx_meters as f32;
@@ -208,7 +210,8 @@ pub unsafe fn compute_shadow_avx2_parallel_with_azimuth(
                     let c = cf.round() as usize;
                     let h_eff = hm.data[r * hm.cols + c] as f32 + dist * tan_sun;
                     if h_eff < rm {
-                        *ptr.add(r * hm.cols + c) = 0.0;
+                        let margin = rm - h_eff;
+                        *ptr.add(r * hm.cols + c) = (1.0 - margin / penumbra_meters).max(0.0);
                     }
                     rm = rm.max(h_eff);
                     rf += dr_step;
@@ -249,8 +252,11 @@ pub unsafe fn compute_shadow_avx2_parallel_with_azimuth(
             ];
             let h_vec = _mm256_loadu_ps(heights.as_ptr());
             let h_eff = _mm256_add_ps(h_vec, _mm256_set1_ps(dist * tan_sun));
-            let mask = _mm256_cmp_ps::<1>(h_eff, running_max);
-            let result = _mm256_blendv_ps(_mm256_set1_ps(1.0), _mm256_set1_ps(0.0), mask);
+            let margin = _mm256_max_ps(_mm256_sub_ps(running_max, h_eff), _mm256_setzero_ps());
+            let result = _mm256_max_ps(
+                _mm256_sub_ps(_mm256_set1_ps(1.0), _mm256_mul_ps(margin, _mm256_set1_ps(inv_penumbra))),
+                _mm256_setzero_ps(),
+            );
 
             let mut result_arr = [0.0f32; 8];
             _mm256_storeu_ps(result_arr.as_mut_ptr(), result);
@@ -282,7 +288,8 @@ pub unsafe fn compute_shadow_avx2_parallel_with_azimuth(
                 let c = c_f.round() as usize;
                 let h_eff = hm.data[r * hm.cols + c] as f32 + d * tan_sun;
                 if h_eff < rm {
-                    *ptr.add(r * hm.cols + c) = 0.0;
+                    let margin = rm - h_eff;
+                    *ptr.add(r * hm.cols + c) = (1.0 - margin / penumbra_meters).max(0.0);
                 }
                 rm = rm.max(h_eff);
                 r_f += dr_step;

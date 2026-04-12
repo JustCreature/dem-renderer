@@ -466,6 +466,7 @@ pub fn run(tile_path: &Path, width: u32, height: u32, vsync: bool) {
                 &hm_worker,
                 azimuth,
                 elevation,
+                200.0,
             );
             if worker_tx.send(mask).is_err() {
                 break; // main thread dropped receiver — exit
@@ -525,7 +526,7 @@ fn prepare_scene(tile_path: &Path, width: u32, height: u32) -> (GpuScene, Arc<He
     let sun_azimuth_rad = (SUN_DIR[0]).atan2(-SUN_DIR[1]);
     let sun_elevation_rad = SUN_DIR[2].atan2((SUN_DIR[0].powi(2) + SUN_DIR[1].powi(2)).sqrt());
     let shadow_mask: ShadowMask =
-        terrain::compute_shadow_vector_par_with_azimuth(&hm, sun_azimuth_rad, sun_elevation_rad);
+        terrain::compute_shadow_vector_par_with_azimuth(&hm, sun_azimuth_rad, sun_elevation_rad, 200.0);
 
     let gpu_ctx: GpuContext = GpuContext::new();
     let hm = Arc::new(hm);
