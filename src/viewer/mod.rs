@@ -1,5 +1,6 @@
 mod hud_renderer;
 use std::{path::Path, sync::Arc};
+use std::sync::mpsc;
 
 use dem_io::Heightmap;
 use render_gpu::{GpuContext, GpuScene};
@@ -41,6 +42,12 @@ struct Viewer {
     // hud
     hud_renderer: Option<HudRenderer>,
     hud_visible: bool,
+    // sun animation
+    sun_azimuth: f32,
+    sun_elevation: f32,
+    shadow_tx: mpsc::SyncSender<(f32, f32)>,
+    shadow_rx: mpsc::Receiver<ShadowMask>,
+    shadow_computing: bool,
 }
 
 impl ApplicationHandler for Viewer {
@@ -191,7 +198,49 @@ impl ApplicationHandler for Viewer {
                     self.cam_pos[2] + fwd[2],
                 ];
 
-                let sun_dir = [0.4f32, 0.5f32, 0.7f32];
+                // advance sun azimuth
+                let sun_speed = if self.speed_boost {
+                    std::f32::consts::PI / 3.0  // 60°/s
+                } else {
+                    std::f32::consts::PI / 30.0 // 6°/s
+                };
+                if self.keys_held.contains(&KeyCode::Equal) {
+                    self.sun_azimuth = (self.sun_azimuth + sun_speed * dt)
+                        .rem_euclid(std::f32::consts::TAU);
+                }
+                if self.keys_held.contains(&KeyCode::Minus) {
+                    self.sun_azimuth = (self.sun_azimuth - sun_speed * dt)
+                        .rem_euclid(std::f32::consts::TAU);
+                }
+
+                // derive sun direction vector from azimuth + elevation
+                let r = self.sun_elevation.cos();
+                let sun_dir = [
+                    r * self.sun_azimuth.sin(),
+                    -r * self.sun_azimuth.cos(),
+                    self.sun_elevation.sin(),
+                ];
+
+                // pick up finished shadow mask if ready
+                if let Ok(new_mask) = self.shadow_rx.try_recv() {
+                    self.scene
+                        .as_ref()
+                        .expect("no scene for shadow update")
+                        .update_shadow(&new_mask);
+                    self.shadow_computing = false;
+                }
+
+                // kick off next shadow recompute if worker is free
+                if !self.shadow_computing {
+                    // try_send: if channel is full (shouldn't happen since capacity=1
+                    // and we only send when shadow_computing=false), drop silently
+                    if self.shadow_tx
+                        .try_send((self.sun_azimuth, self.sun_elevation))
+                        .is_ok()
+                    {
+                        self.shadow_computing = true;
+                    }
+                }
 
                 let mut encoder =
                     ctx.device
@@ -403,9 +452,26 @@ impl ApplicationHandler for Viewer {
 }
 
 pub fn run(tile_path: &Path, width: u32, height: u32, vsync: bool) {
-    let scene: GpuScene = prepare_scene(tile_path, width, height);
+    let (scene, hm, sun_azimuth, sun_elevation) = prepare_scene(tile_path, width, height);
     let dx: f32 = scene.get_dx_meters();
     let dy: f32 = scene.get_dy_meters();
+
+    // shadow worker: capacity-1 sync channel so stale requests are never queued
+    let (shadow_tx, worker_rx) = mpsc::sync_channel::<(f32, f32)>(1);
+    let (worker_tx, shadow_rx) = mpsc::channel::<ShadowMask>();
+    let hm_worker = Arc::clone(&hm);
+    std::thread::spawn(move || {
+        while let Ok((azimuth, elevation)) = worker_rx.recv() {
+            let mask = terrain::compute_shadow_vector_par_with_azimuth(
+                &hm_worker,
+                azimuth,
+                elevation,
+            );
+            if worker_tx.send(mask).is_err() {
+                break; // main thread dropped receiver — exit
+            }
+        }
+    });
 
     let event_loop = EventLoop::new().expect("error creating winit event loop");
 
@@ -424,7 +490,7 @@ pub fn run(tile_path: &Path, width: u32, height: u32, vsync: bool) {
         fps: 0.0,
         // initial cam pos
         last_frame: std::time::Instant::now(),
-        cam_pos: [2457.0 * dx, 3328.0 * dy, 3341.0], // need dx/dy from prepare_scene
+        cam_pos: [2457.0 * dx, 3328.0 * dy, 3341.0],
         yaw: (19627.0_f32).atan2(1718.0_f32),
         pitch: (-3472.0_f32).atan2(19702.0_f32),
         keys_held: std::collections::HashSet::new(),
@@ -433,13 +499,18 @@ pub fn run(tile_path: &Path, width: u32, height: u32, vsync: bool) {
         speed_boost: false,
         hud_renderer: None,
         hud_visible: true,
+        sun_azimuth,
+        sun_elevation,
+        shadow_tx,
+        shadow_rx,
+        shadow_computing: false,
     };
     event_loop
         .run_app(&mut viewer)
         .expect("error running app from event loop in run viewer method");
 }
 
-fn prepare_scene(tile_path: &Path, width: u32, height: u32) -> GpuScene {
+fn prepare_scene(tile_path: &Path, width: u32, height: u32) -> (GpuScene, Arc<Heightmap>, f32, f32) {
     let hm: Heightmap = match dem_io::parse_bil(tile_path) {
         Ok(hm) => hm,
         Err(error) => panic!(
@@ -457,7 +528,8 @@ fn prepare_scene(tile_path: &Path, width: u32, height: u32) -> GpuScene {
         terrain::compute_shadow_vector_par_with_azimuth(&hm, sun_azimuth_rad, sun_elevation_rad);
 
     let gpu_ctx: GpuContext = GpuContext::new();
+    let hm = Arc::new(hm);
     let scene: GpuScene = GpuScene::new(gpu_ctx, &hm, &shadow_mask, width, height);
 
-    scene
+    (scene, hm, sun_azimuth_rad, sun_elevation_rad)
 }

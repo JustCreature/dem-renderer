@@ -473,3 +473,47 @@ Refactored `src/viewer.rs` → `src/viewer/mod.rs` + `src/viewer/hud_background.
 - `HudBackground::update_size` and `draw` methods not yet written
 - Wire `HudBackground` into `Viewer` and call in `RedrawRequested`
 - GPU timestamp queries
+
+---
+
+## 2026-04-12 (session 8)
+
+### What was built
+
+**`HudBackground` completed** (inside `src/viewer/hud_renderer.rs`):
+- `update_size(&self, queue, width, height)`: calls `build_vertices(width, height)`, writes vertex data via `bytemuck::cast_slice`, writes `[width as f32, height as f32]` to uniform buffer
+- `draw<'a>(&'a self, rpass: &mut RenderPass<'a>)`: `set_pipeline`, `set_bind_group(0, ...)`, `set_vertex_buffer(0, vertex_buf.slice(..))`, `draw(0..12, 0..1)`
+
+**Viewer module refactored** — `src/viewer/hud_background.rs` renamed to `src/viewer/hud_renderer.rs`:
+- `HudBackground` struct remains (private, nested inside the file)
+- New `pub struct HudRenderer` wraps all HUD state: `font_system`, `swash_cache`, `text_atlas`, `text_renderer`, `fps_buffer`, `hint_buffer`, `viewport`, `hud_bg: HudBackground`, `width: u32`, `height: u32`
+- `HudRenderer::new(device, queue, width, height, format)` — initializes all glyphon state + `HudBackground`
+- `HudRenderer::update_size(&mut self, queue, width, height)` — updates stored dimensions, `hint_buffer.set_size`, `hud_bg.update_size`
+- `HudRenderer::draw(&mut self, queue, device, encoder, surface_view, fps, ms)` — full render pass: text prepare, `begin_render_pass(LoadOp::Load)`, `hud_bg.draw` (background quads first), `text_renderer.render`, `drop(rpass)`
+
+**`mod.rs` updated:**
+- `hud_renderer: Option<HudRenderer>` field (initialized to `None`, set in `resumed()` where `format` is known)
+- `HudRenderer::new(...)` called in `resumed()` after format selection — avoids hardcoded format
+- `as_mut().expect(...)` for mutable draw/update_size calls
+
+**HUD toggle (E key):**
+- `hud_visible: bool` field on `Viewer`, initialized `true`
+- `KeyCode::KeyE` in keyboard handler flips `self.hud_visible`
+- `RedrawRequested` wraps HUD draw in `if self.hud_visible { ... }`
+
+**Speed boost modifier:**
+- `speed_boost: bool` field on `Viewer`
+- `KeyCode::SuperLeft/SuperRight` (Mac Cmd) and `KeyCode::AltLeft/AltRight` (Windows Alt) set/clear `speed_boost` on press/release
+- Movement block: `let speed = if self.speed_boost { 5000.0 } else { 500.0 }`
+
+### Key concepts
+
+- **`RenderPass<'a>` lifetime**: `draw<'a>(&'a self, rpass: &mut RenderPass<'a>)` — the `'a` unifies the lifetime of `self` (which owns pipeline/bind_group) and the render pass that references them. Without it the compiler cannot prove the borrowed GPU resources outlive the pass recording.
+- **`as_ref()` vs `as_mut()`**: `Option::as_ref()` gives `Option<&T>` (shared), `as_mut()` gives `Option<&mut T>` (mutable). Calling a `&mut self` method through `as_ref()` fails with "cannot borrow as mutable".
+- **`..` in `slice(..)`**: `RangeFull` — borrows the entire buffer; equivalent to `0..buffer.size()`. The `Buffer::slice` method accepts any range type.
+- **`bytemuck::cast_slice`**: reinterprets `&[f32]` as `&[u8]` with a compile-time `Pod` safety check. Both `f32` and `u8` are `Pod` (plain old data — no padding, no pointers).
+- **Buffer offset for `write_buffer`**: offset is within the target buffer, not a global address. `vertex_buf` and `uniform_buf` are separate allocations; both are written at offset `0`.
+- **`HudRenderer` initialized in `resumed()`** not in `run()`: surface format is only known after surface creation; pipeline format must match or GPU validation fails. `Option<HudRenderer>` handles the delayed init.
+
+### Open items for this phase
+- GPU timestamp queries (measure per-pass GPU time without frame overhead)
