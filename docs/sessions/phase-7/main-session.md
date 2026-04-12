@@ -412,3 +412,64 @@ No smoothing applied anywhere in the pipeline.
 ### Open items for this phase
 - GPU timestamp queries (measure per-pass GPU time without frame overhead)
 - HUD text overlay (`glyphon`)
+
+---
+
+## 2026-04-12 (session 7)
+
+### What was built
+
+**HUD text overlay using glyphon.**
+
+Refactored `src/viewer.rs` → `src/viewer/mod.rs` + `src/viewer/hud_background.rs`.
+
+**Dependency work:**
+- Added `glyphon = "0.10.0"` to root `Cargo.toml`
+- Discovered version conflict: glyphon 0.10.0 requires wgpu 28, project uses wgpu 29
+- Attempted git dependency (github.com/grovesNL/glyphon main) — blocked by Zscaler corporate proxy (`github-zse` DNS failure)
+- Attempted `net.git-fetch-with-cli = true` in `~/.cargo/config.toml` — resolved the proxy issue
+- Documented fix in `README.md`
+- Switched to glyphon git dependency pointing to main branch (wgpu 29 compatible)
+
+**Surface usage fix:**
+- Changed surface `TextureUsages` from `COPY_DST` to `COPY_DST | RENDER_ATTACHMENT`
+- `RENDER_ATTACHMENT` required for a render pass to target the surface texture
+
+**glyphon integration (4 new fields on `Viewer`):**
+- `font_system: glyphon::FontSystem` — CPU font loading + text shaping
+- `swash_cache: glyphon::SwashCache` — glyph rasterisation cache
+- `text_atlas: glyphon::TextAtlas` — GPU glyph atlas texture (needs `device`, `queue`, `Cache`, `format`)
+- `text_renderer: glyphon::TextRenderer` — issues draw calls
+- `cache: glyphon::Cache` — GPU-side glyph cache (separate from SwashCache)
+- `viewport: glyphon::Viewport` — wraps resolution, replaces old `Resolution` arg in prepare
+- `fps_buffer: glyphon::Buffer` — shaped text for fps display, updated every frame
+- `hint_buffer: glyphon::Buffer` — static "Q — immersive mode" hint, centered, bottom of screen
+
+**Per-frame pipeline (inserted between copy and submit):**
+1. `fps_buffer.set_text(...)` — update fps string
+2. `viewport.update(queue, Resolution { width, height })` — sync viewport to surface size
+3. `text_renderer.prepare(...)` — upload glyph data, two `TextArea`s (fps top-left, hint bottom-center)
+4. `encoder.begin_render_pass(LoadOp::Load)` — preserves terrain, draws text on top
+5. `text_renderer.render(...)` — issues draw calls into render pass
+6. `drop(rpass)` — releases encoder borrow before `encoder.finish()`
+
+**`HudBackground` struct (in progress):**
+- Fields: `pipeline`, `vertex_buf` (96 bytes, 12 vertices), `uniform_buf` (8 bytes, width+height), `bind_group`
+- `shader_hud_bg.wgsl`: pixel-space vertex shader (NDC conversion via uniform), fragment outputs `vec4(0,0,0,0.6)`
+- Render pipeline with `SrcAlpha / OneMinusSrcAlpha` blend state
+- `build_vertices(width, height) -> [f32; 24]`: 2 quads (fps box, hint box), each 2 triangles = 6 vertices
+
+### Key concepts
+
+- **`COPY_DST | RENDER_ATTACHMENT`**: surface texture needs both flags — copy for terrain blit, render attachment for HUD render pass
+- **`LoadOp::Load` vs `LoadOp::Clear`**: `Load` preserves terrain; `Clear` would wipe it
+- **`drop(rpass)` before `encoder.finish()`**: render pass borrows encoder mutably; must drop to release borrow
+- **glyphon `Cache` vs `SwashCache`**: `Cache` is GPU-side atlas management (passed to `TextAtlas::new`); `SwashCache` is CPU-side rasterisation (passed to `prepare`)
+- **`Viewport`**: introduced in glyphon 0.10.0, replaces inline `Resolution` — persistent object, updated each frame via `viewport.update(queue, resolution)`
+- **Why triangles**: only primitive the GPU rasteriser understands — 3 points always coplanar, unambiguous linear interpolation. Rectangles = 2 triangles sharing a diagonal. Circles = N pizza-slice triangles approximating the curve
+- **Fragment shader can render any shape**: SDF/raymarching bypasses triangle limitation by computing "inside/outside" mathematically per pixel
+
+### Open items for this phase
+- `HudBackground::update_size` and `draw` methods not yet written
+- Wire `HudBackground` into `Viewer` and call in `RedrawRequested`
+- GPU timestamp queries

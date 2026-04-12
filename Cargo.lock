@@ -538,6 +538,7 @@ dependencies = [
 name = "dem_renderer"
 version = "0.1.0"
 dependencies = [
+ "bytemuck",
  "dem_io",
  "glyphon",
  "image",

@@ -1,3 +1,4 @@
+mod hud_background;
 use std::{path::Path, sync::Arc};
 
 use dem_io::Heightmap;
@@ -13,7 +14,7 @@ use winit::{
     window::{Window, WindowAttributes},
 };
 
-use crate::utils::N;
+use crate::{utils::N, viewer::hud_background::HudBackground};
 
 struct Viewer {
     scene: Option<GpuScene>,
@@ -44,6 +45,7 @@ struct Viewer {
     fps_buffer: glyphon::Buffer,
     hint_buffer: glyphon::Buffer,
     viewport: glyphon::Viewport,
+    hud_bg: HudBackground,
 }
 
 impl ApplicationHandler for Viewer {
@@ -297,6 +299,7 @@ impl ApplicationHandler for Viewer {
                     occlusion_query_set: None,
                     multiview_mask: None,
                 });
+                self.hud_bg.draw(&mut rpass);
                 self.text_renderer
                     .render(&self.text_atlas, &self.viewport, &mut rpass)
                     .unwrap();
@@ -420,6 +423,16 @@ impl ApplicationHandler for Viewer {
                     Some(new_size.width as f32),
                     Some(40.0),
                 );
+                self.hud_bg.update_size(
+                    &self
+                        .scene
+                        .as_ref()
+                        .expect("no scene for bg resuze")
+                        .get_gpu_ctx()
+                        .queue,
+                    new_size.width,
+                    new_size.height,
+                );
             }
             _ => {}
         }
@@ -490,6 +503,12 @@ pub fn run(tile_path: &Path, width: u32, height: u32, vsync: bool) {
         glyphon::Shaping::Basic,
         Some(glyphon::cosmic_text::Align::Center),
     );
+    let hud_bg: HudBackground = HudBackground::new(
+        &scene.get_gpu_ctx().device,
+        width,
+        height,
+        wgpu::TextureFormat::Bgra8Unorm,
+    );
     let viewport: glyphon::Viewport = glyphon::Viewport::new(&scene.get_gpu_ctx().device, &cache);
 
     let mut viewer: Viewer = Viewer {
@@ -520,6 +539,7 @@ pub fn run(tile_path: &Path, width: u32, height: u32, vsync: bool) {
         fps_buffer,
         hint_buffer,
         viewport,
+        hud_bg,
     };
     event_loop
         .run_app(&mut viewer)
