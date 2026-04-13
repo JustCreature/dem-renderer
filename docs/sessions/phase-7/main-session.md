@@ -626,6 +626,94 @@ by blending the transition zone.
 
 ---
 
+## 2026-04-13 (session 11)
+
+### What was built
+
+**HUD polish: angular reference fix, date labels, WGSL comments, panel background, drop shadows.**
+
+#### Angular reference corrected
+
+Season circle: Summer (day 172) = top, Winter = bottom. Angle formula already correct from session 10.
+
+Time circle: 12:00 = top, 18:00 = bottom, using 12-hour face. Formula:
+```rust
+hour_angle = (sim_hour % 12.0) / 12.0 * TAU
+```
+Cardinal label text updated accordingly: "12:00" at top, "18:00" at bottom, "15:00" right, "21:00" left.
+
+#### Current-value labels: date format
+
+Replaced "Day 156" with a proper `"Jun 21"` style date via `day_to_date(day: i32) -> String`:
+```rust
+fn day_to_date(day: i32) -> String {
+    const MONTHS: [(&str, i32); 12] = [ ("Jan", 31), ("Feb", 28), ... ("Dec", 31) ];
+    let mut rem = day.clamp(1, 365);
+    for (name, days) in &MONTHS {
+        if rem <= *days { return format!("{} {}", name, rem); }
+        rem -= days;
+    }
+    "Dec 31".to_string()  // satisfies compiler; unreachable
+}
+```
+The final fallback is mathematically unreachable (input is clamped to 1–365 and total days = 365) but required because Rust cannot prove the loop always returns.
+
+Time label changed to `format!("Time: {:02}:{:02}", h, m)` using `sim_hour.fract() * 60.0` for minutes.
+
+Removed unused `season_name` function.
+
+#### `shader_sun_hud.wgsl` — detailed comments added
+
+Every function and code section annotated explaining:
+- `TAU = 2π` convention
+- `seg_sdf` clamped-projection math
+- `frag_angle` clockwise-from-top via `atan2(dp.x, -dp.y)` + Y-flip
+- `season_col` boundary angles in radians
+- `tick` dir = `vec2(sin, -cos)` clock-angle convention
+- `draw_circle` layer ordering (disc → ring → ticks → needle → centre dot)
+- `fs_main` discard guard rationale ("~99% of full-screen quad pixels discarded at near-zero cost")
+
+#### HUD background panel (`panel_rect_sdf` in WGSL)
+
+Replaced two small per-label rects with one unified rounded panel covering both circles and all labels:
+
+```wgsl
+fn panel_rect_sdf(p: vec2<f32>) -> f32 {
+    let cx = u.cx1;  // cx1 == cx2
+    let r  = u.radius;
+    let x0 = cx - r - 112.0;   // past current-value labels (~10 px padding)
+    let x1 = cx + r + 72.0;    // past Fall/15:00 labels
+    let y0 = u.cy1 - r - 28.0; // above Summer/12:00
+    let y1 = u.cy2 + r + 28.0; // below Winter/18:00
+    // rounded-rect SDF, corner radius 8 px
+    ...
+}
+```
+
+`fs_main` restructured: discard if outside circles AND outside panel → draw circles first (they have their own disc background) → draw panel dark background (0.05, 0.05, 0.05, 0.60) for pixels in panel but outside circles.
+
+Design rationale: circles already have a semi-transparent disc fill — the panel fills the gaps between circles and around all labels without double-layering inside the circles.
+
+#### Drop shadows on all text labels
+
+Each of the 10 glyphon text buffers (8 cardinal + 2 current-value) is now rendered twice in `text_renderer.prepare()`:
+1. **Shadow pass** — same buffer, offset `(+1, +1)` pixels, `Color::rgba(0, 0, 0, 160)`
+2. **Real pass** — normal position, `Color::rgb(210, 210, 210)`
+
+glyphon composites `TextArea`s in slice order, so shadow lands under real glyphs automatically. Total `TextArea` count: 2 (fps + hint) + 10 shadow + 10 real = 22.
+
+### Key concepts
+
+- **`day_to_date` unreachable fallback**: Rust requires all code paths to return a value. A mathematically exhaustive loop (all 365 days covered by month sums) still needs a trailing `return` or `unreachable!()` to satisfy the compiler. `"Dec 31".to_string()` is the minimal correct choice.
+- **Glyphon double-render for drop shadow**: render the same `glyphon::Buffer` twice — once offset with dark `Color::rgba`, once at correct position with light colour. No separate shadow buffer needed; order in the `TextArea` slice determines draw order.
+- **Single panel vs two small rects**: two small per-label rects leave the cardinal labels (Summer/Fall/Winter/Spring etc.) unprotected against busy terrain. One big panel covers the entire widget uniformly. The circles' own disc fill prevents redundant layering inside them.
+- **`panel_rect_sdf` in WGSL using existing uniform**: the panel bounds are computable from `cx1`, `cy1`, `cy2`, `radius` already in the `SunHud` uniform — no new GPU data upload needed.
+
+### Open items for this phase
+- GPU timestamp queries (explicitly deferred — low priority)
+
+---
+
 ## 2026-04-12 (session 10)
 
 ### What was built
@@ -702,3 +790,56 @@ Time tick angles: `0` (12:00), `τ/4` (15:00), `τ/2` (18:00), `3τ/4` (21:00).
 
 ### Open items for this phase
 - GPU timestamp queries (explicitly deferred — low priority)
+
+---
+
+## 2026-04-13 (session 12)
+
+### What was covered
+
+**Conceptual planning: viewer improvement directions.**
+
+No code written. Three topics explored and formalised into `docs/planning/viewer-improvements-plan.md`.
+
+#### Out-of-core tile streaming
+
+**Problem:** current single-tile setup fits entirely in GPU VRAM. Multi-tile datasets (e.g. 10×10 SRTM region, ~260 MB) would exceed VRAM on most hardware.
+
+**Solution architecture:**
+- Spatial tiling on disk (fixed-size chunks, seekable)
+- GPU tile cache — fixed-size 2D texture array, LRU eviction
+- Indirection table (page table texture) — shader looks up `tile_id → slot_index`
+
+**Hardware angle:** CPU→GPU upload is the bottleneck. On M4 unified memory, near-free. On PCIe: 26 MB tile ≈ 1.7ms; 4 tiles/frame = 6.8ms stall. Measurable question: at what camera speed does streaming become the fps ceiling? Equivalent GPU API concept: sparse/virtual textures ("tiled resources" in DirectX, "sparse binding" in Vulkan).
+
+#### Level of Detail (LOD)
+
+**Problem:** at 50km distance, one DEM cell = 0.008 screen pixels — full-precision raymarching for sub-pixel terrain is wasted work.
+
+**Three approaches:**
+1. Step-size LOD — `min_step = base_step * (1 + t / 5000.0)`, 2-line shader change
+2. Mipmap LOD — multiple downsampled heightmap versions; `textureSampleLevel(hm, s, uv, lod)` already supports this; costs 1.33× GPU memory
+3. Geometry LOD — not applicable to heightmap raymarching (no triangle mesh)
+
+**Hardware angle:** smaller mip → better GPU L2 cache fit → fewer cache misses per ray. Larger effect on GTX1650 (small GDDR6 cache) than M4 (large unified L2).
+
+#### Ambient Occlusion (AO)
+
+**Physical intuition:** sky hemisphere partially blocked by surrounding geometry → valleys darker than ridges even on overcast days.
+
+**Four switchable modes** cycled with `/` key; HUD label shows `AO: <mode>  (Press / to change)`:
+
+- **Off** — AO factor = 1.0, baseline fps reference
+- **SSAO** — N random hemisphere samples per fragment per frame; N texture fetches → measurable fps cost; random access pattern → low cache hit rate
+- **HBAO** — D directional marches per fragment, find max horizon elevation angle; more physically accurate than SSAO; diagonal directions hit same cache-unfriendly stride as Phase 3 diagonal shadow (2.4× slower than cardinal)
+- **True Hemisphere** — full DDA horizon sweep in N directions baked to R8Unorm texture at startup; render-time cost = one texture fetch; startup ≈ N × 1.5ms ≈ 24ms for N=16; best quality, no view-dependent artifacts
+
+**Relationship to existing code:** sun shadow = single-direction specialisation of True Hemisphere AO. Same `compute_shadow_neon_parallel_with_azimuth`, 16 azimuths, averaged.
+
+### Artifact created
+
+`docs/planning/viewer-improvements-plan.md` — new planning file with three improvement items fully detailed: AO (item 1, four modes, `/` key cycling, HUD label, comparison experiment), out-of-core streaming (item 2), LOD (item 3).
+
+### Open items for this phase
+- GPU timestamp queries (explicitly deferred — low priority)
+- Implement viewer improvements from `viewer-improvements-plan.md` (AO first)

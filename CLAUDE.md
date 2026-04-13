@@ -229,8 +229,8 @@ Known open items carried into Phase 7:
 - Picture quality: ✅ bilinear height sampling, ✅ smooth color bands, ✅ normal interpolation, ✅ atmospheric fog, ✅ sphere tracing (adaptive step + sky early exit) — all implemented
 - ✅ Window resize handling — implemented with `render_width` alignment
 - ✅ HUD text overlay (`glyphon`) — fps counter top-left, hint bottom-center, semi-transparent background quads
-- `src/viewer/hud_renderer.rs` — `HudBackground`, `SunIndicator`, `HudRenderer`; 10 glyphon buffers (8 static cardinal labels + 2 dynamic current-value); `label_area()`, `make_small_label()`, `make_current_label()` helpers
-- `src/viewer/shader_sun_hud.wgsl` — SDF season/time circles; `season_col()` (Summer=top), tick marks at cardinal solstice/equinox/hour positions; yellow needle; `discard` guard
+- `src/viewer/hud_renderer.rs` — `HudBackground`, `SunIndicator`, `HudRenderer`; 10 glyphon buffers (8 static cardinal labels + 2 dynamic current-value); `day_to_date()` for "Jun 21" date format; drop shadows on all labels (double-render at (+1,+1) with `rgba(0,0,0,160)`); `build_label_text_area()`, `make_small_label()`, `make_current_label()` helpers
+- `src/viewer/shader_sun_hud.wgsl` — SDF season/time circles; `season_col()` (Summer=top), tick marks at cardinal solstice/equinox/hour positions; yellow needle; `panel_rect_sdf()` unified rounded background panel covering both circles + all labels; `discard` guard; fully commented
 - HUD toggle: E key shows/hides HUD (`hud_visible: bool`)
 - Speed boost: Cmd (Mac) / Alt (Win) held → 5000 m/s movement speed (`speed_boost: bool`)
 - ✅ Sun animation: `+`/`-` keys change `sim_hour` at 0.4 hrs/s; `[`/`]` keys change `sim_day` via `day_accum` accumulator; both 10× faster with speed boost
@@ -238,8 +238,9 @@ Known open items carried into Phase 7:
 - ✅ CPU normals in GpuScene: removed 157-line throw-away GPU compute pipeline; replaced with three `create_buffer_init` DMA uploads; `GpuScene::new()` takes `normal_map: &NormalMap`
 - ✅ Background shadow thread: `Arc<Heightmap>` shared with persistent worker via `mpsc::sync_channel(1)`; `shadow_computing` gate; shadow updates every frame with ~0 visual lag
 - ✅ Soft shadows: `penumbra_meters: f32` added to all shadow variants; formula `(1.0 - margin/T).max(0.0)`; default 200.0m; eliminates shadow boundary aliasing at slow sun speed
-- ✅ Sun/Season HUD: `SunIndicator` (SDF circles via `shader_sun_hud.wgsl`) + 10 glyphon text labels; season circle (Summer=top, Winter=bottom, season-coloured ring); time circle (12h face, 12:00=top, 18:00=bottom); "Day N" + "HH:MM" current-value labels; RIGHT_MARGIN=80, BOTTOM_OFFSET=118, GAP=60
+- ✅ Sun/Season HUD: `SunIndicator` (SDF circles via `shader_sun_hud.wgsl`) + 10 glyphon text labels; season circle (Summer=top, Winter=bottom, season-coloured ring); time circle (12h face, 12:00=top, 18:00=bottom); "Jun 21" + "Time: HH:MM" current-value labels; drop shadows; unified background panel; RIGHT_MARGIN=80, BOTTOM_OFFSET=118, GAP=60
 - Normal map smoothing and heightmap smoothing: both tried and reverted. Gaussian blur on normals (GPU pass) and on height values (CPU pre-processing) both reduce the staircase artifact but soften real terrain detail too much. Accepted as a fundamental DEM resolution limitation (~20m/cell). Not worth the trade-off.
+- `docs/planning/viewer-improvements-plan.md` — improvement roadmap: (1) AO with 4 modes Off/SSAO/HBAO/True Hemisphere, `/` key cycling, HUD label; (2) out-of-core tile streaming; (3) LOD (step-size + mipmap)
 
 Known open items from Phase 4:
 - Supersampled ray optimization considered but not implemented: march 1 reference ray, approximate 3 neighbor heights via `h ≈ h_center + grad_x * Δcol + grad_y * Δrow` (using Phase 2 normal map). Would reduce gather 4→1 per step. Breaks at sharp discrete peaks.

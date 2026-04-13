@@ -486,7 +486,7 @@ impl HudRenderer {
         hint_buffer.set_size(&mut font_system, Some(width as f32), Some(40.0));
         hint_buffer.set_text(
             &mut font_system,
-            "Q - activate/deactivate immersive mode; E - hide/show HUD",
+            "Q - activate/deactivate immersive mode; Left Cmd/Alt - speed boost; E - hide/show HUD; - or + - rewind time backward or forward; [ or ] - rewind days backward or forward",
             &glyphon::Attrs::new(),
             glyphon::Shaping::Basic,
             Some(glyphon::cosmic_text::Align::Center),
