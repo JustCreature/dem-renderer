@@ -603,6 +603,7 @@ impl HudRenderer {
         let r = SunIndicator::RADIUS;
         let lw = 60.0_f32; // label box width for cardinal labels
         let dim = glyphon::Color::rgb(210, 210, 210);
+        let shd = glyphon::Color::rgba(0, 0, 0, 160); // drop-shadow colour (semi-transparent black)
         let w = self.width;
         let h = self.height;
 
@@ -612,6 +613,10 @@ impl HudRenderer {
         let sc_t = cy1 - r * 0.5 - 8.0; // season current top
         let tc_t = cy2 - r * 0.5 - 8.0; // time current top
 
+        // Each cardinal label and current-value label is rendered twice:
+        //   1. Shadow pass — same buffer, offset (+1, +1), dark semi-transparent colour.
+        //   2. Real pass  — normal position, light colour.
+        // glyphon composites TextAreas in order, so shadows land under the real glyphs.
         self.text_renderer
             .prepare(
                 device,
@@ -650,7 +655,41 @@ impl HudRenderer {
                         default_color: glyphon::Color::rgb(255, 255, 255),
                         custom_glyphs: &[],
                     },
-                    // ── Season circle labels ─────────────────────────────────
+                    // ── Season circle labels — shadows ───────────────────────
+                    build_label_text_area(
+                        &self.lbl_summer,
+                        cx - lw / 2.0 + 1.0,
+                        cy1 - r - 19.0,
+                        w,
+                        h,
+                        shd,
+                    ),
+                    build_label_text_area(
+                        &self.lbl_winter,
+                        cx - lw / 2.0 + 1.0,
+                        cy1 + r + 5.0,
+                        w,
+                        h,
+                        shd,
+                    ),
+                    build_label_text_area(&self.lbl_fall, cx + r + 5.0, cy1 - 7.0, w, h, shd),
+                    build_label_text_area(
+                        &self.lbl_spring,
+                        cx - r - lw - 3.0,
+                        cy1 - 7.0,
+                        w,
+                        h,
+                        shd,
+                    ),
+                    build_label_text_area(
+                        &self.season_current_buf,
+                        cur_l - 9.0,
+                        sc_t - 14.0,
+                        w,
+                        h,
+                        shd,
+                    ),
+                    // ── Season circle labels — real ──────────────────────────
                     build_label_text_area(
                         &self.lbl_summer,
                         cx - lw / 2.0,
@@ -684,7 +723,34 @@ impl HudRenderer {
                         h,
                         dim,
                     ),
-                    // ── Time circle labels ───────────────────────────────────
+                    // ── Time circle labels — shadows ─────────────────────────
+                    build_label_text_area(
+                        &self.lbl_12,
+                        cx - lw / 2.0 + 1.0,
+                        cy2 - r - 19.0,
+                        w,
+                        h,
+                        shd,
+                    ),
+                    build_label_text_area(
+                        &self.lbl_18,
+                        cx - lw / 2.0 + 1.0,
+                        cy2 + r + 5.0,
+                        w,
+                        h,
+                        shd,
+                    ),
+                    build_label_text_area(&self.lbl_15, cx + r + 5.0, cy2 - 7.0, w, h, shd),
+                    build_label_text_area(&self.lbl_21, cx - r - lw - 3.0, cy2 - 7.0, w, h, shd),
+                    build_label_text_area(
+                        &self.time_current_buf,
+                        cur_l - 9.0,
+                        tc_t - 14.0,
+                        w,
+                        h,
+                        shd,
+                    ),
+                    // ── Time circle labels — real ────────────────────────────
                     build_label_text_area(&self.lbl_12, cx - lw / 2.0, cy2 - r - 20.0, w, h, dim),
                     build_label_text_area(&self.lbl_18, cx - lw / 2.0, cy2 + r + 4.0, w, h, dim),
                     build_label_text_area(&self.lbl_15, cx + r + 4.0, cy2 - 8.0, w, h, dim),

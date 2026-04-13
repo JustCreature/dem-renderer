@@ -189,29 +189,62 @@ fn draw_circle(p: vec2<f32>, center: vec2<f32>, r: f32, needle: f32, kind: i32) 
     return col;
 }
 
+// ── Helper: HUD panel background SDF ─────────────────────────────────────────
+// Returns the signed distance for a single rounded rectangle that covers the
+// entire HUD widget: both circles + all surrounding cardinal labels + the
+// current-value labels to the left.
+// Convention: negative = inside, 0 = boundary, positive = outside.
+//
+// Layout (all relative to the shared circle centre cx = cx1 = cx2):
+//   left  : cx − radius − 112  (past the current-value label, ~10 px padding)
+//   right : cx + radius + 72   (past the Fall/15:00 label, ~8 px padding)
+//   top   : cy1 − radius − 28  (above the Summer/12:00 label)
+//   bottom: cy2 + radius + 28  (below the Winter/18:00 label)
+fn panel_rect_sdf(p: vec2<f32>) -> f32 {
+    let cx = u.cx1;   // cx1 == cx2: both circles share the same X
+    let r  = u.radius;
+    let x0 = cx - r - 112.0;
+    let x1 = cx + r + 72.0;
+    let y0 = u.cy1 - r - 28.0;
+    let y1 = u.cy2 + r + 28.0;
+    // Rounded-rect SDF (corner radius 8 px for a smooth panel feel).
+    let center   = vec2<f32>((x0 + x1) * 0.5, (y0 + y1) * 0.5);
+    let half_ext = vec2<f32>((x1 - x0) * 0.5, (y1 - y0) * 0.5);
+    let cr = 8.0;
+    let q = abs(p - center) - half_ext + vec2<f32>(cr);
+    return length(max(q, vec2<f32>(0.0))) + min(max(q.x, q.y), 0.0) - cr;
+}
+
 // ── Fragment shader (entry point) ─────────────────────────────────────────────
 // Runs once per pixel of the full-screen quad.
-// Determines which circle (if any) the pixel belongs to and delegates to draw_circle.
+// Rendering order (back to front):
+//   1. Panel background — dark semi-transparent rounded rect behind everything.
+//   2. Circles          — drawn on top of the panel wherever they overlap.
 @fragment
 fn fs_main(@builtin(position) frag_pos: vec4<f32>) -> @location(0) vec4<f32> {
-    let p = frag_pos.xy;                  // pixel position in screen-space (pixels, Y-down)
-    let c1 = vec2<f32>(u.cx1, u.cy1);     // season circle centre
-    let c2 = vec2<f32>(u.cx2, u.cy2);     // time circle centre
-    let r = u.radius;
+    let p  = frag_pos.xy;
+    let c1 = vec2<f32>(u.cx1, u.cy1);
+    let c2 = vec2<f32>(u.cx2, u.cy2);
+    let r  = u.radius;
 
-    let d1 = length(p - c1);              // distance to season circle centre
-    let d2 = length(p - c2);              // distance to time circle centre
+    let d1 = length(p - c1);   // distance to season circle centre
+    let d2 = length(p - c2);   // distance to time circle centre
+    let pd = panel_rect_sdf(p); // signed distance to the panel background rect
 
-    // Discard pixels that are outside both circles (with 1.5px margin for anti-aliasing).
-    // This is the main performance guard: ~99% of the full-screen quad pixels are
-    // discarded here at near-zero cost, before any real work is done.
-    if d1 > r + 1.5 && d2 > r + 1.5 { discard; }
+    // Discard pixels that are outside both circles and outside the panel.
+    if d1 > r + 1.5 && d2 > r + 1.5 && pd > 1.0 { discard; }
 
-    // Each pixel belongs to at most one circle (they don't overlap).
-    // Draw whichever one the pixel is inside.
+    // ── Circles (drawn first so they appear above the panel background) ────────
+    // Each pixel belongs to at most one circle; check season circle first.
     if d1 <= r + 1.5 {
-        return draw_circle(p, c1, r, u.day_angle, 0);  // season circle, kind=0
-    } else {
-        return draw_circle(p, c2, r, u.hour_angle, 1);  // time circle,   kind=1
+        return draw_circle(p, c1, r, u.day_angle, 0);   // season circle
     }
+    if d2 <= r + 1.5 {
+        return draw_circle(p, c2, r, u.hour_angle, 1);  // time circle
+    }
+
+    // ── Panel background (pixels inside the panel but outside both circles) ────
+    // Alpha fades from 0.60 deep inside to 0 at 1 px outside the rounded edge.
+    let alpha = 0.60 * clamp(1.0 - pd, 0.0, 1.0);
+    return vec4<f32>(0.05, 0.05, 0.05, alpha);
 }
