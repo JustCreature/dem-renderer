@@ -1,6 +1,6 @@
 mod hud_renderer;
-use std::{path::Path, sync::Arc};
 use std::sync::mpsc;
+use std::{path::Path, sync::Arc};
 
 use dem_io::Heightmap;
 use render_gpu::{GpuContext, GpuScene};
@@ -43,10 +43,10 @@ struct Viewer {
     hud_renderer: Option<HudRenderer>,
     hud_visible: bool,
     // sun animation — date/time driven
-    sim_day: i32,        // 1–365
-    sim_hour: f32,       // 0.0–24.0 solar time
-    lat_rad: f32,        // tile centre latitude (radians)
-    day_accum: f32,      // fractional day accumulator for [ / ] keys
+    sim_day: i32,   // 1–365
+    sim_hour: f32,  // 0.0–24.0 solar time
+    lat_rad: f32,   // tile centre latitude (radians)
+    day_accum: f32, // fractional day accumulator for [ / ] keys
     shadow_tx: mpsc::SyncSender<(f32, f32)>,
     shadow_rx: mpsc::Receiver<ShadowMask>,
     shadow_computing: bool,
@@ -202,7 +202,7 @@ impl ApplicationHandler for Viewer {
 
                 // advance time (+/-) and day ([ / ])
                 let time_speed = if self.speed_boost { 4.0_f32 } else { 0.4_f32 }; // hours/s
-                let day_speed  = if self.speed_boost { 10.0_f32 } else { 1.0_f32 }; // days/s
+                let day_speed = if self.speed_boost { 60.0_f32 } else { 10.0_f32 }; // days/s
                 if self.keys_held.contains(&KeyCode::Equal) {
                     self.sim_hour = (self.sim_hour + time_speed * dt).rem_euclid(24.0);
                 }
@@ -289,6 +289,8 @@ impl ApplicationHandler for Viewer {
                         &surface_view,
                         self.fps as f32,
                         1000.0,
+                        self.sim_day,
+                        self.sim_hour,
                     );
                 }
 
@@ -463,10 +465,7 @@ pub fn run(tile_path: &Path, width: u32, height: u32, vsync: bool) {
     std::thread::spawn(move || {
         while let Ok((azimuth, elevation)) = worker_rx.recv() {
             let mask = terrain::compute_shadow_vector_par_with_azimuth(
-                &hm_worker,
-                azimuth,
-                elevation,
-                200.0,
+                &hm_worker, azimuth, elevation, 200.0,
             );
             if worker_tx.send(mask).is_err() {
                 break; // main thread dropped receiver — exit
@@ -518,8 +517,8 @@ pub fn run(tile_path: &Path, width: u32, height: u32, vsync: bool) {
 fn sun_position(lat_rad: f32, day: i32, hour: f32) -> (f32, f32) {
     use std::f32::consts::TAU;
     // Solar declination
-    let decl = 23.45_f32.to_radians()
-        * ((360.0_f32 / 365.0 * (day as f32 + 284.0)).to_radians()).sin();
+    let decl =
+        23.45_f32.to_radians() * ((360.0_f32 / 365.0 * (day as f32 + 284.0)).to_radians()).sin();
     // Hour angle: 0 at solar noon, negative = morning
     let h = (15.0_f32 * (hour - 12.0)).to_radians();
     // Elevation
@@ -532,7 +531,11 @@ fn sun_position(lat_rad: f32, day: i32, hour: f32) -> (f32, f32) {
     } else {
         let cos_az = (decl.sin() - sin_el * lat_rad.sin()) / (cos_el * lat_rad.cos());
         let az = cos_az.clamp(-1.0, 1.0).acos();
-        if h > 0.0 { TAU - az } else { az }
+        if h > 0.0 {
+            TAU - az
+        } else {
+            az
+        }
     };
     (azimuth, elevation)
 }

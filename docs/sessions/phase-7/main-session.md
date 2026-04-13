@@ -623,3 +623,82 @@ by blending the transition zone.
 
 ### Open items for this phase
 - GPU timestamp queries (explicitly deferred — low priority)
+
+---
+
+## 2026-04-12 (session 10)
+
+### What was built
+
+**Geographically correct sun position (replacing fixed-elevation azimuth rotation).**
+
+Replaced `sun_azimuth`/`sun_elevation` fields with:
+- `sim_day: i32` — day of year 1–365
+- `sim_hour: f32` — solar time 0.0–24.0
+- `lat_rad: f32` — tile centre latitude in radians (derived from `hm.origin_lat` and `hm.dy_deg`)
+- `day_accum: f32` — fractional day accumulator for sub-frame `[`/`]` key increments
+
+Free function `sun_position(lat_rad, day, hour) -> (azimuth, elevation)` using Spencer 1971:
+```rust
+let decl = 23.45_f32.to_radians()
+    * ((360.0 / 365.0 * (day as f32 + 284.0)).to_radians()).sin();
+let h    = (15.0 * (hour - 12.0)).to_radians();  // solar hour angle
+let sin_el = lat_rad.sin()*decl.sin() + lat_rad.cos()*decl.cos()*h.cos();
+let elevation = sin_el.clamp(-1.0, 1.0).asin();
+let cos_az = (decl.sin() - sin_el*lat_rad.sin()) / (elevation.cos()*lat_rad.cos());
+let azimuth = if h > 0.0 { TAU - cos_az.acos() } else { cos_az.acos() };
+```
+Key controls: `+`/`-` change `sim_hour` at 0.4 hrs/s (4 hrs/s boosted); `[`/`]` change `sim_day` via `day_accum`. Shadow only dispatched when `elevation > 0.0`.
+
+**CPU normals replace GPU-computed normals in `GpuScene::new()`.**
+
+Removed the 157-line throw-away GPU compute pipeline (shader compile + dispatch + poll) and replaced with three `create_buffer_init` DMA uploads from the `NormalMap` computed by `terrain::compute_normals_vector_par`. `GpuScene::new()` signature gains a `normal_map: &NormalMap` parameter; all call sites updated.
+
+**Sun / Season HUD — `SunIndicator` struct + `shader_sun_hud.wgsl`.**
+
+`src/viewer/shader_sun_hud.wgsl` — new SDF circle shader:
+- Full-screen NDC vertex pass; all math in fragment shader using `@builtin(position)` pixel coords
+- `frag_angle(p, center)` — angle clockwise from top (0 = up, π/2 = right)
+- `season_col(angle)` — season-coloured outer ring: yellow/orange/blue/green by angular sector
+- `draw_circle(p, center, r, needle, kind)` — semi-transparent disc + coloured ring + 4 tick marks + yellow SDF needle + white centre dot
+- `SunHud` uniform (48 bytes): `screen_w/h`, `cx1/cy1` (season), `cx2/cy2` (time), `radius`, `day_angle`, `hour_angle`, `_pad×3`
+- `discard` guard: fragments outside both circles cost nearly nothing
+
+`SunIndicator` struct in `hud_renderer.rs`:
+- `pipeline`, `vertex_buf` (static NDC quad, 6 vertices), `uniform_buf` (48 bytes, written every frame), `bind_group`
+- Cached `cx`, `cy1`, `cy2` so `HudRenderer::draw()` can position text labels
+- Constants: `RADIUS=50`, `RIGHT_MARGIN=80` (room for right-side labels), `BOTTOM_OFFSET=118`, `GAP=60`
+
+**Angular reference (Summer=top, 12:00=top).**
+
+Season circle uses a 365-day face with summer solstice at 12 o'clock:
+```rust
+day_angle = (sim_day as f32 - 172.0).rem_euclid(365.0) / 365.0 * TAU
+```
+Time circle uses a 12-hour clock face with noon at 12 o'clock:
+```rust
+hour_angle = (sim_hour % 12.0) / 12.0 * TAU
+```
+
+Season tick angles: `0` (Summer), `93/365·τ` (Fall), `183/365·τ` (Winter), `273/365·τ` (Spring).
+Time tick angles: `0` (12:00), `τ/4` (15:00), `τ/2` (18:00), `3τ/4` (21:00).
+
+**Text label system — 10 glyphon buffers.**
+
+- 8 static cardinal labels: "Summer" (above), "Winter" (below), "Fall" (right), "Spring" (left) for season circle; "12:00"/"18:00"/"15:00"/"21:00" for time circle
+- 2 dynamic current-value labels: "Day 156" right-aligned at 10-11 o'clock outside season ring; "17:44" at 10-11 o'clock outside time ring
+- Helper functions: `make_small_label()`, `make_current_label()`, `label_area()` reduce boilerplate
+
+### Key concepts
+
+- **Solar declination (Spencer 1971)**: `δ = 23.45° × sin(360°/365 × (day + 284))` — gives declination in radians for any day of year. Combined with solar hour angle `H = 15° × (hour − 12)` and observer latitude, gives sun elevation and azimuth.
+- **Solar hour angle**: `H = 15° × (hour − 12)` — 0 at noon, negative in the morning, positive in the afternoon. Used to flip the azimuth formula for AM vs PM.
+- **`create_buffer_init` vs GPU compute for normals**: throwing away a compute pipeline after one use compiles the shader, builds a pipeline object, dispatches, and polls — O(100ms) on first call. `create_buffer_init` is a DMA memcpy: same data, 1000× cheaper.
+- **SDF circle in a fragment shader**: place a full-screen NDC quad so every screen pixel runs the fragment shader. Compute `d = length(p - center)`. Everything else — ring, disc, needle, ticks — is analytic distance field math in pixel space. `discard` for `d > r + margin` prunes 99% of pixels to near-zero cost.
+- **`frag_angle` clockwise from top**: `atan2(dp.x, -dp.y)` — negating `dp.y` flips the Y axis (pixel space is Y-down), giving clockwise angle with 0 at the top. Add `TAU` if negative to map to `[0, TAU)`.
+- **12h clock face for a 24h variable**: `(hour % 12.0) / 12.0 * TAU` maps 12:00 and 24:00 both to 0 (top), 18:00 to `τ/2` (bottom). Noon and midnight share the same visual position, which is correct for a solar-time indicator where only AM/PM matters for the sun.
+- **`rem_euclid` for angular wrap**: `(day - 172).rem_euclid(365)` gives days-after-solstice wrapping correctly for days 1–171 (which are after the previous winter). Unlike `%`, `rem_euclid` is always non-negative.
+- **`day_accum` for smooth key-driven increments**: accumulate fractional days each frame at `dt × speed`; only advance `sim_day` when `day_accum ≥ 1.0`, keeping the remainder. Without this, `[`/`]` at 60fps would require 60 key-presses per day.
+
+### Open items for this phase
+- GPU timestamp queries (explicitly deferred — low priority)

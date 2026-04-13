@@ -229,12 +229,16 @@ Known open items carried into Phase 7:
 - Picture quality: ✅ bilinear height sampling, ✅ smooth color bands, ✅ normal interpolation, ✅ atmospheric fog, ✅ sphere tracing (adaptive step + sky early exit) — all implemented
 - ✅ Window resize handling — implemented with `render_width` alignment
 - ✅ HUD text overlay (`glyphon`) — fps counter top-left, hint bottom-center, semi-transparent background quads
-- `src/viewer/hud_renderer.rs` — `HudBackground` (pipeline, vertex/uniform buffers, draw), `HudRenderer` (all HUD state, `new/update_size/draw`), `shader_hud_bg.wgsl`
+- `src/viewer/hud_renderer.rs` — `HudBackground`, `SunIndicator`, `HudRenderer`; 10 glyphon buffers (8 static cardinal labels + 2 dynamic current-value); `label_area()`, `make_small_label()`, `make_current_label()` helpers
+- `src/viewer/shader_sun_hud.wgsl` — SDF season/time circles; `season_col()` (Summer=top), tick marks at cardinal solstice/equinox/hour positions; yellow needle; `discard` guard
 - HUD toggle: E key shows/hides HUD (`hud_visible: bool`)
 - Speed boost: Cmd (Mac) / Alt (Win) held → 5000 m/s movement speed (`speed_boost: bool`)
-- ✅ Sun animation: +/- keys rotate azimuth at 6°/s (60°/s speed boost); `sun_azimuth`/`sun_elevation` fields; `sun_dir` derived each frame
+- ✅ Sun animation: `+`/`-` keys change `sim_hour` at 0.4 hrs/s; `[`/`]` keys change `sim_day` via `day_accum` accumulator; both 10× faster with speed boost
+- ✅ Geographically correct sun position: Spencer 1971 solar declination + hour angle → elevation/azimuth; `lat_rad` derived from tile centre; shadow only dispatched when `elevation > 0.0`
+- ✅ CPU normals in GpuScene: removed 157-line throw-away GPU compute pipeline; replaced with three `create_buffer_init` DMA uploads; `GpuScene::new()` takes `normal_map: &NormalMap`
 - ✅ Background shadow thread: `Arc<Heightmap>` shared with persistent worker via `mpsc::sync_channel(1)`; `shadow_computing` gate; shadow updates every frame with ~0 visual lag
 - ✅ Soft shadows: `penumbra_meters: f32` added to all shadow variants; formula `(1.0 - margin/T).max(0.0)`; default 200.0m; eliminates shadow boundary aliasing at slow sun speed
+- ✅ Sun/Season HUD: `SunIndicator` (SDF circles via `shader_sun_hud.wgsl`) + 10 glyphon text labels; season circle (Summer=top, Winter=bottom, season-coloured ring); time circle (12h face, 12:00=top, 18:00=bottom); "Day N" + "HH:MM" current-value labels; RIGHT_MARGIN=80, BOTTOM_OFFSET=118, GAP=60
 - Normal map smoothing and heightmap smoothing: both tried and reverted. Gaussian blur on normals (GPU pass) and on height values (CPU pre-processing) both reduce the staircase artifact but soften real terrain detail too much. Accepted as a fundamental DEM resolution limitation (~20m/cell). Not worth the trade-off.
 
 Known open items from Phase 4:
