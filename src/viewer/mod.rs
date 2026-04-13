@@ -42,9 +42,11 @@ struct Viewer {
     // hud
     hud_renderer: Option<HudRenderer>,
     hud_visible: bool,
-    // sun animation
-    sun_azimuth: f32,
-    sun_elevation: f32,
+    // sun animation — date/time driven
+    sim_day: i32,        // 1–365
+    sim_hour: f32,       // 0.0–24.0 solar time
+    lat_rad: f32,        // tile centre latitude (radians)
+    day_accum: f32,      // fractional day accumulator for [ / ] keys
     shadow_tx: mpsc::SyncSender<(f32, f32)>,
     shadow_rx: mpsc::Receiver<ShadowMask>,
     shadow_computing: bool,
@@ -198,28 +200,31 @@ impl ApplicationHandler for Viewer {
                     self.cam_pos[2] + fwd[2],
                 ];
 
-                // advance sun azimuth
-                let sun_speed = if self.speed_boost {
-                    std::f32::consts::PI / 3.0  // 60°/s
-                } else {
-                    std::f32::consts::PI / 30.0 // 6°/s
-                };
+                // advance time (+/-) and day ([ / ])
+                let time_speed = if self.speed_boost { 4.0_f32 } else { 0.4_f32 }; // hours/s
+                let day_speed  = if self.speed_boost { 10.0_f32 } else { 1.0_f32 }; // days/s
                 if self.keys_held.contains(&KeyCode::Equal) {
-                    self.sun_azimuth = (self.sun_azimuth + sun_speed * dt)
-                        .rem_euclid(std::f32::consts::TAU);
+                    self.sim_hour = (self.sim_hour + time_speed * dt).rem_euclid(24.0);
                 }
                 if self.keys_held.contains(&KeyCode::Minus) {
-                    self.sun_azimuth = (self.sun_azimuth - sun_speed * dt)
-                        .rem_euclid(std::f32::consts::TAU);
+                    self.sim_hour = (self.sim_hour - time_speed * dt).rem_euclid(24.0);
+                }
+                if self.keys_held.contains(&KeyCode::BracketRight) {
+                    self.day_accum += day_speed * dt;
+                }
+                if self.keys_held.contains(&KeyCode::BracketLeft) {
+                    self.day_accum -= day_speed * dt;
+                }
+                if self.day_accum.abs() >= 1.0 {
+                    let steps = self.day_accum.trunc() as i32;
+                    self.sim_day = (self.sim_day + steps - 1).rem_euclid(365) + 1;
+                    self.day_accum = self.day_accum.fract();
                 }
 
-                // derive sun direction vector from azimuth + elevation
-                let r = self.sun_elevation.cos();
-                let sun_dir = [
-                    r * self.sun_azimuth.sin(),
-                    -r * self.sun_azimuth.cos(),
-                    self.sun_elevation.sin(),
-                ];
+                // derive sun direction from geographic solar position
+                let (azimuth, elevation) = sun_position(self.lat_rad, self.sim_day, self.sim_hour);
+                let r = elevation.cos();
+                let sun_dir = [r * azimuth.sin(), -r * azimuth.cos(), elevation.sin()];
 
                 // pick up finished shadow mask if ready
                 if let Ok(new_mask) = self.shadow_rx.try_recv() {
@@ -230,14 +235,9 @@ impl ApplicationHandler for Viewer {
                     self.shadow_computing = false;
                 }
 
-                // kick off next shadow recompute if worker is free
-                if !self.shadow_computing {
-                    // try_send: if channel is full (shouldn't happen since capacity=1
-                    // and we only send when shadow_computing=false), drop silently
-                    if self.shadow_tx
-                        .try_send((self.sun_azimuth, self.sun_elevation))
-                        .is_ok()
-                    {
+                // kick off next shadow recompute if worker is free and sun is above horizon
+                if !self.shadow_computing && elevation > 0.0 {
+                    if self.shadow_tx.try_send((azimuth, elevation)).is_ok() {
                         self.shadow_computing = true;
                     }
                 }
@@ -452,7 +452,7 @@ impl ApplicationHandler for Viewer {
 }
 
 pub fn run(tile_path: &Path, width: u32, height: u32, vsync: bool) {
-    let (scene, hm, sun_azimuth, sun_elevation) = prepare_scene(tile_path, width, height);
+    let (scene, hm, lat_rad) = prepare_scene(tile_path, width, height);
     let dx: f32 = scene.get_dx_meters();
     let dy: f32 = scene.get_dy_meters();
 
@@ -500,8 +500,10 @@ pub fn run(tile_path: &Path, width: u32, height: u32, vsync: bool) {
         speed_boost: false,
         hud_renderer: None,
         hud_visible: true,
-        sun_azimuth,
-        sun_elevation,
+        sim_day: 172,
+        sim_hour: 10.0,
+        lat_rad,
+        day_accum: 0.0,
         shadow_tx,
         shadow_rx,
         shadow_computing: false,
@@ -511,7 +513,31 @@ pub fn run(tile_path: &Path, width: u32, height: u32, vsync: bool) {
         .expect("error running app from event loop in run viewer method");
 }
 
-fn prepare_scene(tile_path: &Path, width: u32, height: u32) -> (GpuScene, Arc<Heightmap>, f32, f32) {
+/// Geographic solar position (Spencer 1971 declination approximation).
+/// Returns (azimuth_rad, elevation_rad) where azimuth is measured clockwise from North.
+fn sun_position(lat_rad: f32, day: i32, hour: f32) -> (f32, f32) {
+    use std::f32::consts::TAU;
+    // Solar declination
+    let decl = 23.45_f32.to_radians()
+        * ((360.0_f32 / 365.0 * (day as f32 + 284.0)).to_radians()).sin();
+    // Hour angle: 0 at solar noon, negative = morning
+    let h = (15.0_f32 * (hour - 12.0)).to_radians();
+    // Elevation
+    let sin_el = lat_rad.sin() * decl.sin() + lat_rad.cos() * decl.cos() * h.cos();
+    let elevation = sin_el.clamp(-1.0, 1.0).asin();
+    // Azimuth from North, clockwise
+    let cos_el = elevation.cos();
+    let azimuth = if cos_el < 1e-6 {
+        0.0
+    } else {
+        let cos_az = (decl.sin() - sin_el * lat_rad.sin()) / (cos_el * lat_rad.cos());
+        let az = cos_az.clamp(-1.0, 1.0).acos();
+        if h > 0.0 { TAU - az } else { az }
+    };
+    (azimuth, elevation)
+}
+
+fn prepare_scene(tile_path: &Path, width: u32, height: u32) -> (GpuScene, Arc<Heightmap>, f32) {
     let hm: Heightmap = match dem_io::parse_bil(tile_path) {
         Ok(hm) => hm,
         Err(error) => panic!(
@@ -522,15 +548,17 @@ fn prepare_scene(tile_path: &Path, width: u32, height: u32) -> (GpuScene, Arc<He
 
     let normal_map = terrain::compute_normals_vector_par(&hm);
 
-    const SUN_DIR: [f32; 3] = [0.4, 0.5, 0.7];
-    let sun_azimuth_rad = (SUN_DIR[0]).atan2(-SUN_DIR[1]);
-    let sun_elevation_rad = SUN_DIR[2].atan2((SUN_DIR[0].powi(2) + SUN_DIR[1].powi(2)).sqrt());
+    // tile centre latitude — origin_lat is north edge of row 0
+    let center_lat = hm.origin_lat - (hm.rows as f64 / 2.0) * hm.dy_deg.abs();
+    let lat_rad = (center_lat as f32).to_radians();
+
+    let (init_az, init_el) = sun_position(lat_rad, 172, 10.0);
     let shadow_mask: ShadowMask =
-        terrain::compute_shadow_vector_par_with_azimuth(&hm, sun_azimuth_rad, sun_elevation_rad, 200.0);
+        terrain::compute_shadow_vector_par_with_azimuth(&hm, init_az, init_el, 200.0);
 
     let gpu_ctx: GpuContext = GpuContext::new();
     let hm = Arc::new(hm);
     let scene: GpuScene = GpuScene::new(gpu_ctx, &hm, &normal_map, &shadow_mask, width, height);
 
-    (scene, hm, sun_azimuth_rad, sun_elevation_rad)
+    (scene, hm, lat_rad)
 }
