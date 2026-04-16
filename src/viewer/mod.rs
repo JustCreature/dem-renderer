@@ -26,6 +26,7 @@ struct Viewer {
     height: u32,
     render_width: u32,
     vsync: bool,
+    ao_mode: u32,
     // fps counter
     fps_timer: std::time::Instant,
     frame_count: u32,
@@ -257,6 +258,7 @@ impl ApplicationHandler for Viewer {
                     sun_dir,
                     scene.get_dx_meters() / 5.0,
                     200_000.0,
+                    self.ao_mode,
                 );
                 let output_buf: &wgpu::Buffer = scene.get_output_buffer();
 
@@ -291,6 +293,7 @@ impl ApplicationHandler for Viewer {
                         1000.0,
                         self.sim_day,
                         self.sim_hour,
+                        self.ao_mode,
                     );
                 }
 
@@ -345,6 +348,10 @@ impl ApplicationHandler for Viewer {
                     }
                     if kc == KeyCode::KeyE && event.state == winit::event::ElementState::Pressed {
                         self.hud_visible = !self.hud_visible;
+                        return;
+                    }
+                    if kc == KeyCode::Slash && event.state == winit::event::ElementState::Pressed {
+                        self.ao_mode = (self.ao_mode + 1).rem_euclid(6);
                         return;
                     }
                     if kc == KeyCode::SuperLeft || kc == KeyCode::AltLeft {
@@ -484,6 +491,7 @@ pub fn run(tile_path: &Path, width: u32, height: u32, vsync: bool) {
         height,
         render_width: width,
         vsync,
+        ao_mode: 0,
         // fps counter
         fps_timer: std::time::Instant::now(),
         frame_count: 0,

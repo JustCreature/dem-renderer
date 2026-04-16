@@ -454,6 +454,7 @@ fn main() {
             pic_height,
             heightmap.dx_meters as f32 / step_size,
             200_000.0,
+            0,
         )
     });
     println!(
@@ -483,6 +484,7 @@ fn main() {
             pic_height,
             heightmap.dx_meters as f32 / step_size,
             200_000.0,
+            0,
         )
     });
     println!(
@@ -511,6 +513,7 @@ fn main() {
             pic_height,
             heightmap.dx_meters as f32 / step_size,
             200_000.0,
+            0,
         )
     });
     println!(
@@ -531,7 +534,12 @@ fn main() {
     benchmark_multi_frame_gpu_separate(&gpu_ctx, &heightmap, &normal_map, &shadow_mask);
     benchmark_multi_frame_gpu_combined(&gpu_ctx, &heightmap, &shadow_mask);
     // GpuScene takes ctx by value (owns it) — create a dedicated one
-    benchmark_multi_frame_gpu_scene(render_gpu::GpuContext::new(), &heightmap, &normal_map, &shadow_mask);
+    benchmark_multi_frame_gpu_scene(
+        render_gpu::GpuContext::new(),
+        &heightmap,
+        &normal_map,
+        &shadow_mask,
+    );
 
     render_gif::render_gif(tile_path);
 
@@ -585,6 +593,7 @@ fn main() {
                 2667,
                 heightmap.dx_meters as f32 / 0.8,
                 200_000.0,
+                0,
             )
         });
         println!("valley render: {:.2}s", ticks as f64 / counter_frequency());

@@ -27,12 +27,12 @@ pub struct CameraUniforms {
     pub dy_meters: f32,
     pub step_m: f32,
     pub t_max: f32,
+    pub ao_mode: u32,
     pub _pad5: f32, // pad to 16-byte boundary
     pub _pad6: f32,
     pub _pad7: f32,
     pub _pad8: f32,
     pub _pad9: f32,
-    pub _pad10: f32,
 }
 
 impl CameraUniforms {
@@ -47,6 +47,7 @@ impl CameraUniforms {
         img_height: u32,
         step_m: f32,
         t_max: f32,
+        ao_mode: u32,
     ) -> CameraUniforms {
         let forward: [f32; 3] = normalize(sub(look_at, origin));
         let right: [f32; 3] = normalize(cross(forward, [0.0, 0.0, 1.0]));
@@ -76,12 +77,12 @@ impl CameraUniforms {
             dy_meters: hm.dy_meters as f32,
             step_m,
             t_max,
+            ao_mode,
             _pad5: 0.0,
             _pad6: 0.0,
             _pad7: 0.0,
             _pad8: 0.0,
             _pad9: 0.0,
-            _pad10: 0.0,
         }
     }
 }

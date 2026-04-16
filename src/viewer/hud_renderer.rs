@@ -12,6 +12,7 @@ pub struct HudRenderer {
     text_renderer: glyphon::TextRenderer,
     fps_buffer: glyphon::Buffer,
     hint_buffer: glyphon::Buffer,
+    settings_buffer: glyphon::Buffer,
     // Cardinal labels around season circle (static)
     lbl_summer: glyphon::Buffer,
     lbl_fall: glyphon::Buffer,
@@ -66,7 +67,7 @@ impl HudBackground {
 
         let vertex_buf = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("vertex_buf"),
-            size: 96,
+            size: 144,
             mapped_at_creation: false,
             usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
         });
@@ -148,11 +149,11 @@ impl HudBackground {
         rpass.set_pipeline(&self.pipeline);
         rpass.set_bind_group(0, &self.bind_group, &[]);
         rpass.set_vertex_buffer(0, self.vertex_buf.slice(..));
-        rpass.draw(0..12, 0..1);
+        rpass.draw(0..18, 0..1);
     }
 }
 
-fn build_vertices(width: u32, height: u32) -> [f32; 24] {
+fn build_vertices(width: u32, height: u32) -> [f32; 36] {
     [
         //For the fps box (x0=4, y0=4, x1=180, y1=36):
         // triangle 1
@@ -184,6 +185,21 @@ fn build_vertices(width: u32, height: u32) -> [f32; 24] {
         height as f32 - 4.0, // (x1, y1)
         0.0,
         height as f32 - 4.0, // (x0, y1)
+        //For the settings box (x0=width-296, y0=4, x1=width-4, y1=36):
+        // triangle 1
+        width as f32 - 296.0,
+        4.0, // (x0, y0)
+        width as f32 - 4.0,
+        4.0, // (x1, y0)
+        width as f32 - 4.0,
+        36.0, // (x1, y1)
+        // triangle 2
+        width as f32 - 296.0,
+        4.0,
+        width as f32 - 4.0,
+        36.0,
+        width as f32 - 296.0,
+        36.0,
     ]
 }
 
@@ -491,6 +507,16 @@ impl HudRenderer {
             glyphon::Shaping::Basic,
             Some(glyphon::cosmic_text::Align::Center),
         );
+        let mut settings_buffer: glyphon::Buffer =
+            glyphon::Buffer::new(&mut font_system, glyphon::Metrics::new(18.0, 20.0));
+        settings_buffer.set_size(&mut font_system, Some(292.0), Some(40.0));
+        settings_buffer.set_text(
+            &mut font_system,
+            "AO: Off             (Press / to change)",
+            &glyphon::Attrs::new(),
+            glyphon::Shaping::Basic,
+            Some(glyphon::cosmic_text::Align::Right),
+        );
         // Static cardinal labels
         let lbl_summer = make_small_label(&mut font_system, "Summer");
         let lbl_fall = make_small_label(&mut font_system, "Fall");
@@ -516,6 +542,7 @@ impl HudRenderer {
             text_renderer,
             fps_buffer,
             hint_buffer,
+            settings_buffer,
             lbl_summer,
             lbl_fall,
             lbl_winter,
@@ -556,6 +583,7 @@ impl HudRenderer {
         ms: f32,
         sim_day: i32,
         sim_hour: f32,
+        ao_mode: u32,
     ) {
         self.sim_day = sim_day;
         self.sim_hour = sim_hour;
@@ -588,6 +616,21 @@ impl HudRenderer {
             &glyphon::Attrs::new(),
             glyphon::Shaping::Basic,
             None,
+        );
+        let ao_label = match ao_mode {
+            0 => "AO: Off          (Press / to change)",
+            1 => "AO: SSAO ×8      (Press / to change)",
+            2 => "AO: SSAO ×16     (Press / to change)",
+            3 => "AO: HBAO ×4      (Press / to change)",
+            4 => "AO: HBAO ×8      (Press / to change)",
+            _ => "AO: True Hemi    (Press / to change)",
+        };
+        self.settings_buffer.set_text(
+            &mut self.font_system,
+            ao_label,
+            &glyphon::Attrs::new(),
+            glyphon::Shaping::Basic,
+            Some(glyphon::cosmic_text::Align::Right),
         );
         self.viewport.update(
             queue,
@@ -629,6 +672,21 @@ impl HudRenderer {
                     glyphon::TextArea {
                         buffer: &self.fps_buffer,
                         left: 10.0,
+                        top: 10.0,
+                        scale: 1.0,
+                        bounds: glyphon::TextBounds {
+                            left: 0,
+                            top: 0,
+                            right: w as i32,
+                            bottom: h as i32,
+                        },
+                        default_color: glyphon::Color::rgb(255, 255, 255),
+                        custom_glyphs: &[],
+                    },
+                    //Settings
+                    glyphon::TextArea {
+                        buffer: &self.settings_buffer,
+                        left: w as f32 - 298.0,
                         top: 10.0,
                         scale: 1.0,
                         bounds: glyphon::TextBounds {

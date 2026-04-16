@@ -122,6 +122,7 @@ pub(crate) fn benchmark_multi_frame_gpu_separate(
             PIC_HEIGHT,
             step_m,
             T_MAX,
+            0,
         );
     }
 
@@ -142,6 +143,7 @@ pub(crate) fn benchmark_multi_frame_gpu_separate(
             PIC_HEIGHT,
             step_m,
             T_MAX,
+            0,
         ));
     }
     let total_s = (profiling::now() - t0) as f64 / counter_frequency();
@@ -168,19 +170,26 @@ pub(crate) fn benchmark_multi_frame_gpu_scene(
     let step_m = heightmap.dx_meters as f32 / STEP_SIZE;
     let aspect = PIC_WIDTH as f32 / PIC_HEIGHT as f32;
 
-    let scene = render_gpu::GpuScene::new(gpu_ctx, heightmap, normal_map, shadow_mask, PIC_WIDTH, PIC_HEIGHT);
+    let scene = render_gpu::GpuScene::new(
+        gpu_ctx,
+        heightmap,
+        normal_map,
+        shadow_mask,
+        PIC_WIDTH,
+        PIC_HEIGHT,
+    );
 
     // Warm-up: Metal compiles the render pipeline on first dispatch
     {
         let (origin, look_at) = frame_cam(0, dx, dy);
-        let _ = scene.render_frame(origin, look_at, FOV_DEG, aspect, SUN_DIR, step_m, T_MAX);
+        let _ = scene.render_frame(origin, look_at, FOV_DEG, aspect, SUN_DIR, step_m, T_MAX, 0);
     }
 
     let t0 = profiling::now();
     for i in 0..N_FRAMES {
         let (origin, look_at) = frame_cam(i, dx, dy);
         let _ = std::hint::black_box(
-            scene.render_frame(origin, look_at, FOV_DEG, aspect, SUN_DIR, step_m, T_MAX),
+            scene.render_frame(origin, look_at, FOV_DEG, aspect, SUN_DIR, step_m, T_MAX, 0),
         );
     }
     let total_s = (profiling::now() - t0) as f64 / counter_frequency();
@@ -222,6 +231,7 @@ pub(crate) fn benchmark_multi_frame_gpu_combined(
             PIC_HEIGHT,
             step_m,
             T_MAX,
+            0,
         );
     }
 
@@ -241,6 +251,7 @@ pub(crate) fn benchmark_multi_frame_gpu_combined(
             PIC_HEIGHT,
             step_m,
             T_MAX,
+            0,
         ));
     }
     let total_s = (profiling::now() - t0) as f64 / counter_frequency();

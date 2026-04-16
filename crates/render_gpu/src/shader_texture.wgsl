@@ -19,12 +19,12 @@ struct CameraUniforms {
     dy_meters: f32,
     step_m: f32,
     t_max: f32,
+    ao_mode: u32,
     _pad5: f32,
     _pad6: f32,
     _pad7: f32,
     _pad8: f32,
     _pad9: f32,
-    _pad10: f32,
 }
 
 // camera uniforms struct

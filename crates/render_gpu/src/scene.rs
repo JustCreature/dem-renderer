@@ -331,6 +331,7 @@ impl GpuScene {
         sun_dir: [f32; 3],
         step_m: f32,
         t_max: f32,
+        ao_mode: u32,
     ) -> Vec<u8> {
         // Build camera uniforms inline (no hm needed — scalars stored in scene)
         let forward = crate::vector_utils::normalize(crate::vector_utils::sub(look_at, origin));
@@ -361,12 +362,12 @@ impl GpuScene {
             dy_meters: self.dy_meters,
             step_m,
             t_max,
+            ao_mode,
             _pad5: 0.0,
             _pad6: 0.0,
             _pad7: 0.0,
             _pad8: 0.0,
             _pad9: 0.0,
-            _pad10: 0.0,
         };
 
         self.gpu_ctx
@@ -429,6 +430,7 @@ impl GpuScene {
         sun_dir: [f32; 3],
         step_m: f32,
         t_max: f32,
+        ao_mode: u32,
     ) {
         // Build camera uniforms inline (no hm needed — scalars stored in scene)
         let forward = crate::vector_utils::normalize(crate::vector_utils::sub(look_at, origin));
@@ -459,12 +461,12 @@ impl GpuScene {
             dy_meters: self.dy_meters,
             step_m,
             t_max,
+            ao_mode,
             _pad5: 0.0,
             _pad6: 0.0,
             _pad7: 0.0,
             _pad8: 0.0,
             _pad9: 0.0,
-            _pad10: 0.0,
         };
 
         self.gpu_ctx

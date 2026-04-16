@@ -19,6 +19,7 @@ pub fn render_gpu_combined(
     height: u32,
     step_m: f32,
     t_max: f32,
+    ao_mode: u32,
 ) -> Vec<u8> {
     // ── heightmap texture (shared between normals pass and render pass) ───
     let hm_f32: Vec<f32> = hm.data.iter().map(|&v| v as f32).collect();
@@ -216,7 +217,7 @@ pub fn render_gpu_combined(
 
     // ── render pipeline ───────────────────────────────────────────────────
     let cam = CameraUniforms::new(
-        origin, look_at, fov_deg, aspect, hm, sun_dir, width, height, step_m, t_max,
+        origin, look_at, fov_deg, aspect, hm, sun_dir, width, height, step_m, t_max, ao_mode,
     );
     let cam_buf = gpu_ctx
         .device

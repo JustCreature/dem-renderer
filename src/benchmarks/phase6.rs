@@ -1372,6 +1372,7 @@ pub(crate) fn bench_fps(
             FPS_HEIGHT,
             step_m,
             FPS_T_MAX,
+            0,
         );
     }
 
@@ -1391,6 +1392,7 @@ pub(crate) fn bench_fps(
             FPS_HEIGHT,
             step_m,
             FPS_T_MAX,
+            0,
         ));
     }
     let gpu_s = (profiling::now() - t0) as f64 / counter_frequency();
@@ -1407,7 +1409,14 @@ pub(crate) fn bench_fps(
     const FPS_FRAMES_G: usize = 30 * 10;
     {
         let scene_ctx = render_gpu::GpuContext::new();
-        let scene = render_gpu::GpuScene::new(scene_ctx, hm, normal_map, shadow_mask, FPS_WIDTH, FPS_HEIGHT);
+        let scene = render_gpu::GpuScene::new(
+            scene_ctx,
+            hm,
+            normal_map,
+            shadow_mask,
+            FPS_WIDTH,
+            FPS_HEIGHT,
+        );
         let ctx = scene.get_gpu_ctx();
 
         // warm-up
@@ -1427,6 +1436,7 @@ pub(crate) fn bench_fps(
                 FPS_SUN_DIR,
                 step_m,
                 FPS_T_MAX,
+                0,
             );
             ctx.queue.submit([enc.finish()]);
             let _ = ctx.device.poll(wgpu::PollType::Wait {
@@ -1452,6 +1462,7 @@ pub(crate) fn bench_fps(
                 FPS_SUN_DIR,
                 step_m,
                 FPS_T_MAX,
+                0,
             );
             std::hint::black_box(ctx.queue.submit([enc.finish()]));
             let _ = ctx.device.poll(wgpu::PollType::Wait {

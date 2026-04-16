@@ -843,3 +843,76 @@ No code written. Three topics explored and formalised into `docs/planning/viewer
 ### Open items for this phase
 - GPU timestamp queries (explicitly deferred — low priority)
 - Implement viewer improvements from `viewer-improvements-plan.md` (AO first)
+
+---
+
+## 2026-04-16 (session 13)
+
+### What was covered
+
+**AO infrastructure (step C) — key binding, scene uniform, settings HUD.**
+
+All wiring done; no shader AO logic yet.
+
+#### Plan update: 6 AO modes instead of 4
+
+Expanded the mode list to give each sample count its own slot — makes the scaling curve directly measurable:
+
+| Mode | ao_mode | Notes |
+|---|---|---|
+| Off | 0 | Baseline |
+| SSAO ×8 | 1 | N=8 random hemisphere samples |
+| SSAO ×16 | 2 | N=16; measures whether fps drops 2× or more |
+| HBAO ×4 | 3 | D=4 directions |
+| HBAO ×8 | 4 | D=8; diagonal stride penalty measurable |
+| True Hemi | 5 | Precomputed, render-time = one texture fetch |
+
+`rem_euclid(6)` wraps the cycle. One shader with uniform branch on `ao_mode` — zero wave divergence since all threads share the same mode value.
+
+`ao_mode` lives on the scene uniform (with camera/render parameters), not the sun HUD uniform. Settings HUD is a new separate panel, extensible for future settings.
+
+`viewer-improvements-plan.md` updated to reflect 6 modes, uniform branch rationale, and settings HUD.
+
+#### Code changes
+
+**`crates/render_gpu/src/camera.rs`**
+- `ao_mode: u32` added to `CameraUniforms` struct (replaced `_pad5`)
+- Passed through `CameraUniforms::new()`
+
+**`crates/render_gpu/src/scene.rs`**
+- Both `CameraUniforms::new()` call sites (lines 334, 433) now take `ao_mode`
+
+**`crates/render_gpu/src/shader_texture.wgsl`**
+- `ao_mode: u32` added to WGSL `CameraUniforms` struct (same byte position as Rust)
+- Not yet read by shader logic — wired but unused until AO modes implemented
+
+**`src/viewer/mod.rs`**
+- `ao_mode: u32` field on `Viewer`, initialised to `0`
+- `/` key (`KeyCode::Slash`) handler: `self.ao_mode = (self.ao_mode + 1).rem_euclid(6)`
+- `ao_mode` passed to both `CameraUniforms::new()` and `hud_renderer.draw()`
+
+**`src/viewer/hud_renderer.rs`**
+- `settings_buffer: glyphon::Buffer` field — top-right settings HUD label
+- `draw()` signature extended with `ao_mode: u32`
+- `match ao_mode` produces label string (`"AO: Off  (Press / to change)"` etc.)
+- `settings_buffer.set_text()` called each frame with current label
+- `build_vertices` extended to `[f32; 36]` — third rect for settings background (top-right, `x0=w-296, x1=w-4, y0=4, y1=36`)
+- GPU buffer size: `96 → 144` bytes; draw call: `0..12 → 0..18`
+- TextArea added for `settings_buffer` at `left: w - 292.0, top: 10.0`
+
+#### Key concepts discussed
+
+- **Wave / warp / wavefront**: GPU executes threads in fixed-size lockstep groups (~32 threads on NVIDIA, 64 on AMD). All threads in a wave execute the same instruction each cycle. A uniform branch (same condition for all threads) costs ~zero — the wave takes one path. A divergent branch (different threads take different paths) forces both paths to execute with masks — up to 2× cost.
+- **`rem_euclid` vs `%`**: `%` on signed integers can return negative values; `rem_euclid` always returns non-negative. For `u32` the result is identical, but `rem_euclid` signals "wrap in a cycle" intent clearly.
+- **Two-triangle rectangle**: each rect = 2 triangles × 3 vertices × 2 floats. T1 = top-left → top-right → bottom-right; T2 = top-left → bottom-right → bottom-left. The diagonal always runs top-left to bottom-right.
+- **Buffer width must match TextArea left**: if `settings_buffer` width is 400px but `left = w - 300`, text overflows the screen by 100px. Fix: set buffer width = rect width (292px) and `left = w - 296`.
+
+### Next step
+Implement True Hemisphere AO (ao_mode == 5):
+- CPU: `compute_ao_true_hemi(hm, n_directions=16, penumbra_meters)` in `crates/terrain/src/shadow.rs` — sweep 16 evenly-spaced azimuths at elevation=0, accumulate lit fractions, average → `Vec<f32>`
+- GPU upload: convert to `u8` (× 255), upload as `R8Unorm` texture in `GpuScene::new()`
+- Shader: sample AO texture at hit UV, multiply into colour when `ao_mode == 5`
+
+### Open items for this phase
+- GPU timestamp queries (explicitly deferred — low priority)
+- AO implementation: True Hemi (next), then SSAO ×8/×16, then HBAO ×4/×8

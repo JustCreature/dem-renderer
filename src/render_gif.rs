@@ -40,8 +40,12 @@ pub(crate) fn render_gif(tile_path: &Path) {
     let sun_azimuth_rad = (SUN_DIR[0]).atan2(-SUN_DIR[1]);
     let sun_elevation_rad = SUN_DIR[2].atan2((SUN_DIR[0].powi(2) + SUN_DIR[1].powi(2)).sqrt());
 
-    let shadow_mask =
-        compute_shadow_vector_par_with_azimuth(&heightmap, sun_azimuth_rad, sun_elevation_rad, 200.0);
+    let shadow_mask = compute_shadow_vector_par_with_azimuth(
+        &heightmap,
+        sun_azimuth_rad,
+        sun_elevation_rad,
+        200.0,
+    );
     let normal_map = compute_normals_vector_par(&heightmap);
 
     let scene = render_gpu::GpuScene::new(
@@ -55,7 +59,7 @@ pub(crate) fn render_gif(tile_path: &Path) {
 
     // Warm up pipeline
     let (o, la) = frame_cam(0, dx, dy);
-    let _ = scene.render_frame(o, la, FOV_DEG, aspect, SUN_DIR, step_m, T_MAX);
+    let _ = scene.render_frame(o, la, FOV_DEG, aspect, SUN_DIR, step_m, T_MAX, 0);
 
     let out_path = "artifacts/animation.gif";
     let file = File::create(out_path).expect("cannot create artifacts/animation.gif");
@@ -66,7 +70,8 @@ pub(crate) fn render_gif(tile_path: &Path) {
 
     for i in 0..N_FRAMES {
         let (origin, look_at) = frame_cam(i, dx, dy);
-        let pixels = scene.render_frame(origin, look_at, FOV_DEG, aspect, SUN_DIR, step_m, T_MAX);
+        let pixels =
+            scene.render_frame(origin, look_at, FOV_DEG, aspect, SUN_DIR, step_m, T_MAX, 0);
 
         let img =
             RgbaImage::from_raw(GIF_WIDTH, GIF_HEIGHT, pixels).expect("pixel buffer size mismatch");
