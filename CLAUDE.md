@@ -244,6 +244,10 @@ Known open items carried into Phase 7:
 - ✅ AO infrastructure (step C): `ao_mode: u32` on `Viewer`; `/` key cycles 6 modes; `ao_mode` in `CameraUniforms` + scene uniform + `shader_texture.wgsl` (wired, not yet used); settings HUD label top-right with background rect (`build_vertices` → `[f32;36]`, buffer 144 bytes, `draw(0..18)`); `match ao_mode` → label string updated each frame
 - ✅ True Hemisphere AO (ao_mode == 5): `compute_ao_true_hemi(hm, 16, 5°, 200m)` in `terrain/lib.rs` — 16 evenly-spaced azimuth sweeps at elevation=5°, averaged → `Vec<f32>`; uploaded as `R8Unorm` texture (13 MB, `hm.cols×hm.rows`, `bytes_per_row=hm.cols`); shader uses `select(1.0, ao_sample, ao_mode==5u)` applied to ambient term only: `(ambient * ao_factor + (1.0 - ambient) * diffuse) * shadow_factor`
 - ✅ Bug fix: `.round() as usize` → `.floor() as usize` in all 22 DDA index computations across `shadow.rs` + `shadow_avx2.rs` — `.round()` caused out-of-bounds panic for boundary row values in `[N-0.5, N)` when AO swept all 16 azimuths including pure cardinals
+- ✅ SSAO ×8 and ×16 (ao_modes 1, 2): `ssao_16x_kernel` const array (16 dirs, 4 rings at 15°/30°/45°/60°); TBN frame from surface normal (`up_ref` swap for cliff faces); sample loop with `smoothstep(-50,50,z-h)` soft occlusion; radius 600m
+- ✅ HBAO ×4 and ×8 (ao_modes 3, 4): `hbao_8x_kernel` (8 horizontal 2D directions); 24 steps × 25m per direction; running max horizon angle via `atan2`; occlusion = `1-sin(max_angle)`; `probe_dist` starts at 25.0 (not 0.0 to avoid atan2 singularity)
+- ✅ True Hemi blend softened: `mix(1.0, raw_ao, 0.8)` — 80% of raw AO effect; prevents over-darkening of valleys by distant mountains
+- All 5 AO modes: no perceptible fps difference — raymarch (~500 samples/ray) dominates; SSAO/HBAO add <3%
 
 Known open items from Phase 4:
 - Supersampled ray optimization considered but not implemented: march 1 reference ray, approximate 3 neighbor heights via `h ≈ h_center + grad_x * Δcol + grad_y * Δrow` (using Phase 2 normal map). Would reduce gather 4→1 per step. Breaks at sharp discrete peaks.

@@ -978,3 +978,79 @@ Implement True Hemisphere AO (ao_mode == 5): CPU bake, GPU upload as R8Unorm tex
 - GPU timestamp queries (explicitly deferred — low priority)
 - SSAO ×8/×16 (ao_mode 1, 2)
 - HBAO ×4/×8 (ao_mode 3, 4)
+
+---
+
+## 2026-04-18 (session 15)
+
+### What was built
+
+**SSAO ×8 and ×16 (ao_modes 1 and 2) — screen-space AO in shader.**
+
+**`crates/render_gpu/src/shader_texture.wgsl`**:
+
+Kernel array extended to 16 directions — `ssao_16x_kernel: array<vec3<f32>, 16>`:
+- 4 rings at elevations 15°, 30°, 45°, 60° with 4 directions each
+- Azimuth offsets staggered between rings (0°/45°/22.5°/45°) for even coverage
+- First 8 entries (rings at 30° and 60°) used for ×8 mode; all 16 for ×16 mode
+- Directions precomputed offline: `x = cos(el)*cos(az)`, `y = cos(el)*sin(az)`, `z = sin(el)`
+
+TBN frame construction after `normal` is computed (line ~251):
+```wgsl
+let up_ref = select(vec3<f32>(1.0,0.0,0.0), vec3<f32>(0.0,1.0,0.0), abs(normal.y) < 0.9);
+let T = normalize(cross(normal, up_ref));
+let B = cross(normal, T);
+```
+`up_ref` swap avoids `cross(N, N) = 0` on cliff faces (normal nearly equal to reference).
+
+Sample loop (C-style, 0..n_samples):
+```wgsl
+let world_d = T * d.x + B * d.y + N * d.z;
+let sample_pos = pos + world_d * 600.0;
+// sample hm_tex at sample_pos UV
+open_factor += smoothstep(-50.0, 50.0, sample_pos.z - sample_h);
+```
+`ao_factor = open_factor / f32(n_samples)` — ratio of open samples.
+
+`n_samples` selected via: `select(8u, 16u, cam.ao_mode == 2u)`.
+
+`ao_factor` now declared as `var` after normal computation; mode 5 (True Hemi) and modes 1/2 (SSAO) are `if/else if` branches.
+
+**HBAO ×4 and ×8 (ao_modes 3 and 4):**
+
+New `hbao_8x_kernel: array<vec2<f32>, 8>` — 8 horizontal 2D directions at 0°/45°/90°/135°/180°/225°/270°/315°. First 4 used for ×4 mode.
+
+Inner loop: 24 steps × 25m = 600m reach per direction. Tracks running maximum elevation angle:
+```wgsl
+let cur_angle = atan2(sample_h - pos.z, probe_dist);
+max_angle = max(max_angle, cur_angle);
+```
+Per-direction occlusion: `1.0 - sin(max(0.0, max_angle))`. Averaged across directions → `ao_factor`.
+
+Bug fixed during implementation: `probe_dist` started at `0.0` → `atan2(h, 0) = ±π/2` → max occlusion at step 1. Fix: start `probe_dist = 25.0` (first step at one cell away).
+
+True Hemi blend softened: `ao_factor = mix(1.0, raw_ao, 0.8)` — applies 80% of raw AO effect, prevents over-darkening of valleys.
+
+### Key concepts discussed
+
+- **Kernel = fixed array of sample directions**: borrowed from signal processing (convolution kernel). Small, fixed pattern applied at every pixel uniformly — never computed at runtime.
+- **Why hardcode not compute**: kernel values are constants. Computing `sin()`/`cos()` per-pixel = 16 trig calls × 850k pixels = 13M trig calls/frame for data that never changes. `const` array = zero runtime cost.
+- **One 16-entry array for both modes**: first 8 entries are well-distributed (rings at 30°+60°). ×8 loops 0..8, ×16 loops 0..16. No duplicate array to maintain.
+- **TBN frame orientation**: samples oriented around surface normal, not world-up. On a 45° slope, world-up hemisphere contains directions pointing into the rock face (always occluded → false darkening). Normal-oriented hemisphere starts all samples above the actual surface.
+- **`up_ref` swap condition**: `cross(N, N) = (0,0,0)` → `normalize` → NaN. When normal is nearly vertical (cliff face, `|N.y| > 0.9`), switch reference to X axis. WGSL `select(a, b, cond)` = branchless conditional.
+- **Smooth SSAO via `smoothstep`**: binary `select(0,1, z > h)` gives hard AO borders. `smoothstep(-50, 50, z - h)` transitions smoothly across a 100m band around the surface. Physically: near-surface samples contribute partially rather than all-or-nothing.
+- **SSAO radius 600m**: too small (< 20m = 1 cell) = sub-pixel noise. Too large (> 1km) = approaches True Hemi (redundant). 600m (30 cells) captures immediate local topology at 20m/cell resolution.
+- **SSAO cost negligible**: +8–16 texture samples per pixel vs ~500 already spent in the raymarch. SSAO adds 1.6–3.2% — lost in noise. Measured: no perceptible fps difference across all 5 AO modes.
+- **HBAO marches horizontally**: 2D kernel, no TBN frame needed — always marches at terrain level. Horizon angle derived from height difference and horizontal distance.
+- **`sin(horizon_angle)` for occlusion**: `sin(0°) = 0` (flat horizon, unoccluded), `sin(90°) = 1` (vertical wall). Natural [0,1] range without clamping. Physically represents the fraction of a unit hemisphere sector blocked.
+- **HBAO vs SSAO character**: SSAO checks "is a point above/below terrain" → captures local bumps. HBAO finds "maximum horizon angle" → captures directional sky exposure. HBAO is closer to True Hemi AO in character; SSAO looks more like contact shadow.
+- **True Hemi over-darkening**: sweeps full terrain at 5° threshold — valleys surrounded by distant mountains get nearly 0 sky exposure. Perceptually too aggressive. Blend with `mix(1.0, ao, 0.8)` softens it.
+- **HBAO more perceptually pleasing than True Hemi**: 600m radius ignores distant mountains → wide open valleys stay bright. Less physically accurate but better visual result. Standard game engine trade-off.
+
+### Measured numbers
+
+- All 5 AO modes (0=off, 1=SSAO×8, 2=SSAO×16, 3=HBAO×4, 4=HBAO×8, 5=True Hemi): **no perceptible fps difference** — raymarch dominates at ~500 samples/pixel; SSAO/HBAO add <3%.
+- HBAO cost: 4 dirs × 24 steps = 96 samples (×4); 8 dirs × 24 steps = 192 samples (×8). Still negligible vs 500-step raymarch.
+
+### Open items for this phase
+- GPU timestamp queries (explicitly deferred — low priority)

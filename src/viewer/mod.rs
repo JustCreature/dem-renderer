@@ -567,8 +567,9 @@ fn prepare_scene(tile_path: &Path, width: u32, height: u32) -> (GpuScene, Arc<He
     let shadow_mask: ShadowMask =
         terrain::compute_shadow_vector_par_with_azimuth(&hm, init_az, init_el, 200.0);
 
-    // AO compute
-    let ao_data_mask: Vec<f32> = terrain::compute_ao_true_hemi(&hm, 16, 5.0f32.to_radians(), 200.0);
+    // AO compute, the higher the ray_elevation_rad the less pronounced the effect (less darkening)
+    let ao_data_mask: Vec<f32> =
+        terrain::compute_ao_true_hemi(&hm, 16, 10.0f32.to_radians(), 200.0);
 
     let gpu_ctx: GpuContext = GpuContext::new();
     let hm = Arc::new(hm);
