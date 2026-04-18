@@ -916,3 +916,65 @@ Implement True Hemisphere AO (ao_mode == 5):
 ### Open items for this phase
 - GPU timestamp queries (explicitly deferred — low priority)
 - AO implementation: True Hemi (next), then SSAO ×8/×16, then HBAO ×4/×8
+
+---
+
+## 2026-04-18
+
+### Objective
+Implement True Hemisphere AO (ao_mode == 5): CPU bake, GPU upload as R8Unorm texture, shader sampling.
+
+### What was built
+
+**`crates/terrain/src/lib.rs`** — new public function `compute_ao_true_hemi`:
+- Signature: `pub fn compute_ao_true_hemi(hm: &Heightmap, n_directions: usize, elevation_rad: f32, penumbra_meters: f32) -> Vec<f32>`
+- Allocates `vec![0.0f32; hm.rows * hm.cols]`
+- Loops `n_directions` times; azimuth = `i as f32 * TAU / n_directions as f32`
+- Calls the platform dispatcher `compute_shadow_vector_par_with_azimuth` each iteration
+- Accumulates `mask.data` into output, divides by `n_directions as f32` at end
+- Lives in `lib.rs` (not `shadow.rs`) so it can call the platform dispatcher directly
+
+**`src/viewer/mod.rs`** (`prepare_scene`):
+- Calls `terrain::compute_ao_true_hemi(&hm, 16, 5.0_f32.to_radians(), 200.0)` at startup
+- Passes result as `&ao_data_mask` to `GpuScene::new()`
+
+**`crates/render_gpu/src/scene.rs`**:
+- `GpuScene::new()` signature extended with `ao_data_mask: &Vec<f32>`
+- Converts to `Vec<u8>` via `(v * 255.0) as u8`
+- Creates `R8Unorm` 2D texture (`width: hm.cols as u32`, `height: hm.rows as u32`)
+- Uploads via `write_texture` with `bytes_per_row: Some(hm.cols as u32)` (1 byte/texel)
+- Creates `ao_view` and `ao_sampler` (bilinear)
+- Struct fields: `_ao_view: wgpu::TextureView`, `_ao_sampler: wgpu::Sampler` (underscore = keep-alive)
+- `BindGroupLayout` entries at binding 8 (texture, float filterable) and 9 (sampler, filtering)
+- Both bind group creation sites (initial + `resize()`) updated with bindings 8 and 9
+
+**`crates/render_gpu/src/shader_texture.wgsl`**:
+- Bindings 8 and 9 already declared from previous session
+- After `fx`/`fy` computation: `let hit_uv = vec2<f32>(col_f / f32(cam.hm_cols), row_f / f32(cam.hm_rows))`
+- `let ao_factor = select(1.0, textureSampleLevel(ao_tex, ao_sampler, hit_uv, 0.0).r, cam.ao_mode == 5u)`
+- Brightness formula updated: `(ambient * ao_factor + (1.0 - ambient) * diffuse) * shadow_factor` — AO scales ambient only, not direct light
+
+**`crates/terrain/src/shadow.rs` + `shadow_avx2.rs`** — bug fix:
+- All 22 `.round() as usize` occurrences replaced with `.floor() as usize`
+- Root cause: `.round()` rounds values in `[N-0.5, N)` up to `N` (out-of-bounds row/col), while `.floor()` correctly returns the cell index containing the position
+- Bug was dormant because specific sun azimuths never produced boundary row values in `[3600.5, 3601.0)`. Exposed by AO bake sweeping all 16 directions including pure cardinals.
+
+### Key concepts discussed
+
+- **True Hemisphere AO is terrain-static**: AO measures "what fraction of sky hemisphere is visible from this point" — a property of geometry, not sun position. Baked once at startup, never recomputed when sun moves. Shadow mask (dynamic) and AO (static) are orthogonal.
+- **Why not elevation=0.0**: In a mountain range, every point below a ridge sees peaks in every direction when sweeping at exactly 0°. Even a mountain 20km away at 2000m higher has elevation angle atan2(2000,20000) ≈ 5.7° > 0°. Result: all valleys get AO ≈ 0. Fix: use a small threshold (5°) so only terrain rising more than 5° above the horizon blocks — captures local valley walls, ignores distant ranges.
+- **R8Unorm**: stores `u8` byte, GPU reads as `float = byte / 255.0`. Round-trip: `(v * 255.0) as u8` on CPU, `textureSample().r` returns `f32` in [0,1] in shader. 8-bit quantization (256 levels, precision ≈ 0.004) is invisible for a smooth ambient term.
+- **Why × 255.0**: `f32 [0,1]` maps to `u8 [0,255]`. Without it, `(0.73) as u8 = 0` — the truncation destroys all non-1.0 values.
+- **R8Unorm vs R32Float**: R8Unorm = 13 MB (1 byte/texel), R32Float = 52 MB (4 bytes/texel). For AO the 8-bit precision is invisible; the 39 MB saving is the only reason for the conversion.
+- **AO on ambient only**: `brightness = (ambient * ao_factor + (1.0 - ambient) * diffuse) * shadow_factor`. AO reduces sky light; direct sun is unaffected. Applying AO to the whole brightness would double-penalise valley floors already in shadow.
+- **`select(false, true, cond)` vs `if`**: For a uniform condition (same value for all threads), both compile identically — the wave takes one path, zero divergence cost. `select` is preferred for style: expresses "default to 1.0" in one line.
+- **`.floor()` vs `.round()` for DDA cell lookup**: `.floor()` gives "which cell contains coordinate 3600.6" = 3600 (correct). `.round()` gives "nearest integer to 3600.6" = 3601 (out of bounds at grid edge). DDA should always use `.floor()`.
+- **`i` suffix in WGSL/Rust**: `i` = integer = signed by convention (signed integers came first; `u` was added to mark the exception). `5i` = `i32`, `5u` = `u32`, `5.0` = `f32`.
+
+### Next step
+- SSAO ×8 and ×16 (ao_mode 1 and 2) — screen-space AO computed per-frame in the shader
+
+### Open items for this phase
+- GPU timestamp queries (explicitly deferred — low priority)
+- SSAO ×8/×16 (ao_mode 1, 2)
+- HBAO ×4/×8 (ao_mode 3, 4)
