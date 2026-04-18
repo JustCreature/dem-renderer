@@ -200,7 +200,8 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
             (pos.x / cam.dx_meters + 0.5) / f32(cam.hm_cols),
             (pos.y / cam.dy_meters + 0.5) / f32(cam.hm_rows)
         );
-        let h = textureSampleLevel(hm_tex, hm_sampler, uv, 0.0).r;
+        let mip_lod = log2(1.0 + t / 15000.0);  // mipmap downsampling start at distance CONFIG_PERFORMANCE
+        let h = textureSampleLevel(hm_tex, hm_sampler, uv, mip_lod).r;
 
         if pos.z <= h {
             hit = true;
@@ -216,7 +217,7 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
         t_prev = t;
         // t += cam.step_m;
         // t += max((pos.z - h) * 0.3, cam.step_m);
-        let lod_min_step = cam.step_m * (0.7 + t / 5000.0);  // step reduction with distance CONFIG_PERFORMANCE
+        let lod_min_step = cam.step_m * (0.7 + t / 8000.0);  // step reduction with distance CONFIG_PERFORMANCE
         t += max((pos.z - h) * 0.2, lod_min_step);  // step reduction spherical CONFIG_PERFORMANCE
         pos = cam.origin + dir * t;
     }

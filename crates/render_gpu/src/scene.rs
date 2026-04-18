@@ -67,7 +67,7 @@ impl GpuScene {
                 height: hm.rows as u32,
                 depth_or_array_layers: 1,
             },
-            mip_level_count: 1,
+            mip_level_count: 8,
             sample_count: 1,
             dimension: wgpu::TextureDimension::D2,
             format: wgpu::TextureFormat::R16Float,
@@ -88,10 +88,56 @@ impl GpuScene {
                 depth_or_array_layers: 1,
             },
         );
+        // generate mip levels 1..7 with max filter (conservative — preserves peaks)
+        let mut prev_data: Vec<half::f16> = hm_data.clone();
+        let mut prev_w = hm.cols;
+        let mut prev_h = hm.rows;
+        for mip in 1u32..8u32 {
+            let w = (prev_w / 2).max(1);
+            let h = (prev_h / 2).max(1);
+            let mut mip_data: Vec<half::f16> = Vec::with_capacity(w * h);
+            for row in 0..h {
+                for col in 0..w {
+                    let r0 = (row * 2).min(prev_h - 1);
+                    let r1 = (row * 2 + 1).min(prev_h - 1);
+                    let c0 = (col * 2).min(prev_w - 1);
+                    let c1 = (col * 2 + 1).min(prev_w - 1);
+                    let a = prev_data[r0 * prev_w + c0].to_f32();
+                    let b = prev_data[r0 * prev_w + c1].to_f32();
+                    let c = prev_data[r1 * prev_w + c0].to_f32();
+                    let d = prev_data[r1 * prev_w + c1].to_f32();
+                    mip_data.push(half::f16::from_f32(a.max(b).max(c).max(d)));
+                }
+            }
+            gpu_ctx.queue.write_texture(
+                wgpu::TexelCopyTextureInfo {
+                    texture: &hm_texture,
+                    mip_level: mip,
+                    origin: wgpu::Origin3d::ZERO,
+                    aspect: wgpu::TextureAspect::All,
+                },
+                bytemuck::cast_slice(&mip_data),
+                wgpu::TexelCopyBufferLayout {
+                    offset: 0,
+                    bytes_per_row: Some(w as u32 * 2),
+                    rows_per_image: None,
+                },
+                wgpu::Extent3d {
+                    width: w as u32,
+                    height: h as u32,
+                    depth_or_array_layers: 1,
+                },
+            );
+            prev_data = mip_data;
+            prev_w = w;
+            prev_h = h;
+        }
+
         let hm_view = hm_texture.create_view(&wgpu::TextureViewDescriptor::default());
         let hm_sampler = gpu_ctx.device.create_sampler(&wgpu::SamplerDescriptor {
             mag_filter: wgpu::FilterMode::Linear,
             min_filter: wgpu::FilterMode::Linear,
+            mipmap_filter: wgpu::MipmapFilterMode::Linear,
             ..Default::default()
         });
 
