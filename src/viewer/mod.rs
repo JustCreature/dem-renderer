@@ -567,9 +567,20 @@ fn prepare_scene(tile_path: &Path, width: u32, height: u32) -> (GpuScene, Arc<He
     let shadow_mask: ShadowMask =
         terrain::compute_shadow_vector_par_with_azimuth(&hm, init_az, init_el, 200.0);
 
+    // AO compute
+    let ao_data_mask: Vec<f32> = terrain::compute_ao_true_hemi(&hm, 16, 5.0f32.to_radians(), 200.0);
+
     let gpu_ctx: GpuContext = GpuContext::new();
     let hm = Arc::new(hm);
-    let scene: GpuScene = GpuScene::new(gpu_ctx, &hm, &normal_map, &shadow_mask, width, height);
+    let scene: GpuScene = GpuScene::new(
+        gpu_ctx,
+        &hm,
+        &normal_map,
+        &shadow_mask,
+        &ao_data_mask,
+        width,
+        height,
+    );
 
     (scene, hm, lat_rad)
 }

@@ -18,6 +18,9 @@ pub struct GpuScene {
     _nx_buf: wgpu::Buffer,
     _ny_buf: wgpu::Buffer,
     _nz_buf: wgpu::Buffer,
+    // AO
+    _ao_view: wgpu::TextureView,
+    _ao_sampler: wgpu::Sampler,
 
     // Mutable per-frame / per-sun-update
     shadow_buf: wgpu::Buffer,
@@ -47,6 +50,7 @@ impl GpuScene {
         hm: &Heightmap,
         normal_map: &NormalMap,
         shadow_mask: &ShadowMask,
+        ao_data_mask: &Vec<f32>,
         width: u32,
         height: u32,
     ) -> Self {
@@ -86,6 +90,46 @@ impl GpuScene {
         );
         let hm_view = hm_texture.create_view(&wgpu::TextureViewDescriptor::default());
         let hm_sampler = gpu_ctx.device.create_sampler(&wgpu::SamplerDescriptor {
+            mag_filter: wgpu::FilterMode::Linear,
+            min_filter: wgpu::FilterMode::Linear,
+            ..Default::default()
+        });
+
+        // AO
+        let ao_data: Vec<u8> = ao_data_mask
+            .iter()
+            .map(|&v| (v * 255.0) as u8)
+            .collect::<Vec<u8>>();
+        let ao_texture = gpu_ctx.device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("scene_ao_tex"),
+            size: wgpu::Extent3d {
+                width: hm.cols as u32,
+                height: hm.rows as u32,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::R8Unorm,
+            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+            view_formats: &[],
+        });
+        gpu_ctx.queue.write_texture(
+            ao_texture.as_image_copy(),
+            bytemuck::cast_slice(&ao_data),
+            wgpu::TexelCopyBufferLayout {
+                offset: 0,
+                bytes_per_row: Some(hm.cols as u32),
+                rows_per_image: None,
+            },
+            wgpu::Extent3d {
+                width: hm.cols as u32,
+                height: hm.rows as u32,
+                depth_or_array_layers: 1,
+            },
+        );
+        let ao_view = ao_texture.create_view(&wgpu::TextureViewDescriptor::default());
+        let ao_sampler = gpu_ctx.device.create_sampler(&wgpu::SamplerDescriptor {
             mag_filter: wgpu::FilterMode::Linear,
             min_filter: wgpu::FilterMode::Linear,
             ..Default::default()
@@ -228,6 +272,22 @@ impl GpuScene {
                             },
                             count: None,
                         },
+                        wgpu::BindGroupLayoutEntry {
+                            binding: 8,
+                            visibility: wgpu::ShaderStages::COMPUTE,
+                            ty: wgpu::BindingType::Texture {
+                                sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                                view_dimension: wgpu::TextureViewDimension::D2,
+                                multisampled: false,
+                            },
+                            count: None,
+                        },
+                        wgpu::BindGroupLayoutEntry {
+                            binding: 9,
+                            visibility: wgpu::ShaderStages::COMPUTE,
+                            ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                            count: None,
+                        },
                     ],
                 });
 
@@ -241,6 +301,7 @@ impl GpuScene {
                         binding: 0,
                         resource: cam_buf.as_entire_binding(),
                     },
+                    // hm
                     wgpu::BindGroupEntry {
                         binding: 1,
                         resource: wgpu::BindingResource::TextureView(&hm_view),
@@ -268,6 +329,15 @@ impl GpuScene {
                     wgpu::BindGroupEntry {
                         binding: 7,
                         resource: shadow_buf.as_entire_binding(),
+                    },
+                    // ao
+                    wgpu::BindGroupEntry {
+                        binding: 8,
+                        resource: wgpu::BindingResource::TextureView(&ao_view),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 9,
+                        resource: wgpu::BindingResource::Sampler(&ao_sampler),
                     },
                 ],
             });
@@ -305,6 +375,8 @@ impl GpuScene {
             _nx_buf: nx_buf,
             _ny_buf: ny_buf,
             _nz_buf: nz_buf,
+            _ao_view: ao_view,
+            _ao_sampler: ao_sampler,
             shadow_buf,
             cam_buf,
             output_buf,
@@ -520,6 +592,7 @@ impl GpuScene {
                         binding: 0,
                         resource: self.cam_buf.as_entire_binding(),
                     },
+                    // hm
                     wgpu::BindGroupEntry {
                         binding: 1,
                         resource: wgpu::BindingResource::TextureView(&self._hm_view),
@@ -547,6 +620,15 @@ impl GpuScene {
                     wgpu::BindGroupEntry {
                         binding: 7,
                         resource: self.shadow_buf.as_entire_binding(),
+                    },
+                    // ao
+                    wgpu::BindGroupEntry {
+                        binding: 8,
+                        resource: wgpu::BindingResource::TextureView(&self._ao_view),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 9,
+                        resource: wgpu::BindingResource::Sampler(&self._ao_sampler),
                     },
                 ],
             });

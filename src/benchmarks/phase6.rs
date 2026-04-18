@@ -1405,6 +1405,9 @@ pub(crate) fn bench_fps(
         (pixels as f64 * gpu_fps / 1e6) as u64,
     );
 
+    // AO compute
+    let ao_data_mask: Vec<f32> = terrain::compute_ao_true_hemi(&hm, 16, 5.0f32.to_radians(), 200.0);
+
     // ── GPU scene (no readback) ───────────────────────────────────────────────
     const FPS_FRAMES_G: usize = 30 * 10;
     {
@@ -1414,6 +1417,7 @@ pub(crate) fn bench_fps(
             hm,
             normal_map,
             shadow_mask,
+            &ao_data_mask,
             FPS_WIDTH,
             FPS_HEIGHT,
         );

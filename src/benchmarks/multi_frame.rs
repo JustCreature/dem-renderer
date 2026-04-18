@@ -170,11 +170,16 @@ pub(crate) fn benchmark_multi_frame_gpu_scene(
     let step_m = heightmap.dx_meters as f32 / STEP_SIZE;
     let aspect = PIC_WIDTH as f32 / PIC_HEIGHT as f32;
 
+    // AO compute
+    let ao_data_mask: Vec<f32> =
+        terrain::compute_ao_true_hemi(&heightmap, 16, 5.0f32.to_radians(), 200.0);
+
     let scene = render_gpu::GpuScene::new(
         gpu_ctx,
         heightmap,
         normal_map,
         shadow_mask,
+        &ao_data_mask,
         PIC_WIDTH,
         PIC_HEIGHT,
     );

@@ -48,11 +48,16 @@ pub(crate) fn render_gif(tile_path: &Path) {
     );
     let normal_map = compute_normals_vector_par(&heightmap);
 
+    // AO compute
+    let ao_data_mask: Vec<f32> =
+        terrain::compute_ao_true_hemi(&heightmap, 16, 5.0f32.to_radians(), 200.0);
+
     let scene = render_gpu::GpuScene::new(
         render_gpu::GpuContext::new(),
         &heightmap,
         &normal_map,
         &shadow_mask,
+        &ao_data_mask,
         GIF_WIDTH,
         GIF_HEIGHT,
     );

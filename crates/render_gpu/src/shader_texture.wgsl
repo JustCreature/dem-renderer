@@ -40,6 +40,9 @@ struct CameraUniforms {
 @group(0) @binding(6) var<storage, read> nz: array<f32>;
 // shadows mask
 @group(0) @binding(7) var<storage, read> shadow: array<f32>;
+// AO texture + sampler                                                                                                                                 
+@group(0) @binding(8) var ao_tex: texture_2d<f32>;
+@group(0) @binding(9) var ao_sampler: sampler;
 
 fn binary_search_hit(t_lo_in: f32, t_hi_in: f32, dir: vec3<f32>, iterations: i32) -> vec3<f32> {
     // binary search to refine hit position between t_prev (above) and t (below)
@@ -134,6 +137,9 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
         let fx = col_f - f32(col0);
         let fy = row_f - f32(row0);
 
+        let hit_uv: vec2<f32> = vec2<f32>(col_f / f32(cam.hm_cols), row_f / f32(cam.hm_rows));
+        let ao_factor: f32 = select(1.0, textureSampleLevel(ao_tex, ao_sampler, hit_uv, 0.0).r, cam.ao_mode == 5u);
+
         let i00 = u32(row0) * cam.hm_cols + u32(col0);
         let i10 = u32(row0) * cam.hm_cols + u32(col0 + 1);
         let i01 = u32(row0 + 1) * cam.hm_cols + u32(col0);
@@ -160,7 +166,7 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
         let s11 = shadow[i11];
         let in_shadow = mix(mix(s00, s10, fx), mix(s01, s11, fx), fy);
         let shadow_factor: f32 = 0.5 + 0.5 * in_shadow;
-        let brightness = (ambient + (1.0 - ambient) * diffuse) * shadow_factor;
+        let brightness = (ambient * ao_factor + (1.0 - ambient) * diffuse) * shadow_factor;
 
         // set colors for different heights
         let green = vec3<f32>(120.0, 160.0, 80.0);
