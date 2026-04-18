@@ -256,7 +256,7 @@ impl ApplicationHandler for Viewer {
                     70.0,
                     self.width as f32 / self.height as f32,
                     sun_dir,
-                    scene.get_dx_meters() / 5.0,
+                    scene.get_dx_meters() / 10.0, // step_m CONFIG_PERFORMANCE
                     200_000.0,
                     self.ao_mode,
                 );

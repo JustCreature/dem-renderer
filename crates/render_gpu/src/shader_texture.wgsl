@@ -215,7 +215,9 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
         // cam.step_m is the minimum step to prevent stalling near-surface
         t_prev = t;
         // t += cam.step_m;
-        t += max((pos.z - h) * 0.3, cam.step_m);
+        // t += max((pos.z - h) * 0.3, cam.step_m);
+        let lod_min_step = cam.step_m * (0.7 + t / 5000.0);  // step reduction with distance CONFIG_PERFORMANCE
+        t += max((pos.z - h) * 0.2, lod_min_step);  // step reduction spherical CONFIG_PERFORMANCE
         pos = cam.origin + dir * t;
     }
 
