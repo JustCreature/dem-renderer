@@ -1054,3 +1054,97 @@ True Hemi blend softened: `ao_factor = mix(1.0, raw_ao, 0.8)` — applies 80% of
 
 ### Open items for this phase
 - GPU timestamp queries (explicitly deferred — low priority)
+
+---
+
+## 2026-04-18
+
+### Objective
+Explore LOD (Level of Detail) for the terrain raymarcher — reduce work for distant terrain. Two approaches: step-size LOD (fewer loop iterations at distance) and mipmap LOD (coarser texture fetches at distance).
+
+### What was built
+
+**Step-size LOD (in `shader_texture.wgsl`)**
+- Formula: `lod_min_step = cam.step_m * (0.7 + t / D)` replaces fixed `cam.step_m` as the minimum step
+- At D=500: visible "wave" artifacts — rays skip over narrow ridges (200–300m crests) at 20km+ where step > 820m
+- At D=5000–10000: no perceptible fps change on M4 (extra iterations are cache hits on M4's large unified L2/SLC)
+- Current value: D=8000 (`0.7 + t / 8000.0`)
+
+**Mipmap LOD (`crates/render_gpu/src/scene.rs` + `shader_texture.wgsl`)**
+
+`scene.rs` — mip generation:
+- `mip_level_count: 1` → `mip_level_count: 8` in `TextureDescriptor` for `hm_tex`
+- Added loop after mip-0 `write_texture`: generates mip levels 1–7 using **max filter** (2×2 → 1 takes maximum, not average)
+- Max filter is conservative — preserves ridge peaks; average filter would lower peaks → rays miss ridges at distance
+- Each mip uploaded via `wgpu::TexelCopyTextureInfo { mip_level: i, ... }` instead of `as_image_copy()`
+
+`scene.rs` — sampler:
+- Added `mipmap_filter: wgpu::MipmapFilterMode::Linear` to `hm_sampler` `SamplerDescriptor`
+- Default was `Nearest` (hard snap between mip levels) → visible traveling wave as camera moves
+- `Linear` = trilinear filtering → smooth blend between mip levels, no wave
+
+`shader_texture.wgsl`:
+- Main loop: `let mip_lod = log2(1.0 + t / 15000.0);` then `textureSampleLevel(hm_tex, hm_sampler, uv, mip_lod)`
+- lod=0 at t=0, lod=1 at t=15km (just past fog onset at 15km), lod=2 at t=45km, lod=3 at t=105km
+- Binary search (`binary_search_hit`) left at mip 0 — always runs near-surface after a hit, no distance needed
+- SSAO/HBAO samples remain at mip 0 — screen-space, also near-surface
+
+### Key concepts discussed
+
+- **Step-size LOD — ridge miss artifact**: large minimum step → `pos.z <= h` never triggers for a narrow ridge → binary search never runs (no hit registered) → pixel rendered as sky. Manifests as wave of missed terrain across the landscape. Not fixable by binary search — the hit itself is missed. Safe maximum multiplier ≈ 5× (Nyquist: step ≤ ½ narrowest feature, ~100m for 200m ridges = 5× base step_m ≈ 20m).
+- **Why no fps gain on M4**: extra loop iterations at distance are cache hits. M4's large unified L2/SLC likely fits the entire 13 MB R16Float heightmap. On GTX 1650 (smaller GDDR6 texture cache), extra iterations may cause cache misses → larger predicted benefit.
+- **Max filter for heightmap mipmaps**: each mip texel must be the max of its 4 source texels, not average. Reason: the raymarcher checks `pos.z <= h` — if mip stores average, peaks are lowered → ray jumps over them without triggering a hit. Max filter is conservative: it never underestimates terrain height.
+- **Trilinear filtering**: `mag_filter` (zoom in) and `min_filter` (zoom out, within one mip) were already `Linear`. `mipmap_filter` controls interpolation *between* mip levels. `Nearest` = snap at boundary = hard wave. `Linear` = blend based on fractional part of `lod` float = trilinear. Name: bi-linear (2D within mip) × linear (between mips) = 3 dimensions of interpolation.
+- **wgpu type distinction**: `FilterMode` for mag/min, `MipmapFilterMode` for mipmap — separate enums despite same variants.
+- **LOD formula `log2(1.0 + t/D)`**: lod=0 at t=0 (full res near camera), grows slowly with distance. `D` shifts the knee — D=15000 means lod=1 starts at 15km. Log scale matches perceptual importance: doubling distance halves useful resolution.
+
+### Measured numbers
+- Step-size LOD D=5000–15000: no perceptible fps change on M4 at 4K — cache-hit bound
+- Mipmap LOD: no perceptible fps change on M4 — same reason (fits in cache)
+- Both effects expected to be larger on GTX 1650 (smaller texture cache, more cache pressure from extra iterations)
+
+### Open items
+- Measure mipmap LOD fps on GTX 1650 — predicted meaningful gain vs M4
+- GPU timestamp queries (explicitly deferred — low priority)
+
+---
+
+## 2026-04-18 (session 2)
+
+### Objective
+Plan phase 8 viewer improvements: shadow toggle, fog toggle, visual artifact tolerance presets, LOD distance presets, and out-of-core tile streaming.
+
+### What was done
+
+Created `docs/planning/viewer-phase-8.md` with 5 planned items:
+
+1. **Shadow toggle** (`.` key) — `shadows_enabled: bool` on Viewer; `u32` in CameraUniforms replacing a `_pad`; shader: `select(1.0, shadow_factor, enabled)`; HUD label in settings panel
+2. **Fog toggle** (`,` key) — same pattern; `fog_enabled: bool`; shader: `select(0.0, fog_t, enabled)` for the mix blend factor; HUD label
+3. **Visual Artifact Tolerance** (`;` key, 4 modes Ultra/High/Mid/Low) — controls two near-camera quality parameters: `step_m` divisor (`dx/20`, `dx/10`, `dx/5`, `dx/3`) and sphere tracing factor (`0.1`, `0.2`, `0.4`, `0.8`); `vat_mode: u32` in CameraUniforms; HUD label
+4. **LOD Distance** (`'` key, 4 modes Ultra/High/Mid/Low) — controls two distance parameters: step LOD divisor (∞, 20000, 8000, 4000) and mip LOD divisor (∞, 30000, 15000, 8000); Ultra = no LOD at all; `lod_mode: u32` in CameraUniforms; HUD label
+5. **Out-of-core tile streaming** — moved from `viewer-improvements-plan.md` (item 2); original entry left with strikethrough + redirect note
+
+Updated `viewer-improvements-plan.md`: item 2 struck through with note pointing to phase-8 plan.
+
+### Key decisions
+
+- vat_mode and lod_mode are **orthogonal** — near-camera quality (step_m, sphere factor) vs distance LOD aggressiveness (when LOD kicks in). Separating them lets you tune each independently.
+- All four new uniforms (`shadows_enabled`, `fog_enabled`, `vat_mode`, `lod_mode`) replace existing `_pad` fields in `CameraUniforms` — no bind group or buffer size changes needed.
+- LOD Ultra = no LOD (divisor = ∞) matches the previous "Off" concept but named consistently with vat_mode.
+- Shadow background thread keeps running regardless of shadows_enabled toggle — toggle only affects shading, not computation.
+
+### Open items
+- Implement items 1–4 from viewer-phase-8.md
+- Tile streaming (item 5) requires multi-tile SRTM data as prerequisite
+
+---
+
+## 2026-04-18 — Phase 7 Finalisation (--v--FORCE)
+
+Generated `docs/lessons/phase-7/long-report.md` and `docs/lessons/phase-7/short-report.md`.
+
+Carried forward as open items to Phase 8:
+- GPU timestamp queries (explicitly deferred throughout phase, low priority)
+- Mipmap LOD fps measurement on GTX 1650 (predicted meaningful gain, unmeasured)
+
+CLAUDE.md bumped to **Phase 8**.

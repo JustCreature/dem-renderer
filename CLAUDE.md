@@ -36,7 +36,7 @@ A learning-first, cache-optimized terrain + sunlight renderer in Rust using real
 
 ## Status
 
-**Current phase: Phase 7** (Phases 0, 1, 2, 3, 4, 5, 6 complete)
+**Current phase: Phase 8** (Phases 0, 1, 2, 3, 4, 5, 6, 7 complete)
 
 Phase 0 artifacts:
 - `crates/profiling/src/lib.rs` — `now()` (cntvct_el0 via inline asm), `timed()`, tests
@@ -191,63 +191,57 @@ Phase 6 lessons:
 - PCIe readback is the fps ceiling on discrete GPU; unified memory (M4) eliminates this tax entirely
 - Serial reduction chains need multiple accumulators; Morton ordering needs DRAM pressure to matter
 
-Phase 7 artifacts (in progress):
-- `src/viewer.rs` — interactive swap-chain viewer: winit 0.30 `ApplicationHandler`, WASD + mouse look, vsync toggle (`--vsync`), immersive mode (Q), left-click drag look, FPS counter, window resize handling (`render_width` alignment, `Resized` event)
+Phase 7 artifacts:
+- `src/viewer/mod.rs` — interactive swap-chain viewer: winit 0.30 `ApplicationHandler`, WASD + mouse look, vsync toggle (`--vsync`), immersive mode (Q), left-click drag look, FPS counter, window resize (`render_width` alignment), HUD toggle (E), speed boost (Cmd/Alt), sun animation (+/-/[/] keys), `sim_day`/`sim_hour`/`day_accum` fields
+- `src/viewer/hud_renderer.rs` — `HudBackground`, `SunIndicator`, `HudRenderer`; 10 glyphon text buffers; `day_to_date()` date formatter; drop shadows (double-render at +1,+1); settings HUD panel (AO label top-right)
+- `src/viewer/shader_sun_hud.wgsl` — SDF season/time circles; `season_col()`, `panel_rect_sdf()`, `draw_circle()`; `discard` guard; fully commented
 - `src/main.rs` — `--view` / `--vsync` CLI flags
-- `crates/render_gpu/src/scene.rs` — added `dispatch_frame(&mut encoder, ...)`, `get_output_buffer()`, `get_gpu_ctx()`, `get_dx_meters()`, `get_dy_meters()`, `resize(width, height)`; stored `render_bgl` field; R16Float texture + `half` crate upload
-- `crates/render_gpu/src/context.rs` — added `pub instance` and `pub adapter` fields to `GpuContext`
-- `crates/render_gpu/src/shader_texture.wgsl` — BGRA byte order; bilinear height sampling (`textureSampleLevel` + UV); bilinear normal/shadow interpolation (4-texel manual blend); smooth elevation color bands (`smoothstep`/`mix`); atmospheric fog (15–60km); sphere tracing (adaptive step `max((pos.z-h)*0.5, step_m)`, sky early exit at 4km, `t_prev` binary search bracket)
-- `crates/render_gpu/src/shader_buffer.wgsl` — updated to match shader_texture: `sample_hm()` bilinear helper, bilinear normals/shadows, smooth color bands, fog
-- `crates/render_cpu/src/lib.rs` — `shade()` updated: bilinear normal/shadow interpolation, smooth elevation color bands
-- `crates/render_gpu/Cargo.toml` — added `half = { version = "2", features = ["bytemuck"] }` for R16Float upload
-- `src/benchmarks/phase6.rs` — added GPU scene no-readback variant to `bench_fps` (`dispatch_frame` + `poll(Wait)`)
-- `docs/benchmark_results/report_1/fps_no_readback.csv` — no-readback fps data for all 4 systems
-- `docs/benchmark_results/report_1/report_1.md` — updated section 6 with no-readback table
-- `docs/benchmark_results/report_1/report_1.html` — updated FPS tab with no-readback stats and chart
+- `crates/render_gpu/src/scene.rs` — `dispatch_frame(&mut encoder)`, `resize()`, `render_bgl` stored; R16Float heightmap texture + `half` crate upload; 7-level max-filter mip generation; AO R8Unorm texture (bindings 8+9); `GpuScene::new()` takes `normal_map` + `ao_data_mask`
+- `crates/render_gpu/src/context.rs` — `pub instance` and `pub adapter` fields
+- `crates/render_gpu/src/shader_texture.wgsl` — BGRA output; bilinear height (`textureSampleLevel`); bilinear normals/shadows; smooth color bands; fog (15–60km); sphere tracing (adaptive step, sky early exit, `t_prev` bracket); AO modes 1–5; step LOD (`0.7 + t/8000`); mip LOD (`log2(1+t/15000)`)
+- `crates/render_gpu/src/shader_buffer.wgsl` — parity update: bilinear `sample_hm()`, smooth colors, fog
+- `crates/render_cpu/src/lib.rs` — `shade()`: bilinear normals/shadows, smooth elevation colors
+- `crates/render_gpu/Cargo.toml` — `half = "2"` for R16Float upload
+- `crates/terrain/src/lib.rs` — `compute_ao_true_hemi(hm, 16, 5°, 200m)`: 16-azimuth DDA sweep → averaged lit fraction
+- `crates/terrain/src/shadow.rs` + `shadow_avx2.rs` — `.round()` → `.floor()` fix (22 sites); `penumbra_meters` soft shadow parameter added to all variants
+- `src/benchmarks/phase6.rs` — GPU no-readback variant added
+- `docs/benchmark_results/report_1/fps_no_readback.csv` + updated `report_1.md` / `report_1.html`
+- `docs/planning/viewer-improvements-plan.md` — AO + LOD roadmap; tile streaming item struck through (moved to phase-8)
+- `docs/planning/viewer-phase-8.md` — phase 8 roadmap: shadow toggle, fog toggle, VAT presets, LOD distance presets, tile streaming
+- `docs/lessons/phase-7/long-report.md` + `short-report.md`
 - `docs/sessions/phase-7/main-session.md` — session log
 
-Phase 7 key numbers (M4 Max, 2026-04-11):
-- Viewer swap-chain (no readback): **470 fps** (2.1ms/frame) vs bench_fps 10fps — 46× difference proves readback was the bottleneck
+Phase 7 key numbers (M4 Max, 1600×533, 2026-04-11 to 2026-04-18):
+- Viewer swap-chain (no readback): **477 fps** (2.1ms/frame) vs bench_fps 10fps — 46× proves readback was the bottleneck
 - Command overhead floor: ~2.1ms (~470fps) — fixed cost regardless of shader work
-- Shader-bound threshold: step_m ≈ dx/20 → 85fps at 1600×533
-- Texture cache experiment (fixed step_m=4.0m, factors 1/2/4): identical fps — compute-bound on M4, not texture-bandwidth-bound
-- 8000×2667 default step_m: **21 fps** (47ms) — true compute floor; Phase 5 "10ms compute" was wrong (readback overlapped)
-- vsync on: 100fps (display-capped); vsync off: 470fps at 1600×533
+- True compute at 8000×2667: **21 fps** (47ms) — Phase 5 "10ms compute" was wrong (readback overlapped)
+- vsync on: 100fps (display-capped); vsync off: 477fps at 1600×533
+- AO modes on M4: no perceptible fps difference across all 6 modes (13 MB heightmap fits in SLC)
+- AO on GTX 1650 (~50fps baseline): SSAO×8 −2–3fps | SSAO×16 −8fps | HBAO×4 −20fps | HBAO×8 −25fps | True Hemi 0fps
+- Step LOD + mipmap LOD: no fps change on M4 (cache-bound); expected gain on GTX 1650 (unmeasured)
 
-bench_fps no-readback cross-system (1600×533, 2026-04-11):
-- M4: GPU no-rdback **477 fps** (2.1ms) | readback overhead 10.3× | GPU speedup vs CPU 32×
-- Win GTX1650: GPU no-rdback **260 fps** (3.8ms) | readback overhead 24.1× | GPU speedup vs CPU 298×
-- Mac i7: GPU no-rdback **53 fps** (18.9ms) | readback overhead 11.3× | GPU speedup vs CPU 36×
-- Asus: GPU no-rdback **4.9 fps** (205.8ms) | readback overhead 7.1× | GPU speedup vs CPU 32×
-- Win GTX Phase 6 "~50fps prediction" was 5× wrong — actual 260fps; nvidia-smi SM utilisation was misleading
+No-readback cross-system (1600×533, bench_fps, 2026-04-11):
+- M4: **477 fps** | readback 10.3× | GPU vs CPU 32×
+- Win GTX 1650: **260 fps** | readback 24.1× | GPU vs CPU 298×
+- Mac i7: **53 fps** | readback 11.3× | GPU vs CPU 36×
+- Asus Pentium: **4.9 fps** | readback 7.1× | GPU vs CPU 32×
 
-Known open items carried into Phase 7:
-- GPU shadow via parallel prefix scan not implemented — would potentially match CPU NEON for cardinal direction (deferred from Phase 5)
-- `render_gif::render_gif` is commented out in main.rs — re-enable when generating animations (deferred from Phase 5)
-- Occupancy analysis via Instruments/Metal GPU trace deferred — requires full Xcode.app (deferred from Phase 5)
-- GPU timestamp queries (measure per-pass GPU time without frame overhead) — explicitly deferred, low priority
-- Picture quality: ✅ bilinear height sampling, ✅ smooth color bands, ✅ normal interpolation, ✅ atmospheric fog, ✅ sphere tracing (adaptive step + sky early exit) — all implemented
-- ✅ Window resize handling — implemented with `render_width` alignment
-- ✅ HUD text overlay (`glyphon`) — fps counter top-left, hint bottom-center, semi-transparent background quads
-- `src/viewer/hud_renderer.rs` — `HudBackground`, `SunIndicator`, `HudRenderer`; 10 glyphon buffers (8 static cardinal labels + 2 dynamic current-value); `day_to_date()` for "Jun 21" date format; drop shadows on all labels (double-render at (+1,+1) with `rgba(0,0,0,160)`); `build_label_text_area()`, `make_small_label()`, `make_current_label()` helpers
-- `src/viewer/shader_sun_hud.wgsl` — SDF season/time circles; `season_col()` (Summer=top), tick marks at cardinal solstice/equinox/hour positions; yellow needle; `panel_rect_sdf()` unified rounded background panel covering both circles + all labels; `discard` guard; fully commented
-- HUD toggle: E key shows/hides HUD (`hud_visible: bool`)
-- Speed boost: Cmd (Mac) / Alt (Win) held → 5000 m/s movement speed (`speed_boost: bool`)
-- ✅ Sun animation: `+`/`-` keys change `sim_hour` at 0.4 hrs/s; `[`/`]` keys change `sim_day` via `day_accum` accumulator; both 10× faster with speed boost
-- ✅ Geographically correct sun position: Spencer 1971 solar declination + hour angle → elevation/azimuth; `lat_rad` derived from tile centre; shadow only dispatched when `elevation > 0.0`
-- ✅ CPU normals in GpuScene: removed 157-line throw-away GPU compute pipeline; replaced with three `create_buffer_init` DMA uploads; `GpuScene::new()` takes `normal_map: &NormalMap`
-- ✅ Background shadow thread: `Arc<Heightmap>` shared with persistent worker via `mpsc::sync_channel(1)`; `shadow_computing` gate; shadow updates every frame with ~0 visual lag
-- ✅ Soft shadows: `penumbra_meters: f32` added to all shadow variants; formula `(1.0 - margin/T).max(0.0)`; default 200.0m; eliminates shadow boundary aliasing at slow sun speed
-- ✅ Sun/Season HUD: `SunIndicator` (SDF circles via `shader_sun_hud.wgsl`) + 10 glyphon text labels; season circle (Summer=top, Winter=bottom, season-coloured ring); time circle (12h face, 12:00=top, 18:00=bottom); "Jun 21" + "Time: HH:MM" current-value labels; drop shadows; unified background panel; RIGHT_MARGIN=80, BOTTOM_OFFSET=118, GAP=60
-- Normal map smoothing and heightmap smoothing: both tried and reverted. Gaussian blur on normals (GPU pass) and on height values (CPU pre-processing) both reduce the staircase artifact but soften real terrain detail too much. Accepted as a fundamental DEM resolution limitation (~20m/cell). Not worth the trade-off.
-- `docs/planning/viewer-improvements-plan.md` — improvement roadmap: (1) AO with 6 modes Off/SSAO×8/SSAO×16/HBAO×4/HBAO×8/True Hemisphere, `/` key cycling (`rem_euclid(6)`), settings HUD label top-right; (2) out-of-core tile streaming; (3) LOD (step-size + mipmap)
-- ✅ AO infrastructure (step C): `ao_mode: u32` on `Viewer`; `/` key cycles 6 modes; `ao_mode` in `CameraUniforms` + scene uniform + `shader_texture.wgsl` (wired, not yet used); settings HUD label top-right with background rect (`build_vertices` → `[f32;36]`, buffer 144 bytes, `draw(0..18)`); `match ao_mode` → label string updated each frame
-- ✅ True Hemisphere AO (ao_mode == 5): `compute_ao_true_hemi(hm, 16, 5°, 200m)` in `terrain/lib.rs` — 16 evenly-spaced azimuth sweeps at elevation=5°, averaged → `Vec<f32>`; uploaded as `R8Unorm` texture (13 MB, `hm.cols×hm.rows`, `bytes_per_row=hm.cols`); shader uses `select(1.0, ao_sample, ao_mode==5u)` applied to ambient term only: `(ambient * ao_factor + (1.0 - ambient) * diffuse) * shadow_factor`
-- ✅ Bug fix: `.round() as usize` → `.floor() as usize` in all 22 DDA index computations across `shadow.rs` + `shadow_avx2.rs` — `.round()` caused out-of-bounds panic for boundary row values in `[N-0.5, N)` when AO swept all 16 azimuths including pure cardinals
-- ✅ SSAO ×8 and ×16 (ao_modes 1, 2): `ssao_16x_kernel` const array (16 dirs, 4 rings at 15°/30°/45°/60°); TBN frame from surface normal (`up_ref` swap for cliff faces); sample loop with `smoothstep(-50,50,z-h)` soft occlusion; radius 600m
-- ✅ HBAO ×4 and ×8 (ao_modes 3, 4): `hbao_8x_kernel` (8 horizontal 2D directions); 24 steps × 25m per direction; running max horizon angle via `atan2`; occlusion = `1-sin(max_angle)`; `probe_dist` starts at 25.0 (not 0.0 to avoid atan2 singularity)
-- ✅ True Hemi blend softened: `mix(1.0, raw_ao, 0.8)` — 80% of raw AO effect; prevents over-darkening of valleys by distant mountains
-- All 5 AO modes: no perceptible fps difference — raymarch (~500 samples/ray) dominates; SSAO/HBAO add <3%
+Phase 7 lessons:
+- Swap chain removes 96% of perceived frame time on GTX 1650 — PCIe readback was the bottleneck, not shader compute
+- M4 SLC (~48 MB+) absorbs the entire 13 MB heightmap — LOD and AO cache effects are invisible until tested on GTX 1650
+- HBAO's radial 600m sweep (96–192 samples spread across large UV area) exposes GTX 1650's smaller GDDR6 cache; SSAO's fixed-offset samples stay cache-local
+- True Hemisphere AO = sun shadow DDA generalised: same function, 16 azimuths, averaged — baked once at startup, free at render time
+- C1 discontinuity (slope jumps at 20m DEM grid lines) is a data floor; Gaussian smoothing fixes the symptom but destroys real ridgelines
+
+Known open items carried into Phase 8:
+- GPU timestamp queries — explicitly deferred (low priority)
+- Mipmap LOD fps measurement on GTX 1650 — predicted meaningful gain (unmeasured)
+- GPU shadow via parallel prefix scan — deferred from Phase 5
+- `render_gif::render_gif` commented out in main.rs — deferred from Phase 5
+- Occupancy analysis via Instruments/Metal GPU trace — requires full Xcode.app (deferred from Phase 5)
+
+Phase 8 artifacts (in progress):
+- `docs/planning/viewer-phase-8.md` — roadmap: shadow toggle (`.`), fog toggle (`,`), Visual Artifact Tolerance (`;`, 4 modes), LOD Distance (`'`, 4 modes), out-of-core tile streaming
 
 Known open items from Phase 4:
 - Supersampled ray optimization considered but not implemented: march 1 reference ray, approximate 3 neighbor heights via `h ≈ h_center + grad_x * Δcol + grad_y * Δrow` (using Phase 2 normal map). Would reduce gather 4→1 per step. Breaks at sharp discrete peaks.
