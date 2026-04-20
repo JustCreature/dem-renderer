@@ -26,13 +26,13 @@ pub fn render_gpu_buffer(
     );
 
     // heightmap buffer
-    let hm_f32: Vec<f32> = hm.data.iter().map(|&v| v as f32).collect();
+    let hm_f32 = &hm.data;
     let hm_buffer: wgpu::Buffer =
         gpu_ctx
             .device
             .create_buffer_init(&wgpu::util::BufferInitDescriptor {
                 label: Some("heightmap"),
-                contents: bytemuck::cast_slice(&hm_f32),
+                contents: bytemuck::cast_slice(hm_f32),
                 usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
             });
 

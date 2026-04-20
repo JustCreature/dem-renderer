@@ -26,7 +26,7 @@ pub fn render_gpu_texture(
     );
 
     // heightmap texture
-    let hm_f32: Vec<f32> = hm.data.iter().map(|&v| v as f32).collect();
+    let hm_f32 = &hm.data;
     let hm_texture = gpu_ctx.device.create_texture(&wgpu::TextureDescriptor {
         label: Some("heightmap_texture"),
         size: wgpu::Extent3d {
@@ -43,7 +43,7 @@ pub fn render_gpu_texture(
     });
     gpu_ctx.queue.write_texture(
         hm_texture.as_image_copy(),
-        bytemuck::cast_slice(&hm_f32),
+        bytemuck::cast_slice(hm_f32),
         wgpu::TexelCopyBufferLayout {
             offset: 0,
             bytes_per_row: Some(hm.cols as u32 * 4),

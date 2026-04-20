@@ -20,7 +20,7 @@ pub fn raymarch(ray: &Ray, hm: &Heightmap, step_m: f32, t_max: f32) -> Option<[f
         }
 
         // 4. sample terrain height at htis pixel
-        let terrain_z: f32 = hm.data[row as usize * hm.cols + col as usize] as f32;
+        let terrain_z: f32 = hm.data[row as usize * hm.cols + col as usize];
 
         // 5. hit test
         if p[2] < terrain_z {
@@ -47,7 +47,7 @@ fn binary_search_hit(
 
         let col = (p[0] / hm.dx_meters as f32) as usize;
         let row = (p[1] / hm.dy_meters as f32) as usize;
-        let terrain_z = hm.data[row * hm.cols + col] as f32;
+        let terrain_z = hm.data[row * hm.cols + col];
 
         if p[2] < terrain_z {
             t_hi = t_mid; // still below — move upper bound down

@@ -58,7 +58,7 @@ impl GpuScene {
         let hm_data: Vec<half::f16> = hm
             .data
             .iter()
-            .map(|&v| half::f16::from_f32(v as f32))
+            .map(|&v| half::f16::from_f32(v))
             .collect();
         let hm_texture = gpu_ctx.device.create_texture(&wgpu::TextureDescriptor {
             label: Some("scene_hm_tex"),

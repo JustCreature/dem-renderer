@@ -117,14 +117,14 @@ pub unsafe fn raymarch_avx2(
         let safe_row = |r: isize| r.clamp(0, hm.rows as isize - 1) as usize;
 
         let terrain_heights = [
-            hm.data[safe_row(row_arr[0] as isize) * hm.cols + safe_col(col_arr[0] as isize)] as f32,
-            hm.data[safe_row(row_arr[1] as isize) * hm.cols + safe_col(col_arr[1] as isize)] as f32,
-            hm.data[safe_row(row_arr[2] as isize) * hm.cols + safe_col(col_arr[2] as isize)] as f32,
-            hm.data[safe_row(row_arr[3] as isize) * hm.cols + safe_col(col_arr[3] as isize)] as f32,
-            hm.data[safe_row(row_arr[4] as isize) * hm.cols + safe_col(col_arr[4] as isize)] as f32,
-            hm.data[safe_row(row_arr[5] as isize) * hm.cols + safe_col(col_arr[5] as isize)] as f32,
-            hm.data[safe_row(row_arr[6] as isize) * hm.cols + safe_col(col_arr[6] as isize)] as f32,
-            hm.data[safe_row(row_arr[7] as isize) * hm.cols + safe_col(col_arr[7] as isize)] as f32,
+            hm.data[safe_row(row_arr[0] as isize) * hm.cols + safe_col(col_arr[0] as isize)],
+            hm.data[safe_row(row_arr[1] as isize) * hm.cols + safe_col(col_arr[1] as isize)],
+            hm.data[safe_row(row_arr[2] as isize) * hm.cols + safe_col(col_arr[2] as isize)],
+            hm.data[safe_row(row_arr[3] as isize) * hm.cols + safe_col(col_arr[3] as isize)],
+            hm.data[safe_row(row_arr[4] as isize) * hm.cols + safe_col(col_arr[4] as isize)],
+            hm.data[safe_row(row_arr[5] as isize) * hm.cols + safe_col(col_arr[5] as isize)],
+            hm.data[safe_row(row_arr[6] as isize) * hm.cols + safe_col(col_arr[6] as isize)],
+            hm.data[safe_row(row_arr[7] as isize) * hm.cols + safe_col(col_arr[7] as isize)],
         ];
         let terrain_z = _mm256_loadu_ps(terrain_heights.as_ptr());
 
@@ -202,14 +202,14 @@ unsafe fn binary_search_hit_avx2(
         let safe_row = |r: isize| r.clamp(0, hm.rows as isize - 1) as usize;
 
         let terrain_heights = [
-            hm.data[safe_row(row_arr[0] as isize) * hm.cols + safe_col(col_arr[0] as isize)] as f32,
-            hm.data[safe_row(row_arr[1] as isize) * hm.cols + safe_col(col_arr[1] as isize)] as f32,
-            hm.data[safe_row(row_arr[2] as isize) * hm.cols + safe_col(col_arr[2] as isize)] as f32,
-            hm.data[safe_row(row_arr[3] as isize) * hm.cols + safe_col(col_arr[3] as isize)] as f32,
-            hm.data[safe_row(row_arr[4] as isize) * hm.cols + safe_col(col_arr[4] as isize)] as f32,
-            hm.data[safe_row(row_arr[5] as isize) * hm.cols + safe_col(col_arr[5] as isize)] as f32,
-            hm.data[safe_row(row_arr[6] as isize) * hm.cols + safe_col(col_arr[6] as isize)] as f32,
-            hm.data[safe_row(row_arr[7] as isize) * hm.cols + safe_col(col_arr[7] as isize)] as f32,
+            hm.data[safe_row(row_arr[0] as isize) * hm.cols + safe_col(col_arr[0] as isize)],
+            hm.data[safe_row(row_arr[1] as isize) * hm.cols + safe_col(col_arr[1] as isize)],
+            hm.data[safe_row(row_arr[2] as isize) * hm.cols + safe_col(col_arr[2] as isize)],
+            hm.data[safe_row(row_arr[3] as isize) * hm.cols + safe_col(col_arr[3] as isize)],
+            hm.data[safe_row(row_arr[4] as isize) * hm.cols + safe_col(col_arr[4] as isize)],
+            hm.data[safe_row(row_arr[5] as isize) * hm.cols + safe_col(col_arr[5] as isize)],
+            hm.data[safe_row(row_arr[6] as isize) * hm.cols + safe_col(col_arr[6] as isize)],
+            hm.data[safe_row(row_arr[7] as isize) * hm.cols + safe_col(col_arr[7] as isize)],
         ];
         let terrain_z = _mm256_loadu_ps(terrain_heights.as_ptr());
 

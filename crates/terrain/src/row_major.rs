@@ -9,10 +9,10 @@ pub fn compute_normals_scalar(hm: &dem_io::Heightmap) -> NormalMap {
 
     for r in 1..hm.rows - 1 {
         for c in 1..hm.cols - 1 {
-            let upper: f32 = hm.data[(r - 1) * hm.cols + c] as f32;
-            let lower: f32 = hm.data[(r + 1) * hm.cols + c] as f32;
-            let left: f32 = hm.data[r * hm.cols + (c - 1)] as f32;
-            let right: f32 = hm.data[r * hm.cols + (c + 1)] as f32;
+            let upper: f32 = hm.data[(r - 1) * hm.cols + c];
+            let lower: f32 = hm.data[(r + 1) * hm.cols + c];
+            let left: f32 = hm.data[r * hm.cols + (c - 1)];
+            let right: f32 = hm.data[r * hm.cols + (c + 1)];
 
             let single_nx: f32 = (left - right) / (2.0 * hm.dx_meters) as f32;
             let single_ny: f32 = (upper - lower) / (2.0 * hm.dy_meters) as f32;
@@ -52,16 +52,16 @@ pub unsafe fn compute_normals_neon(hm: &dem_io::Heightmap) -> NormalMap {
             let mut c = 1usize;
             while c + 4 < hm.cols - 1 {
                 let ptr_upper = hm.data.as_ptr().add((r - 1) * hm.cols + c);
-                let upper = vcvtq_f32_s32(vmovl_s16(vld1_s16(ptr_upper)));
+                let upper = vld1q_f32(ptr_upper);
 
                 let ptr_lower = hm.data.as_ptr().add((r + 1) * hm.cols + c);
-                let lower = vcvtq_f32_s32(vmovl_s16(vld1_s16(ptr_lower)));
+                let lower = vld1q_f32(ptr_lower);
 
                 let ptr_left = hm.data.as_ptr().add(r * hm.cols + (c - 1));
-                let left = vcvtq_f32_s32(vmovl_s16(vld1_s16(ptr_left)));
+                let left = vld1q_f32(ptr_left);
 
                 let ptr_right = hm.data.as_ptr().add(r * hm.cols + (c + 1));
-                let right = vcvtq_f32_s32(vmovl_s16(vld1_s16(ptr_right)));
+                let right = vld1q_f32(ptr_right);
 
                 let vec_nx: float32x4_t = vmulq_f32(vsubq_f32(left, right), inv_2dx);
                 let vec_ny: float32x4_t = vmulq_f32(vsubq_f32(upper, lower), inv_2dy);
@@ -94,10 +94,10 @@ pub unsafe fn compute_normals_neon(hm: &dem_io::Heightmap) -> NormalMap {
             }
             // scalar tail: c..cols-1
             while c < hm.cols - 1 {
-                let upper: f32 = hm.data[(r - 1) * hm.cols + c] as f32;
-                let lower: f32 = hm.data[(r + 1) * hm.cols + c] as f32;
-                let left: f32 = hm.data[r * hm.cols + (c - 1)] as f32;
-                let right: f32 = hm.data[r * hm.cols + (c + 1)] as f32;
+                let upper: f32 = hm.data[(r - 1) * hm.cols + c];
+                let lower: f32 = hm.data[(r + 1) * hm.cols + c];
+                let left: f32 = hm.data[r * hm.cols + (c - 1)];
+                let right: f32 = hm.data[r * hm.cols + (c + 1)];
 
                 let single_nx: f32 = (left - right) / (2.0 * hm.dx_meters) as f32;
                 let single_ny: f32 = (upper - lower) / (2.0 * hm.dy_meters) as f32;
@@ -153,16 +153,16 @@ pub unsafe fn compute_normals_neon_parallel(hm: &dem_io::Heightmap) -> NormalMap
 
             while c + 4 < hm.cols - 1 {
                 let ptr_upper = hm.data.as_ptr().add((r - 1) * hm.cols + c);
-                let upper = vcvtq_f32_s32(vmovl_s16(vld1_s16(ptr_upper)));
+                let upper = vld1q_f32(ptr_upper);
 
                 let ptr_lower = hm.data.as_ptr().add((r + 1) * hm.cols + c);
-                let lower = vcvtq_f32_s32(vmovl_s16(vld1_s16(ptr_lower)));
+                let lower = vld1q_f32(ptr_lower);
 
                 let ptr_left = hm.data.as_ptr().add(r * hm.cols + (c - 1));
-                let left = vcvtq_f32_s32(vmovl_s16(vld1_s16(ptr_left)));
+                let left = vld1q_f32(ptr_left);
 
                 let ptr_right = hm.data.as_ptr().add(r * hm.cols + (c + 1));
-                let right = vcvtq_f32_s32(vmovl_s16(vld1_s16(ptr_right)));
+                let right = vld1q_f32(ptr_right);
 
                 let vec_nx: float32x4_t = vmulq_f32(vsubq_f32(left, right), inv_2dx);
                 let vec_ny: float32x4_t = vmulq_f32(vsubq_f32(upper, lower), inv_2dy);
@@ -186,10 +186,10 @@ pub unsafe fn compute_normals_neon_parallel(hm: &dem_io::Heightmap) -> NormalMap
             }
             // scalar tail: c..cols-1
             while c < hm.cols - 1 {
-                let upper: f32 = hm.data[(r - 1) * hm.cols + c] as f32;
-                let lower: f32 = hm.data[(r + 1) * hm.cols + c] as f32;
-                let left: f32 = hm.data[r * hm.cols + (c - 1)] as f32;
-                let right: f32 = hm.data[r * hm.cols + (c + 1)] as f32;
+                let upper: f32 = hm.data[(r - 1) * hm.cols + c];
+                let lower: f32 = hm.data[(r + 1) * hm.cols + c];
+                let left: f32 = hm.data[r * hm.cols + (c - 1)];
+                let right: f32 = hm.data[r * hm.cols + (c + 1)];
 
                 let single_nx: f32 = (left - right) / (2.0 * hm.dx_meters) as f32;
                 let single_ny: f32 = (upper - lower) / (2.0 * hm.dy_meters) as f32;
@@ -233,16 +233,16 @@ pub unsafe fn compute_normals_neon_8(hm: &dem_io::Heightmap) -> NormalMap {
             let mut c = 1usize;
             while c + 8 < hm.cols - 1 {
                 let ptr_upper_a = hm.data.as_ptr().add((r - 1) * hm.cols + c);
-                let upper_a = vcvtq_f32_s32(vmovl_s16(vld1_s16(ptr_upper_a)));
+                let upper_a = vld1q_f32(ptr_upper_a);
 
                 let ptr_lower_a = hm.data.as_ptr().add((r + 1) * hm.cols + c);
-                let lower_a = vcvtq_f32_s32(vmovl_s16(vld1_s16(ptr_lower_a)));
+                let lower_a = vld1q_f32(ptr_lower_a);
 
                 let ptr_left_a = hm.data.as_ptr().add(r * hm.cols + (c - 1));
-                let left_a = vcvtq_f32_s32(vmovl_s16(vld1_s16(ptr_left_a)));
+                let left_a = vld1q_f32(ptr_left_a);
 
                 let ptr_right_a = hm.data.as_ptr().add(r * hm.cols + (c + 1));
-                let right_a = vcvtq_f32_s32(vmovl_s16(vld1_s16(ptr_right_a)));
+                let right_a = vld1q_f32(ptr_right_a);
 
                 let vec_nx_a: float32x4_t = vmulq_f32(vsubq_f32(left_a, right_a), inv_2dx);
                 let vec_ny_a: float32x4_t = vmulq_f32(vsubq_f32(upper_a, lower_a), inv_2dy);
@@ -276,16 +276,16 @@ pub unsafe fn compute_normals_neon_8(hm: &dem_io::Heightmap) -> NormalMap {
 
                 // 8
                 let ptr_upper_b = hm.data.as_ptr().add((r - 1) * hm.cols + c + 4);
-                let upper_b = vcvtq_f32_s32(vmovl_s16(vld1_s16(ptr_upper_b)));
+                let upper_b = vld1q_f32(ptr_upper_b);
 
                 let ptr_lower_b = hm.data.as_ptr().add((r + 1) * hm.cols + c + 4);
-                let lower_b = vcvtq_f32_s32(vmovl_s16(vld1_s16(ptr_lower_b)));
+                let lower_b = vld1q_f32(ptr_lower_b);
 
                 let ptr_left_b = hm.data.as_ptr().add(r * hm.cols + (c - 1) + 4);
-                let left_b = vcvtq_f32_s32(vmovl_s16(vld1_s16(ptr_left_b)));
+                let left_b = vld1q_f32(ptr_left_b);
 
                 let ptr_right_b = hm.data.as_ptr().add(r * hm.cols + (c + 1) + 4);
-                let right_b = vcvtq_f32_s32(vmovl_s16(vld1_s16(ptr_right_b)));
+                let right_b = vld1q_f32(ptr_right_b);
 
                 let vec_nx_b: float32x4_t = vmulq_f32(vsubq_f32(left_b, right_b), inv_2dx);
                 let vec_ny_b: float32x4_t = vmulq_f32(vsubq_f32(upper_b, lower_b), inv_2dy);
@@ -321,10 +321,10 @@ pub unsafe fn compute_normals_neon_8(hm: &dem_io::Heightmap) -> NormalMap {
             }
             // scalar tail: c..cols-1
             while c < hm.cols - 1 {
-                let upper: f32 = hm.data[(r - 1) * hm.cols + c] as f32;
-                let lower: f32 = hm.data[(r + 1) * hm.cols + c] as f32;
-                let left: f32 = hm.data[r * hm.cols + (c - 1)] as f32;
-                let right: f32 = hm.data[r * hm.cols + (c + 1)] as f32;
+                let upper: f32 = hm.data[(r - 1) * hm.cols + c];
+                let lower: f32 = hm.data[(r + 1) * hm.cols + c];
+                let left: f32 = hm.data[r * hm.cols + (c - 1)];
+                let right: f32 = hm.data[r * hm.cols + (c + 1)];
 
                 let single_nx: f32 = (left - right) / (2.0 * hm.dx_meters) as f32;
                 let single_ny: f32 = (upper - lower) / (2.0 * hm.dy_meters) as f32;

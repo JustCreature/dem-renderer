@@ -39,14 +39,14 @@ pub unsafe fn compute_shadow_avx2(hm: &Heightmap, sun_elevation_rad: f32) -> Sha
 
         for c in 0..hm.cols {
             let heights = [
-                hm.data[base[0] + c] as f32,
-                hm.data[base[1] + c] as f32,
-                hm.data[base[2] + c] as f32,
-                hm.data[base[3] + c] as f32,
-                hm.data[base[4] + c] as f32,
-                hm.data[base[5] + c] as f32,
-                hm.data[base[6] + c] as f32,
-                hm.data[base[7] + c] as f32,
+                hm.data[base[0] + c],
+                hm.data[base[1] + c],
+                hm.data[base[2] + c],
+                hm.data[base[3] + c],
+                hm.data[base[4] + c],
+                hm.data[base[5] + c],
+                hm.data[base[6] + c],
+                hm.data[base[7] + c],
             ];
             let h_vec = _mm256_loadu_ps(heights.as_ptr());
             let h_eff = _mm256_add_ps(h_vec, _mm256_set1_ps(c as f32 * step));
@@ -70,7 +70,7 @@ pub unsafe fn compute_shadow_avx2(hm: &Heightmap, sun_elevation_rad: f32) -> Sha
     while r < hm.rows {
         let mut running_max = f32::NEG_INFINITY;
         for c in 0..hm.cols {
-            let h_eff = hm.data[r * hm.cols + c] as f32 + c as f32 * step;
+            let h_eff = hm.data[r * hm.cols + c] + c as f32 * step;
             if h_eff < running_max {
                 data[r * hm.cols + c] = 0.0;
             }
@@ -109,7 +109,7 @@ pub unsafe fn compute_shadow_avx2_parallel(hm: &Heightmap, sun_elevation_rad: f3
                     let global_r = chunk_idx * 8 + local_r;
                     let mut running_max = f32::NEG_INFINITY;
                     for c in 0..hm.cols {
-                        let h_eff = hm.data[global_r * hm.cols + c] as f32 + c as f32 * step;
+                        let h_eff = hm.data[global_r * hm.cols + c] + c as f32 * step;
                         if h_eff < running_max {
                             chunk[local_r * hm.cols + c] = 0.0;
                         }
@@ -134,14 +134,14 @@ pub unsafe fn compute_shadow_avx2_parallel(hm: &Heightmap, sun_elevation_rad: f3
 
             for c in 0..hm.cols {
                 let heights = [
-                    hm.data[base[0] + c] as f32,
-                    hm.data[base[1] + c] as f32,
-                    hm.data[base[2] + c] as f32,
-                    hm.data[base[3] + c] as f32,
-                    hm.data[base[4] + c] as f32,
-                    hm.data[base[5] + c] as f32,
-                    hm.data[base[6] + c] as f32,
-                    hm.data[base[7] + c] as f32,
+                    hm.data[base[0] + c],
+                    hm.data[base[1] + c],
+                    hm.data[base[2] + c],
+                    hm.data[base[3] + c],
+                    hm.data[base[4] + c],
+                    hm.data[base[5] + c],
+                    hm.data[base[6] + c],
+                    hm.data[base[7] + c],
                 ];
                 let h_vec = _mm256_loadu_ps(heights.as_ptr());
                 let h_eff = _mm256_add_ps(h_vec, _mm256_set1_ps(c as f32 * step));
@@ -208,7 +208,7 @@ pub unsafe fn compute_shadow_avx2_parallel_with_azimuth(
                 while rf >= 0.0 && rf < hm.rows as f32 && cf >= 0.0 && cf < hm.cols as f32 {
                     let r = rf.floor() as usize;
                     let c = cf.floor() as usize;
-                    let h_eff = hm.data[r * hm.cols + c] as f32 + dist * tan_sun;
+                    let h_eff = hm.data[r * hm.cols + c] + dist * tan_sun;
                     if h_eff < rm {
                         let margin = rm - h_eff;
                         *ptr.add(r * hm.cols + c) = (1.0 - margin / penumbra_meters).max(0.0);
@@ -241,14 +241,14 @@ pub unsafe fn compute_shadow_avx2_parallel_with_azimuth(
             .all(|(&r, &c)| r >= 0.0 && r < hm.rows as f32 && c >= 0.0 && c < hm.cols as f32)
         {
             let heights = [
-                hm.data[rf[0].floor() as usize * hm.cols + cf[0].floor() as usize] as f32,
-                hm.data[rf[1].floor() as usize * hm.cols + cf[1].floor() as usize] as f32,
-                hm.data[rf[2].floor() as usize * hm.cols + cf[2].floor() as usize] as f32,
-                hm.data[rf[3].floor() as usize * hm.cols + cf[3].floor() as usize] as f32,
-                hm.data[rf[4].floor() as usize * hm.cols + cf[4].floor() as usize] as f32,
-                hm.data[rf[5].floor() as usize * hm.cols + cf[5].floor() as usize] as f32,
-                hm.data[rf[6].floor() as usize * hm.cols + cf[6].floor() as usize] as f32,
-                hm.data[rf[7].floor() as usize * hm.cols + cf[7].floor() as usize] as f32,
+                hm.data[rf[0].floor() as usize * hm.cols + cf[0].floor() as usize],
+                hm.data[rf[1].floor() as usize * hm.cols + cf[1].floor() as usize],
+                hm.data[rf[2].floor() as usize * hm.cols + cf[2].floor() as usize],
+                hm.data[rf[3].floor() as usize * hm.cols + cf[3].floor() as usize],
+                hm.data[rf[4].floor() as usize * hm.cols + cf[4].floor() as usize],
+                hm.data[rf[5].floor() as usize * hm.cols + cf[5].floor() as usize],
+                hm.data[rf[6].floor() as usize * hm.cols + cf[6].floor() as usize],
+                hm.data[rf[7].floor() as usize * hm.cols + cf[7].floor() as usize],
             ];
             let h_vec = _mm256_loadu_ps(heights.as_ptr());
             let h_eff = _mm256_add_ps(h_vec, _mm256_set1_ps(dist * tan_sun));
@@ -286,7 +286,7 @@ pub unsafe fn compute_shadow_avx2_parallel_with_azimuth(
             while r_f >= 0.0 && r_f < hm.rows as f32 && c_f >= 0.0 && c_f < hm.cols as f32 {
                 let r = r_f.floor() as usize;
                 let c = c_f.floor() as usize;
-                let h_eff = hm.data[r * hm.cols + c] as f32 + d * tan_sun;
+                let h_eff = hm.data[r * hm.cols + c] + d * tan_sun;
                 if h_eff < rm {
                     let margin = rm - h_eff;
                     *ptr.add(r * hm.cols + c) = (1.0 - margin / penumbra_meters).max(0.0);
