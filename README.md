@@ -9,6 +9,8 @@ Look for CONFIG_PERFORMANCE comment to change performance related values,
 you can boost performance but it will introdice visual artefacts, especially at narrow places like the top of the ridge ot a thin wall.
 
 get data from copernicus: `aws s3 cp s3://copernicus-dem-30m/Copernicus_DSM_COG_10_N47_00_E011_00_DEM/ ./tiles/Copernicus_DSM_COG_10_N47_00_E011_00_DEM --recursive --no-sign-request`
+https://portal.opentopography.org/raster?opentopoID=OTSDEM.032021.4326.3
+
 
 
 ## Compilation

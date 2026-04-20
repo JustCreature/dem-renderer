@@ -549,12 +549,28 @@ fn sun_position(lat_rad: f32, day: i32, hour: f32) -> (f32, f32) {
 }
 
 fn prepare_scene(tile_path: &Path, width: u32, height: u32) -> (GpuScene, Arc<Heightmap>, f32) {
-    let hm: Heightmap = match dem_io::parse_bil(tile_path) {
-        Ok(hm) => hm,
-        Err(error) => panic!(
-            "Couldn't open the file {:?}; errors: {:?}",
-            tile_path, error
-        ),
+    let dem_format = tile_path
+        .extension()
+        .expect("error getting extension of DEM data");
+
+    let hm: Heightmap = if dem_format == "bil" {
+        match dem_io::parse_bil(tile_path) {
+            Ok(hm) => hm,
+            Err(error) => panic!(
+                "Couldn't open the file {:?}; errors: {:?}",
+                tile_path, error
+            ),
+        }
+    } else if dem_format == "tif" {
+        match dem_io::parse_geotiff(tile_path) {
+            Ok(hm) => hm,
+            Err(error) => panic!(
+                "Couldn't open the file {:?}; errors: {:?}",
+                tile_path, error
+            ),
+        }
+    } else {
+        panic!("DEM format is not supported {:?}", dem_format)
     };
 
     let normal_map = terrain::compute_normals_vector_par(&hm);

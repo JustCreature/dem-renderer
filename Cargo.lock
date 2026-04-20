@@ -532,6 +532,7 @@ name = "dem_io"
 version = "0.1.0"
 dependencies = [
  "image",
+ "tiff",
 ]
 
 [[package]]

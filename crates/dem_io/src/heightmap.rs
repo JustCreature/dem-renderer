@@ -134,7 +134,7 @@ fn get_value_from_neighbours(
     sum / count
 }
 
-fn fill_nodata(data: &mut [f32], rows: usize, cols: usize, nodata: f32) {
+pub(crate) fn fill_nodata(data: &mut [f32], rows: usize, cols: usize, nodata: f32) {
     for r in 0..rows {
         for c in 0..cols {
             let index = r * cols + c;
@@ -148,7 +148,11 @@ fn fill_nodata(data: &mut [f32], rows: usize, cols: usize, nodata: f32) {
 
 fn build_grayscale_png(heightmap: &Heightmap, cols: usize, rows: usize) {
     let min = heightmap.data.iter().cloned().fold(f32::INFINITY, f32::min);
-    let max = heightmap.data.iter().cloned().fold(f32::NEG_INFINITY, f32::max);
+    let max = heightmap
+        .data
+        .iter()
+        .cloned()
+        .fold(f32::NEG_INFINITY, f32::max);
 
     let pixels: Vec<u8> = heightmap
         .data
@@ -207,8 +211,16 @@ pub fn parse_bil(bil_path: &Path) -> Result<Heightmap, DemError> {
     let after = bil_data.iter().filter(|&&v| v == NODATA_F32).count();
     println!("nodata cells — before: {}, after: {}", before, after);
 
-    let min = bil_data.iter().cloned().filter(|&v| v != NODATA_F32).fold(f32::INFINITY, f32::min);
-    let max = bil_data.iter().cloned().filter(|&v| v != NODATA_F32).fold(f32::NEG_INFINITY, f32::max);
+    let min = bil_data
+        .iter()
+        .cloned()
+        .filter(|&v| v != NODATA_F32)
+        .fold(f32::INFINITY, f32::min);
+    let max = bil_data
+        .iter()
+        .cloned()
+        .filter(|&v| v != NODATA_F32)
+        .fold(f32::NEG_INFINITY, f32::max);
     println!("elevation range check: {} to {} metres", min, max);
 
     let dx_deg = hdr_map.x_dim;
