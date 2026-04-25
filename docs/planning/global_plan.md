@@ -16,7 +16,20 @@
 
 ## Phase 1 — DEM Data Ingestion & Memory Layout
 
-1. **Parse real data**: USGS SRTM `.hgt` files (big-endian `i16`, 1201×1201 or 3601×3601 per tile). Stitch 2–4 tiles to reach ~4000×4000. No external GeoTIFF library — parse the binary format yourself (it's trivial: just a flat array of big-endian 16-bit signed ints).
+1. **Parse real data**: USGS SRTM `.hgt` / BIL files (`i16`, 1201×1201 or 3601×3601 per tile). Stitch 2–4 tiles to reach ~4000×4000. No external GeoTIFF library — parse the binary format yourself: read the `.hdr` for dimensions and byte order, then interpret the `.bil` as a flat array of `i16` values.
+
+### Geo 101 — coordinate system, resolution, and data format
+
+- **Arc-second**: 1 degree = 60 arc-minutes = 3600 arc-seconds. SRTM-1 samples every 1 arc-second. At the equator, 1 arc-second latitude ≈ 30.9 m. Longitude spacing shrinks by `cos(lat)` — at 47°N it is ~21 m east-west vs ~31 m north-south. **Pixels are not square on the ground** — critical for correct normal computation (the x and y finite differences must use the real-world cell sizes, not just pixel counts).
+- **Tile naming**: tiles are named by their south-west corner. `N47E011` covers 47–48°N, 11–12°E. The first row in the file is the **north** edge (48°N), the last row is the south edge (47°N). Y increases southward in the array but northward in geography — a common source of upside-down renders.
+- **3601 vs 3600**: a 1°×1° tile at 1 arc-second resolution has 3600 intervals → 3601 sample points (fencepost). The last row/column duplicates the first row/column of the adjacent tile. Drop it when stitching.
+- **NODATA = -32767**: cells over ocean or where the radar had no return are marked -32767. Must be detected and handled before compute — passing -32767 as an elevation into normal or shadow calculations produces nonsense.
+- **BIL format**: a `.bil` file is a raw flat binary array (row-major, north-to-south, west-to-east within each row). The `.hdr` sidecar declares `NROWS`, `NCOLS`, `NBITS`, `BYTEORDER` (I = little-endian, M = big-endian), `NODATA`. The `.blw` world file gives the pixel size in degrees and the origin. The classic `.hgt` format is identical but big-endian with no header (dimensions inferred from file size).
+- **Cell size in meters** (needed for Phase 2 normals):
+  - `dy_meters ≈ YDIM_degrees × 111,320` (latitude: ~constant)
+  - `dx_meters ≈ XDIM_degrees × 111,320 × cos(lat_radians)` (longitude: shrinks with latitude)
+  - For Hintertux (47°N): dy ≈ 30.9 m, dx ≈ 21.1 m
+
 2. **Memory layout decision**: Store as a flat `Vec<i16>` in row-major order. Measure sizeof — 4000×4000×2 = ~32 MB. This fits in L3 but blows L2. Convert to `Vec<f32>` (64 MB) only when needed for compute — keep the cold copy small.
 3. **Tile the data**: Divide into NxN tiles (experiment: 64×64, 128×128, 256×256). Store tiles in Z-order (Morton curve) or tile-linear order so that spatial locality maps to memory locality. The goal: when processing a region, all data fits in L2 or at worst L3.
 4. **Alignment**: Ensure tile starts are 64-byte aligned (cache-line) and ideally 4096-byte aligned (page boundary) for prefetcher friendliness. Use `std::alloc::alloc` with `Layout::from_size_align`.
