@@ -3,6 +3,7 @@ mod frame_render_final;
 mod render_gif;
 mod system_info;
 mod utils;
+mod viewer;
 
 // Tell the NVIDIA Optimus and AMD Hybrid driver to route this process through the discrete GPU.
 // The driver checks for these exported symbols at process load time, before any D3D12/Vulkan
@@ -22,12 +23,30 @@ use std::path::Path;
 
 use crate::benchmarks::*;
 use frame_render_final::{render_3d_pic_cpu, render_3d_pic_gpu};
+use render_gpu::{GpuContext, GpuScene};
 use utils::*;
 
 use dem_io::{Heightmap, TiledHeightmap};
 use terrain::{NormalMap, ShadowMask};
 
 fn main() {
+    let args: Vec<String> = std::env::args().collect();
+    let tile_path = Path::new("n47_e011_1arc_v3_bil/n47_e011_1arc_v3.bil");
+    const WIDTH: u32 = 1600;
+    const HEIGHT: u32 = 533;
+    // const WIDTH: u32 = 8000;
+    // const HEIGHT: u32 = 2667;
+    let mut vsync: bool = false;
+    if args.contains(&"--vsync".to_string()) {
+        vsync = true;
+    }
+    if args.contains(&"--view".to_string()) {
+        viewer::run(tile_path, WIDTH, HEIGHT, vsync);
+
+        return;
+    }
+
+    // --- BENCHMARKS ---
     system_info::print_system_info();
     println!("dem_renderer");
     let data: Vec<f32> = (0..N).map(|i| i as f32).collect();
@@ -512,7 +531,7 @@ fn main() {
     benchmark_multi_frame_gpu_separate(&gpu_ctx, &heightmap, &normal_map, &shadow_mask);
     benchmark_multi_frame_gpu_combined(&gpu_ctx, &heightmap, &shadow_mask);
     // GpuScene takes ctx by value (owns it) — create a dedicated one
-    benchmark_multi_frame_gpu_scene(render_gpu::GpuContext::new(), &heightmap, &shadow_mask);
+    benchmark_multi_frame_gpu_scene(render_gpu::GpuContext::new(), &heightmap, &normal_map, &shadow_mask);
 
     render_gif::render_gif(tile_path);
 

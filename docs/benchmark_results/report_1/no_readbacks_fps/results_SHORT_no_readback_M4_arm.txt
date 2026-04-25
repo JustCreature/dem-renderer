@@ -1,0 +1,31 @@
+=== System Info ===
+Hostname       : ZALANDO-87372
+OS             : macOS 26.4
+Arch           : aarch64
+CPU            : Apple M4 Max
+CPU freq       : 4 MHz
+Cores          : 14 physical / 14 logical
+Cache          : L1D 64 KB  L2 4 MB
+NUMA nodes     : 1 (macOS unified memory, no NUMA)
+Power mode     : Normal
+RAM            : 36 GB
+GPU            : Apple M4 Max
+Build profile  : release
+rustc          : rustc 1.94.0 (4a4ef493e 2026-03-02)
+===================
+
+---------- FPS Benchmark ----------
+--- FPS Benchmark: 1600×533, 30 frames ---
+  gentle pan: camera moves 200 m east per frame
+
+  CPU scalar parallel:    67.6 ms/frame  (14.80 fps)  [12 Mpix/s]
+  GPU combined (rdback):   21.7 ms/frame  (46.2 fps)  [39 Mpix/s]
+  [GPU] found: Apple M4 Max (IntegratedGpu)
+  [GPU] selected: Apple M4 Max (IntegratedGpu)
+  GPU scene (no rdback):    2.1 ms/frame  (476.9 fps)  [406 Mpix/s]
+
+  GPU speedup vs CPU:            32.2×
+  readback overhead (scene/comb): 10.3×
+render valley,117643556
+wall clock: 0.1177 seconds
+valley render: 0.11s

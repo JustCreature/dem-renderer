@@ -25,4 +25,8 @@ render_cpu = { path = "crates/render_cpu" }
 render_gpu = { path = "crates/render_gpu" }
 image = "0.25"
 rayon = "1"
-sysinfo = "0.33"
+sysinfo = "0.33.1"
+winit = "0.30"
+wgpu = "29.0.1"
+glyphon = { git = "https://github.com/grovesNL/glyphon", branch = "main" }
+bytemuck = { version = "1", features = ["derive"] }

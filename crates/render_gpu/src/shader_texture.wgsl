@@ -52,9 +52,12 @@ fn binary_search_hit(t_lo_in: f32, t_hi_in: f32, dir: vec3<f32>, iterations: i32
     for (var i = 0; i < iterations; i++) {
         let t_mid = (t_lo + t_hi) * 0.5;
         let p_mid = cam.origin + dir * t_mid;
-        let c = i32(p_mid.x / cam.dx_meters);
-        let r = i32(p_mid.y / cam.dy_meters);
-        let h_mid = textureLoad(hm_tex, vec2<i32>(c, r), 0).r;
+
+        let uv: vec2<f32> = vec2<f32>(
+            (p_mid.x / cam.dx_meters + 0.5) / f32(cam.hm_cols),
+            (p_mid.y / cam.dy_meters + 0.5) / f32(cam.hm_rows)
+        );
+        let h_mid = textureSampleLevel(hm_tex, hm_sampler, uv, 0.0).r;
         if p_mid.z <= h_mid {
             t_hi = t_mid;
         } else {
@@ -91,64 +94,108 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
         let col = i32(pos.x / cam.dx_meters);
         let row = i32(pos.y / cam.dy_meters);
 
-        // bounds check — stop if ray left the heightmap                                                                                                           
+        // bounds check — stop if ray left the heightmap
         if col < 0 || row < 0 || col >= i32(cam.hm_cols) || row >= i32(cam.hm_rows) { break; }
-        // max distance check                                                                                                                                      
+        // max distance check
         if t > cam.t_max { break; }
+        // sky early exit — upward ray already above max terrain height
+        // 10k is the limit, since Everest is lower than 10k,
+        if dir.z > 0.0 && pos.z > 10000.0 { break; }
 
-        let h = textureLoad(hm_tex, vec2<i32>(col, row), 0).r;
+        let uv: vec2<f32> = vec2<f32>(
+            (pos.x / cam.dx_meters + 0.5) / f32(cam.hm_cols),
+            (pos.y / cam.dy_meters + 0.5) / f32(cam.hm_rows)
+        );
+        let h = textureSampleLevel(hm_tex, hm_sampler, uv, 0.0).r;
 
         if pos.z <= h {
             hit = true;
-
-            // refine hit position between t_prev (above) and t (below)
-            pos = binary_search_hit(t - cam.step_m, t, dir, 8);
-
+            // use t_prev as lower bracket (correct for adaptive steps)
+            // pos = binary_search_hit(t - cam.step_m, t, dir, 8);
+            pos = binary_search_hit(t_prev, t, dir, 32);
             break;
         }
 
+        // adaptive step: scale by distance above terrain (sphere tracing)
+        // safety factor 0.5 — conservative enough for steep mountain slopes
+        // cam.step_m is the minimum step to prevent stalling near-surface
         t_prev = t;
-        t += cam.step_m;
+        // t += cam.step_m;
+        t += max((pos.z - h) * 0.3, cam.step_m);
         pos = cam.origin + dir * t;
     }
 
     if hit {
-        let col = i32(pos.x / cam.dx_meters);
-        let row = i32(pos.y / cam.dy_meters);
-        let idx = u32(row) * cam.hm_cols + u32(col);
+        // bilinear interpolation
+        let col_f = pos.x / cam.dx_meters;
+        let row_f = pos.y / cam.dy_meters;
+        let col0 = i32(col_f);
+        let row0 = i32(row_f);
+        let fx = col_f - f32(col0);
+        let fy = row_f - f32(row0);
+
+        let i00 = u32(row0) * cam.hm_cols + u32(col0);
+        let i10 = u32(row0) * cam.hm_cols + u32(col0 + 1);
+        let i01 = u32(row0 + 1) * cam.hm_cols + u32(col0);
+        let i11 = u32(row0 + 1) * cam.hm_cols + u32(col0 + 1);
+
+        let n00 = vec3<f32>(nx[i00], ny[i00], nz[i00]);
+        let n10 = vec3<f32>(nx[i10], ny[i10], nz[i10]);
+        let n01 = vec3<f32>(nx[i01], ny[i01], nz[i01]);
+        let n11 = vec3<f32>(nx[i11], ny[i11], nz[i11]);
+
+        let normal = normalize(mix(mix(n00, n10, fx), mix(n01, n11, fx), fy));
+        let idx = i00;   // still needed for shadow lookup below
 
         // dot(normal, sun_dir) — sun_dir must also be normalized
-        let normal = vec3<f32>(nx[idx], ny[idx], nz[idx]);
         let normalized_sun_dir = normalize(cam.sun_dir);
         let diffuse = max(0.0, dot(normal, normalized_sun_dir));
 
         let ambient = 0.15;
         // let ambient = 0.3; // less dark shadow faces
-        let in_shadow: f32 = shadow[idx];
+        // shadows with bilinear interpolation
+        let s00 = shadow[i00];
+        let s10 = shadow[i10];
+        let s01 = shadow[i01];
+        let s11 = shadow[i11];
+        let in_shadow = mix(mix(s00, s10, fx), mix(s01, s11, fx), fy);
         let shadow_factor: f32 = 0.5 + 0.5 * in_shadow;
         let brightness = (ambient + (1.0 - ambient) * diffuse) * shadow_factor;
 
-        // let base = [180u8, 160u8, 140u8]; // rocky grey-brown
-        // let base = [200u8, 200u8, 195u8]; // cool grey-white
-        // WGSL requires variables to be initialised or have a default value
-        var base_r: f32 = 0.0; var base_g: f32 = 0.0; var base_b: f32 = 0.0;
-        if pos.z < 1900.0 {
-            base_r = 120.0; base_g = 160.0; base_b = 80.0; // green                                                                                                                            
-        } else if pos.z < 2100.0 {
-            base_r = 160.0; base_g = 175.0; base_b = 130.0; // slightly green                                                                                                                   
-        } else if pos.z < 2700.0 {
-            base_r = 200.0; base_g = 200.0; base_b = 195.0; // grey-white rock                                                                                                                
-        } else {
-            base_r = 240.0; base_g = 245.0; base_b = 250.0; // glacier snow white                                                                                                             
-        };
+        // set colors for different heights
+        let green = vec3<f32>(120.0, 160.0, 80.0);
+        let light_green = vec3<f32>(160.0, 175.0, 130.0);
+        let rock = vec3<f32>(200.0, 200.0, 195.0);
+        let snow = vec3<f32>(240.0, 245.0, 250.0);
+
+        let t1 = smoothstep(1800.0, 2000.0, pos.z);  // green → light_green                                                                                            
+        let t2 = smoothstep(2000.0, 2200.0, pos.z);  // light_green → rock                                                                                             
+        let t3 = smoothstep(2600.0, 2800.0, pos.z);  // rock → snow                                                                                                    
+
+        let base = mix(mix(mix(green, light_green, t1), rock, t2), snow, t3);
+        let base_r = base.x;
+        let base_g = base.y;
+        let base_b = base.z;
 
         let r = u32(clamp(base_r * brightness, 0.0, 255.0));
         let g = u32(clamp(base_g * brightness, 0.0, 255.0));
         let b = u32(clamp(base_b * brightness, 0.0, 255.0));
-        output[gid.y * cam.img_width + gid.x] = r | (g << 8u) | (b << 16u) | (255u << 24u);
+
+        // add fog/haze in the distance
+        let sky = vec3<f32>(135.0, 206.0, 235.0);  // same blue as your sky pixels                                                                                     
+        let fog_near = 15000.0;   // fog starts at 15km                                                                                                                
+        let fog_far = 60000.0;   // fully haze at 60km                                                                                                                
+        let fog_t = smoothstep(fog_near, fog_far, t);
+
+        let fr = mix(f32(r), sky.x, fog_t);
+        let fg = mix(f32(g), sky.y, fog_t);
+        let fb = mix(f32(b), sky.z, fog_t);
+
+        output[gid.y * cam.img_width + gid.x] = u32(fb) | (u32(fg) << 8u) | (u32(fr) << 16u) | (255u << 24u);  // bgra format
     } else {
         // sky blue
-        output[gid.y * cam.img_width + gid.x] = 135u | (206u << 8u) | (235u << 16u) | (255u << 24u);
+        // output[gid.y * cam.img_width + gid.x] = 135u | (206u << 8u) | (235u << 16u) | (255u << 24u);
+        output[gid.y * cam.img_width + gid.x] = 235u | (206u << 8u) | (135u << 16u) | (255u << 24u);  // bgra format
     }
 }
 

@@ -191,10 +191,56 @@ Phase 6 lessons:
 - PCIe readback is the fps ceiling on discrete GPU; unified memory (M4) eliminates this tax entirely
 - Serial reduction chains need multiple accumulators; Morton ordering needs DRAM pressure to matter
 
+Phase 7 artifacts (in progress):
+- `src/viewer.rs` — interactive swap-chain viewer: winit 0.30 `ApplicationHandler`, WASD + mouse look, vsync toggle (`--vsync`), immersive mode (Q), left-click drag look, FPS counter, window resize handling (`render_width` alignment, `Resized` event)
+- `src/main.rs` — `--view` / `--vsync` CLI flags
+- `crates/render_gpu/src/scene.rs` — added `dispatch_frame(&mut encoder, ...)`, `get_output_buffer()`, `get_gpu_ctx()`, `get_dx_meters()`, `get_dy_meters()`, `resize(width, height)`; stored `render_bgl` field; R16Float texture + `half` crate upload
+- `crates/render_gpu/src/context.rs` — added `pub instance` and `pub adapter` fields to `GpuContext`
+- `crates/render_gpu/src/shader_texture.wgsl` — BGRA byte order; bilinear height sampling (`textureSampleLevel` + UV); bilinear normal/shadow interpolation (4-texel manual blend); smooth elevation color bands (`smoothstep`/`mix`); atmospheric fog (15–60km); sphere tracing (adaptive step `max((pos.z-h)*0.5, step_m)`, sky early exit at 4km, `t_prev` binary search bracket)
+- `crates/render_gpu/src/shader_buffer.wgsl` — updated to match shader_texture: `sample_hm()` bilinear helper, bilinear normals/shadows, smooth color bands, fog
+- `crates/render_cpu/src/lib.rs` — `shade()` updated: bilinear normal/shadow interpolation, smooth elevation color bands
+- `crates/render_gpu/Cargo.toml` — added `half = { version = "2", features = ["bytemuck"] }` for R16Float upload
+- `src/benchmarks/phase6.rs` — added GPU scene no-readback variant to `bench_fps` (`dispatch_frame` + `poll(Wait)`)
+- `docs/benchmark_results/report_1/fps_no_readback.csv` — no-readback fps data for all 4 systems
+- `docs/benchmark_results/report_1/report_1.md` — updated section 6 with no-readback table
+- `docs/benchmark_results/report_1/report_1.html` — updated FPS tab with no-readback stats and chart
+- `docs/sessions/phase-7/main-session.md` — session log
+
+Phase 7 key numbers (M4 Max, 2026-04-11):
+- Viewer swap-chain (no readback): **470 fps** (2.1ms/frame) vs bench_fps 10fps — 46× difference proves readback was the bottleneck
+- Command overhead floor: ~2.1ms (~470fps) — fixed cost regardless of shader work
+- Shader-bound threshold: step_m ≈ dx/20 → 85fps at 1600×533
+- Texture cache experiment (fixed step_m=4.0m, factors 1/2/4): identical fps — compute-bound on M4, not texture-bandwidth-bound
+- 8000×2667 default step_m: **21 fps** (47ms) — true compute floor; Phase 5 "10ms compute" was wrong (readback overlapped)
+- vsync on: 100fps (display-capped); vsync off: 470fps at 1600×533
+
+bench_fps no-readback cross-system (1600×533, 2026-04-11):
+- M4: GPU no-rdback **477 fps** (2.1ms) | readback overhead 10.3× | GPU speedup vs CPU 32×
+- Win GTX1650: GPU no-rdback **260 fps** (3.8ms) | readback overhead 24.1× | GPU speedup vs CPU 298×
+- Mac i7: GPU no-rdback **53 fps** (18.9ms) | readback overhead 11.3× | GPU speedup vs CPU 36×
+- Asus: GPU no-rdback **4.9 fps** (205.8ms) | readback overhead 7.1× | GPU speedup vs CPU 32×
+- Win GTX Phase 6 "~50fps prediction" was 5× wrong — actual 260fps; nvidia-smi SM utilisation was misleading
+
 Known open items carried into Phase 7:
 - GPU shadow via parallel prefix scan not implemented — would potentially match CPU NEON for cardinal direction (deferred from Phase 5)
 - `render_gif::render_gif` is commented out in main.rs — re-enable when generating animations (deferred from Phase 5)
 - Occupancy analysis via Instruments/Metal GPU trace deferred — requires full Xcode.app (deferred from Phase 5)
+- GPU timestamp queries (measure per-pass GPU time without frame overhead) — explicitly deferred, low priority
+- Picture quality: ✅ bilinear height sampling, ✅ smooth color bands, ✅ normal interpolation, ✅ atmospheric fog, ✅ sphere tracing (adaptive step + sky early exit) — all implemented
+- ✅ Window resize handling — implemented with `render_width` alignment
+- ✅ HUD text overlay (`glyphon`) — fps counter top-left, hint bottom-center, semi-transparent background quads
+- `src/viewer/hud_renderer.rs` — `HudBackground`, `SunIndicator`, `HudRenderer`; 10 glyphon buffers (8 static cardinal labels + 2 dynamic current-value); `day_to_date()` for "Jun 21" date format; drop shadows on all labels (double-render at (+1,+1) with `rgba(0,0,0,160)`); `build_label_text_area()`, `make_small_label()`, `make_current_label()` helpers
+- `src/viewer/shader_sun_hud.wgsl` — SDF season/time circles; `season_col()` (Summer=top), tick marks at cardinal solstice/equinox/hour positions; yellow needle; `panel_rect_sdf()` unified rounded background panel covering both circles + all labels; `discard` guard; fully commented
+- HUD toggle: E key shows/hides HUD (`hud_visible: bool`)
+- Speed boost: Cmd (Mac) / Alt (Win) held → 5000 m/s movement speed (`speed_boost: bool`)
+- ✅ Sun animation: `+`/`-` keys change `sim_hour` at 0.4 hrs/s; `[`/`]` keys change `sim_day` via `day_accum` accumulator; both 10× faster with speed boost
+- ✅ Geographically correct sun position: Spencer 1971 solar declination + hour angle → elevation/azimuth; `lat_rad` derived from tile centre; shadow only dispatched when `elevation > 0.0`
+- ✅ CPU normals in GpuScene: removed 157-line throw-away GPU compute pipeline; replaced with three `create_buffer_init` DMA uploads; `GpuScene::new()` takes `normal_map: &NormalMap`
+- ✅ Background shadow thread: `Arc<Heightmap>` shared with persistent worker via `mpsc::sync_channel(1)`; `shadow_computing` gate; shadow updates every frame with ~0 visual lag
+- ✅ Soft shadows: `penumbra_meters: f32` added to all shadow variants; formula `(1.0 - margin/T).max(0.0)`; default 200.0m; eliminates shadow boundary aliasing at slow sun speed
+- ✅ Sun/Season HUD: `SunIndicator` (SDF circles via `shader_sun_hud.wgsl`) + 10 glyphon text labels; season circle (Summer=top, Winter=bottom, season-coloured ring); time circle (12h face, 12:00=top, 18:00=bottom); "Jun 21" + "Time: HH:MM" current-value labels; drop shadows; unified background panel; RIGHT_MARGIN=80, BOTTOM_OFFSET=118, GAP=60
+- Normal map smoothing and heightmap smoothing: both tried and reverted. Gaussian blur on normals (GPU pass) and on height values (CPU pre-processing) both reduce the staircase artifact but soften real terrain detail too much. Accepted as a fundamental DEM resolution limitation (~20m/cell). Not worth the trade-off.
+- `docs/planning/viewer-improvements-plan.md` — improvement roadmap: (1) AO with 4 modes Off/SSAO/HBAO/True Hemisphere, `/` key cycling, HUD label; (2) out-of-core tile streaming; (3) LOD (step-size + mipmap)
 
 Known open items from Phase 4:
 - Supersampled ray optimization considered but not implemented: march 1 reference ray, approximate 3 neighbor heights via `h ≈ h_center + grad_x * Δcol + grad_y * Δrow` (using Phase 2 normal map). Would reduce gather 4→1 per step. Breaks at sharp discrete peaks.

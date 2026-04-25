@@ -112,7 +112,7 @@
 <section class="section active" id="overview">
   <h2>Overview</h2>
   <div class="stat-grid">
-    <div class="stat"><div class="label">Fastest GPU fps</div><div class="value">46.4</div><div class="sub">M4 Mac — 1600×533</div></div>
+    <div class="stat"><div class="label">Fastest GPU fps (no rdback)</div><div class="value">477</div><div class="sub">M4 Mac — 1600×533, Phase 7</div></div>
     <div class="stat"><div class="label">Biggest GPU speedup</div><div class="value">63×</div><div class="sub">Win GTX 1650 vs CPU (8 Mpix)</div></div>
     <div class="stat"><div class="label">Peak memory BW</div><div class="value">264 GB/s</div><div class="sub">M4 Mac read-only, 12 threads</div></div>
     <div class="stat"><div class="label">Best normal compute</div><div class="value">111 GB/s</div><div class="sub">M4 tiled parallel</div></div>
@@ -122,7 +122,7 @@
 
   <div class="grid-2">
     <div class="chart-card">
-      <h3>GPU FPS — 1600×533 (30-frame pan)</h3>
+      <h3>FPS — 1600×533 (CPU / GPU+rdback / GPU no-rdback)</h3>
       <div class="chart-container"><canvas id="chart_fps_overview"></canvas></div>
     </div>
     <div class="chart-card">
@@ -132,7 +132,7 @@
   </div>
 
   <div class="insight good"><strong>Key finding:</strong> <abbr title="Graphics Processing Unit — parallel compute chip">GPU</abbr> rendering is 8–63× faster than <abbr title="Central Processing Unit — the main chip running your program">CPU</abbr> on every system. The GTX 1650 achieves the largest ratio (63×) because the i5-9300H CPU is weak relative to the discrete GPU. M4's unified memory architecture gives the highest absolute fps (46.4) despite not having a discrete card.</div>
-  <div class="insight warn"><strong><abbr title="Peripheral Component Interconnect Express — the high-speed bus connecting CPU and discrete GPU. Gen3 ×16 = ~16 GB/s each direction">PCIe</abbr> readback ceiling:</strong> Win GTX 1650 computes a frame in ~20 ms but spends ~47 ms on CPU readback — limiting fps to 15 instead of ~50. Eliminating readback with a wgpu Surface viewer is the Phase 7 priority.</div>
+  <div class="insight warn"><strong><abbr title="Peripheral Component Interconnect Express — the high-speed bus connecting CPU and discrete GPU. Gen3 ×16 = ~16 GB/s each direction">PCIe</abbr> readback is 24× overhead on Win GTX:</strong> GPU computes in 3.8 ms but combined+readback = 92.7 ms/frame (10.8 fps). Phase 7 no-readback measurement: 260 fps. Readback was consuming 96% of each frame's time.</div>
   <div class="insight bad"><strong>Asus Pentium N3700:</strong> With 3 GB <abbr title="Random Access Memory — the main system memory your program's data lives in">RAM</abbr> and Silvermont cores, random access to the 256 MB test array causes virtual memory thrashing (0.003 GB/s vs M4's 0.6 GB/s). All timed results on this machine include swap overhead.</div>
 </section>
 
@@ -274,6 +274,24 @@
 <section class="section" id="fps">
   <h2>FPS Benchmark — 1600×533, 30 Frames</h2>
 
+  <h3>Without readback — Phase 7 measurement (dispatch_frame + poll only)</h3>
+  <div class="stat-grid">
+    <div class="stat"><div class="label">M4 Mac no-rdback</div><div class="value" style="color:var(--m4)">477</div><div class="sub">2.1 ms/frame · 10.3× overhead</div></div>
+    <div class="stat"><div class="label">Win GTX no-rdback</div><div class="value" style="color:var(--win)">260</div><div class="sub">3.8 ms/frame · 24.1× overhead</div></div>
+    <div class="stat"><div class="label">Mac i7 no-rdback</div><div class="value" style="color:var(--mac)">52.9</div><div class="sub">18.9 ms/frame · 11.3× overhead</div></div>
+    <div class="stat"><div class="label">Asus no-rdback</div><div class="value" style="color:var(--asus)">4.9</div><div class="sub">205.8 ms/frame · 7.1× overhead</div></div>
+  </div>
+
+  <div class="chart-card" style="margin-bottom:20px">
+    <h3>CPU vs GPU (with rdback) vs GPU (no rdback) — fps log scale</h3>
+    <div class="chart-container tall"><canvas id="chart_fps_no_rdback"></canvas></div>
+  </div>
+
+  <div class="insight bad"><strong>Readback dominates everywhere.</strong> Win GTX 1650: GPU computes in 3.8 ms but combined+readback = 92.7 ms — <strong>24.1× overhead</strong>. The GPU was nearly idle (waiting for CPU to read pixels) for 96% of each frame. Removing readback: 10.8 fps → 260 fps.</div>
+  <div class="insight good"><strong>M4 Mac: 477 fps without readback</strong> — command submission + GPU scheduling overhead ≈ 2.1 ms/frame at 1600×533. Readback overhead: 10.3× (21.7 ms → 2.1 ms). All systems show the same pattern: true GPU compute time is 7–24× smaller than the combined measurement.</div>
+  <div class="insight warn"><strong>Original Phase 6 prediction was wrong:</strong> "Win GTX → ~50 fps if readback eliminated" was based on nvidia-smi showing ~20 ms GPU time. Actual no-readback measurement: 3.8 ms (260 fps). The prediction was 5× off. GPU timestamps (Phase 7 open item) would catch this without a viewer.</div>
+
+  <h3>With readback (Phase 6 baseline)</h3>
   <div class="stat-grid">
     <div class="stat"><div class="label">M4 Mac GPU fps</div><div class="value" style="color:var(--m4)">46.4</div><div class="sub">21.5 ms/frame</div></div>
     <div class="stat"><div class="label">Win GTX GPU fps</div><div class="value" style="color:var(--win)">15.2</div><div class="sub">65.8 ms/frame</div></div>
@@ -291,9 +309,6 @@
       <div class="chart-container tall"><canvas id="chart_gpu_speedup"></canvas></div>
     </div>
   </div>
-
-  <div class="insight warn"><strong>Win GTX 1650 <abbr title="PCIe = Peripheral Component Interconnect Express. The bus connecting CPU to discrete GPU. Gen3 ×16 = ~16 GB/s each direction. 3.4 MB pixel buffer at 16 GB/s = ~0.2 ms theoretical; practical latency+overhead pushes it to ~47 ms.">PCIe</abbr> ceiling:</strong> GPU computes ~20 ms/frame, but PCIe readback adds ~47 ms = 67 ms total (15 fps). Implementing a <abbr title="wgpu Surface = swap chain / display surface. The GPU renders directly to the display buffer — no pixel data ever crosses back to CPU RAM. Eliminates the entire readback cost.">wgpu Surface</abbr> viewer (no readback) would push to ~50 fps. This is Phase 7's primary goal.</div>
-  <div class="insight good"><strong>M4 unified memory advantage:</strong> No PCIe. Readback costs ~8 ms (3.4 MB / 400 GB/s ≈ 8.5 µs at peak; practical ~10–20 ms). GPU compute is ~10 ms. Combined: 21.5 ms = 46.4 fps. With viewer (no readback): theoretical ~100 fps ceiling.</div>
 </section>
 
 <!-- ═══ PHASE 6 ════════════════════════════════════════════════════════════ -->
@@ -475,10 +490,12 @@ function line(id, labels, datasets, opts={}) {
 hbar('chart_fps_overview', labels4,
   [
     { label:'CPU fps', data:[15.07,0.88,1.43,0.148],
-      backgroundColor:[alpha(C.m4,0.6),alpha(C.win,0.6),alpha(C.mac,0.6),alpha(C.asus,0.6)] },
-    { label:'GPU fps', data:[46.42,15.19,4.64,0.681],
+      backgroundColor:[alpha(C.m4,0.4),alpha(C.win,0.4),alpha(C.mac,0.4),alpha(C.asus,0.4)] },
+    { label:'GPU fps (with rdback)', data:[46.42,15.19,4.64,0.681],
+      backgroundColor:[alpha(C.m4,0.7),alpha(C.win,0.7),alpha(C.mac,0.7),alpha(C.asus,0.7)] },
+    { label:'GPU fps (no rdback)', data:[476.9,260.1,52.9,4.9],
       backgroundColor:[C.m4,C.win,C.mac,C.asus] }
-  ], { x: { title:{ display:true, text:'fps' } } }
+  ], { x: { type:'logarithmic', title:{ display:true, text:'fps (log scale)' } } }
 );
 
 // Render time overview (log scale)
@@ -629,6 +646,22 @@ hbar('chart_gpu_speedup', labels4,
   [{ label:'GPU speedup', data:[3.1,17.2,3.2,4.6],
      backgroundColor:[C.m4,C.win,C.mac,C.asus] }],
   { x: { title:{ display:true, text:'GPU fps / CPU fps ratio' } } }
+);
+
+// No-readback FPS comparison
+vbar('chart_fps_no_rdback', ['M4 Mac','Win GTX 1650','Mac i7','Asus Pentium'],
+  [
+    { label:'CPU fps',
+      data:[14.80,0.87,1.49,0.152],
+      backgroundColor:[alpha(C.m4,0.35),alpha(C.win,0.35),alpha(C.mac,0.35),alpha(C.asus,0.35)] },
+    { label:'GPU fps (with rdback)',
+      data:[46.2,10.8,4.7,0.686],
+      backgroundColor:[alpha(C.m4,0.65),alpha(C.win,0.65),alpha(C.mac,0.65),alpha(C.asus,0.65)] },
+    { label:'GPU fps (no rdback)',
+      data:[476.9,260.1,52.9,4.9],
+      backgroundColor:[C.m4,C.win,C.mac,C.asus] }
+  ],
+  { y: { type:'logarithmic', title:{ display:true, text:'fps (log scale)' } } }
 );
 
 // ════════════════════════════════════════════════════════════════════════════

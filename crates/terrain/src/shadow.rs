@@ -136,6 +136,7 @@ pub fn compute_shadow_scalar_with_azimuth(
     hm: &Heightmap,
     sun_azimuth_rad: f32,
     sun_elevation_rad: f32,
+    penumbra_meters: f32,
 ) -> ShadowMask {
     let mut data: Vec<f32> = vec![1.0f32; hm.rows * hm.cols];
     let dx: f32 = hm.dx_meters as f32;
@@ -160,7 +161,8 @@ pub fn compute_shadow_scalar_with_azimuth(
             let h_eff = hm.data[r * hm.cols + c] as f32 + dist * tan_sun;
 
             if h_eff < running_max {
-                data[r * hm.cols + c] = 0.0;
+                let margin = running_max - h_eff;
+                data[r * hm.cols + c] = (1.0 - margin / penumbra_meters).max(0.0);
             }
 
             running_max = running_max.max(h_eff);
@@ -337,11 +339,13 @@ pub unsafe fn compute_shadow_neon_parallel_with_azimuth(
     hm: &Heightmap,
     sun_azimuth_rad: f32,
     sun_elevation_rad: f32,
+    penumbra_meters: f32,
 ) -> ShadowMask {
     use std::arch::aarch64::{
-        float32x4_t, uint32x4_t, vaddq_f32, vbslq_f32, vcltq_f32, vdupq_n_f32, vgetq_lane_f32,
-        vld1q_f32, vmaxq_f32,
+        float32x4_t, vaddq_f32, vdupq_n_f32, vgetq_lane_f32,
+        vld1q_f32, vmaxq_f32, vmulq_n_f32, vsubq_f32,
     };
+    let inv_penumbra = 1.0 / penumbra_meters;
     let mut data: Vec<f32> = vec![1.0f32; hm.rows * hm.cols];
     let dx = hm.dx_meters as f32;
     let dy = hm.dy_meters as f32;
@@ -370,8 +374,9 @@ pub unsafe fn compute_shadow_neon_parallel_with_azimuth(
                     let c = cf.round() as usize;
                     let h_eff = hm.data[r * hm.cols + c] as f32 + dist * tan_sun;
                     if h_eff < rm {
+                        let margin = rm - h_eff;
                         unsafe {
-                            *ptr.add(r * hm.cols + c) = 0.0;
+                            *ptr.add(r * hm.cols + c) = (1.0 - margin / penumbra_meters).max(0.0);
                         }
                     }
                     rm = rm.max(h_eff);
@@ -411,8 +416,11 @@ pub unsafe fn compute_shadow_neon_parallel_with_azimuth(
             unsafe {
                 let h_vec = vld1q_f32(heights.as_ptr());
                 let h_eff = vaddq_f32(h_vec, vdupq_n_f32(dist * tan_sun));
-                let mask: uint32x4_t = vcltq_f32(h_eff, running_max);
-                let result = vbslq_f32(mask, vdupq_n_f32(0.0), vdupq_n_f32(1.0));
+                let margin = vmaxq_f32(vsubq_f32(running_max, h_eff), vdupq_n_f32(0.0));
+                let result = vmaxq_f32(
+                    vsubq_f32(vdupq_n_f32(1.0), vmulq_n_f32(margin, inv_penumbra)),
+                    vdupq_n_f32(0.0),
+                );
 
                 *ptr.add(idxs[0]) = vgetq_lane_f32::<0>(result);
                 *ptr.add(idxs[1]) = vgetq_lane_f32::<1>(result);
@@ -449,8 +457,9 @@ pub unsafe fn compute_shadow_neon_parallel_with_azimuth(
                 let c = c_f.round() as usize;
                 let h_eff = hm.data[r * hm.cols + c] as f32 + d * tan_sun;
                 if h_eff < rm {
+                    let margin = rm - h_eff;
                     unsafe {
-                        *ptr.add(r * hm.cols + c) = 0.0;
+                        *ptr.add(r * hm.cols + c) = (1.0 - margin / penumbra_meters).max(0.0);
                     }
                 }
                 rm = rm.max(h_eff);

@@ -18,6 +18,7 @@ use dem_io::Heightmap;
 use dem_io::TiledHeightmap;
 use rayon::prelude::*;
 use terrain::{NormalMap, ShadowMask};
+use wgpu;
 
 fn evict_cache() {
     // ~100 MB eviction — flushes L1/L2/L3 before each timed run
@@ -1283,7 +1284,11 @@ const FPS_SUN_DIR: [f32; 3] = [0.4, 0.5, 0.7];
 fn fps_cam(i: usize, dx: f32, dy: f32) -> ([f32; 3], [f32; 3]) {
     let pan = i as f32 * 200.0;
     let origin = [2457.0 * dx + pan, 3328.0 * dy, 3341.0];
-    let look_at = [2457.0 * dx + 19_627.0 + pan, 3328.0 * dy - 1_718.0, 3341.0 - 131.0];
+    let look_at = [
+        2457.0 * dx + 19_627.0 + pan,
+        3328.0 * dy - 1_718.0,
+        3341.0 - 131.0,
+    ];
     (origin, look_at)
 }
 
@@ -1299,7 +1304,10 @@ pub(crate) fn bench_fps(
     let aspect = FPS_WIDTH as f32 / FPS_HEIGHT as f32;
     let pixels = FPS_WIDTH as usize * FPS_HEIGHT as usize;
 
-    println!("--- FPS Benchmark: {}×{}, {} frames ---", FPS_WIDTH, FPS_HEIGHT, FPS_FRAMES);
+    println!(
+        "--- FPS Benchmark: {}×{}, {} frames ---",
+        FPS_WIDTH, FPS_HEIGHT, FPS_FRAMES
+    );
     println!("  gentle pan: camera moves 200 m east per frame");
     println!();
 
@@ -1308,8 +1316,17 @@ pub(crate) fn bench_fps(
     {
         let (origin, look_at) = fps_cam(0, dx, dy);
         let cam = render_cpu::Camera::new(origin, look_at, FPS_FOV, aspect);
-        let _ = render_cpu::render_par(&cam, hm, normal_map, shadow_mask, FPS_SUN_DIR,
-            FPS_WIDTH, FPS_HEIGHT, step_m, FPS_T_MAX);
+        let _ = render_cpu::render_par(
+            &cam,
+            hm,
+            normal_map,
+            shadow_mask,
+            FPS_SUN_DIR,
+            FPS_WIDTH,
+            FPS_HEIGHT,
+            step_m,
+            FPS_T_MAX,
+        );
     }
 
     let t0 = profiling::now();
@@ -1317,8 +1334,15 @@ pub(crate) fn bench_fps(
         let (origin, look_at) = fps_cam(i, dx, dy);
         let cam = render_cpu::Camera::new(origin, look_at, FPS_FOV, aspect);
         std::hint::black_box(render_cpu::render_par(
-            &cam, hm, normal_map, shadow_mask, FPS_SUN_DIR,
-            FPS_WIDTH, FPS_HEIGHT, step_m, FPS_T_MAX,
+            &cam,
+            hm,
+            normal_map,
+            shadow_mask,
+            FPS_SUN_DIR,
+            FPS_WIDTH,
+            FPS_HEIGHT,
+            step_m,
+            FPS_T_MAX,
         ));
     }
     let cpu_s = (profiling::now() - t0) as f64 / counter_frequency();
@@ -1326,17 +1350,28 @@ pub(crate) fn bench_fps(
     let cpu_ms = cpu_s / FPS_FRAMES as f64 * 1000.0;
     println!(
         "  CPU scalar parallel:  {:>6.1} ms/frame  ({:.2} fps)  [{} Mpix/s]",
-        cpu_ms, cpu_fps,
+        cpu_ms,
+        cpu_fps,
         (pixels as f64 * cpu_fps / 1e6) as u64,
     );
 
-    // ── GPU combined ─────────────────────────────────────────────────────────
+    // ── GPU combined (with readback) ─────────────────────────────────────────
     // warm-up
     {
         let (origin, look_at) = fps_cam(0, dx, dy);
         let _ = render_gpu::render_gpu_combined(
-            gpu_ctx, hm, shadow_mask, origin, look_at, FPS_FOV, aspect,
-            FPS_SUN_DIR, FPS_WIDTH, FPS_HEIGHT, step_m, FPS_T_MAX,
+            gpu_ctx,
+            hm,
+            shadow_mask,
+            origin,
+            look_at,
+            FPS_FOV,
+            aspect,
+            FPS_SUN_DIR,
+            FPS_WIDTH,
+            FPS_HEIGHT,
+            step_m,
+            FPS_T_MAX,
         );
     }
 
@@ -1344,19 +1379,104 @@ pub(crate) fn bench_fps(
     for i in 0..FPS_FRAMES {
         let (origin, look_at) = fps_cam(i, dx, dy);
         std::hint::black_box(render_gpu::render_gpu_combined(
-            gpu_ctx, hm, shadow_mask, origin, look_at, FPS_FOV, aspect,
-            FPS_SUN_DIR, FPS_WIDTH, FPS_HEIGHT, step_m, FPS_T_MAX,
+            gpu_ctx,
+            hm,
+            shadow_mask,
+            origin,
+            look_at,
+            FPS_FOV,
+            aspect,
+            FPS_SUN_DIR,
+            FPS_WIDTH,
+            FPS_HEIGHT,
+            step_m,
+            FPS_T_MAX,
         ));
     }
     let gpu_s = (profiling::now() - t0) as f64 / counter_frequency();
     let gpu_fps = FPS_FRAMES as f64 / gpu_s;
     let gpu_ms = gpu_s / FPS_FRAMES as f64 * 1000.0;
     println!(
-        "  GPU combined:         {:>6.1} ms/frame  ({:.2} fps)  [{} Mpix/s]",
-        gpu_ms, gpu_fps,
+        "  GPU combined (rdback): {:>6.1} ms/frame  ({:.1} fps)  [{} Mpix/s]",
+        gpu_ms,
+        gpu_fps,
         (pixels as f64 * gpu_fps / 1e6) as u64,
     );
 
-    println!();
-    println!("  GPU speedup: {:.1}×", gpu_fps / cpu_fps);
+    // ── GPU scene (no readback) ───────────────────────────────────────────────
+    const FPS_FRAMES_G: usize = 30 * 10;
+    {
+        let scene_ctx = render_gpu::GpuContext::new();
+        let scene = render_gpu::GpuScene::new(scene_ctx, hm, normal_map, shadow_mask, FPS_WIDTH, FPS_HEIGHT);
+        let ctx = scene.get_gpu_ctx();
+
+        // warm-up
+        {
+            let (origin, look_at) = fps_cam(0, dx, dy);
+            let mut enc = ctx
+                .device
+                .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                    label: Some("fps_warmup"),
+                });
+            scene.dispatch_frame(
+                &mut enc,
+                origin,
+                look_at,
+                FPS_FOV,
+                aspect,
+                FPS_SUN_DIR,
+                step_m,
+                FPS_T_MAX,
+            );
+            ctx.queue.submit([enc.finish()]);
+            let _ = ctx.device.poll(wgpu::PollType::Wait {
+                submission_index: None,
+                timeout: None,
+            });
+        }
+
+        let t0 = profiling::now();
+        for i in 0..FPS_FRAMES_G {
+            let (origin, look_at) = fps_cam(i, dx, dy);
+            let mut enc = ctx
+                .device
+                .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                    label: Some("fps_enc"),
+                });
+            scene.dispatch_frame(
+                &mut enc,
+                origin,
+                look_at,
+                FPS_FOV,
+                aspect,
+                FPS_SUN_DIR,
+                step_m,
+                FPS_T_MAX,
+            );
+            std::hint::black_box(ctx.queue.submit([enc.finish()]));
+            let _ = ctx.device.poll(wgpu::PollType::Wait {
+                submission_index: None,
+                timeout: None,
+            });
+        }
+        let scene_s = (profiling::now() - t0) as f64 / counter_frequency();
+        let scene_fps = FPS_FRAMES_G as f64 / scene_s;
+        let scene_ms = scene_s / FPS_FRAMES_G as f64 * 1000.0;
+        println!(
+            "  GPU scene (no rdback): {:>6.1} ms/frame  ({:.1} fps)  [{} Mpix/s]",
+            scene_ms,
+            scene_fps,
+            (pixels as f64 * scene_fps / 1e6) as u64,
+        );
+
+        println!();
+        println!(
+            "  GPU speedup vs CPU:            {:.1}×",
+            scene_fps / cpu_fps
+        );
+        println!(
+            "  readback overhead (scene/comb): {:.1}×",
+            scene_fps / gpu_fps
+        );
+    }
 }

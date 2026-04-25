@@ -1,7 +1,11 @@
+use wgpu::{Adapter, Instance};
+
 pub struct GpuContext {
+    pub instance: Instance,
     pub device: wgpu::Device,
     pub queue: wgpu::Queue,
     pub adapter_name: String,
+    pub adapter: Adapter,
 }
 
 impl GpuContext {
@@ -41,9 +45,11 @@ impl GpuContext {
                 .expect("failed to get device");
 
             GpuContext {
+                instance,
                 device,
                 queue,
                 adapter_name: info.name,
+                adapter,
             }
         })
     }

@@ -154,10 +154,11 @@ pub fn compute_shadow_vector_par_with_azimuth(
     hm: &dem_io::Heightmap,
     sun_azimuth_rad: f32,
     sun_elevation_rad: f32,
+    penumbra_meters: f32,
 ) -> ShadowMask {
     #[cfg(target_arch = "aarch64")]
     return unsafe {
-        shadow::compute_shadow_neon_parallel_with_azimuth(hm, sun_azimuth_rad, sun_elevation_rad)
+        shadow::compute_shadow_neon_parallel_with_azimuth(hm, sun_azimuth_rad, sun_elevation_rad, penumbra_meters)
     };
 
     #[cfg(target_arch = "x86_64")]
@@ -167,6 +168,7 @@ pub fn compute_shadow_vector_par_with_azimuth(
                 hm,
                 sun_azimuth_rad,
                 sun_elevation_rad,
+                penumbra_meters,
             )
         };
     }
@@ -177,7 +179,7 @@ pub fn compute_shadow_vector_par_with_azimuth(
         eprintln!("[SCALAR FALLBACK] compute_shadow_vector_par_with_azimuth: AVX2 not detected");
         #[cfg(not(target_arch = "x86_64"))]
         eprintln!("[SCALAR FALLBACK] compute_shadow_vector_par_with_azimuth: no SIMD for this architecture");
-        return shadow::compute_shadow_scalar_with_azimuth(hm, sun_azimuth_rad, sun_elevation_rad);
+        return shadow::compute_shadow_scalar_with_azimuth(hm, sun_azimuth_rad, sun_elevation_rad, penumbra_meters);
     }
 }
 
