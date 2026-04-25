@@ -64,7 +64,9 @@ pub(crate) fn render_gif(tile_path: &Path) {
 
     // Warm up pipeline
     let (o, la) = frame_cam(0, dx, dy);
-    let _ = scene.render_frame(o, la, FOV_DEG, aspect, SUN_DIR, step_m, T_MAX, 0);
+    let _ = scene.render_frame(
+        o, la, FOV_DEG, aspect, SUN_DIR, step_m, T_MAX, 0, 1, 1, 1, 2,
+    );
 
     let out_path = "artifacts/animation.gif";
     let file = File::create(out_path).expect("cannot create artifacts/animation.gif");
@@ -75,8 +77,9 @@ pub(crate) fn render_gif(tile_path: &Path) {
 
     for i in 0..N_FRAMES {
         let (origin, look_at) = frame_cam(i, dx, dy);
-        let pixels =
-            scene.render_frame(origin, look_at, FOV_DEG, aspect, SUN_DIR, step_m, T_MAX, 0);
+        let pixels = scene.render_frame(
+            origin, look_at, FOV_DEG, aspect, SUN_DIR, step_m, T_MAX, 0, 1, 1, 1, 2,
+        );
 
         let img =
             RgbaImage::from_raw(GIF_WIDTH, GIF_HEIGHT, pixels).expect("pixel buffer size mismatch");

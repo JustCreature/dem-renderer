@@ -2,6 +2,66 @@
 
 ---
 
+## 2026-04-25 (session 2)
+
+### What we worked on
+
+Implemented all four viewer feature items from the Phase 8 roadmap: shadow toggle, fog toggle,
+VAT quality presets, and LOD distance presets. All confirmed working.
+
+### Codebase changes this session
+
+#### `crates/render_gpu/src/camera.rs`
+- Replaced `_pad6`–`_pad9` with `shadows_enabled: u32`, `fog_enabled: u32`, `vat_mode: u32`,
+  `lod_mode: u32` (kept `_pad5` for 16-byte alignment after `ao_mode`)
+- Added 4 new params to `CameraUniforms::new()`
+
+#### `crates/render_gpu/src/scene.rs`
+- Added 4 new params to `render_frame()` and `dispatch_frame()`; both `CameraUniforms`
+  literals pass them through
+
+#### `crates/render_gpu/src/shader_texture.wgsl`
+- WGSL `CameraUniforms` struct updated to match Rust layout
+- `lod_step_div` / `lod_mip_div` computed from `cam.lod_mode` via chained `select()`
+- `sphere_factor` computed from `cam.vat_mode` via chained `select()`
+- `shadow_factor = select(1.0, 0.5+0.5*in_shadow, cam.shadows_enabled==1u)`
+- `fog_t = select(0.0, smoothstep(...), cam.fog_enabled==1u)`
+
+#### `src/viewer/mod.rs`
+- Added `shadows_enabled: bool`, `fog_enabled: bool`, `vat_mode: u32`, `lod_mode: u32`
+  to `Viewer` struct; defaults: `true`, `true`, `1` (High), `2` (Mid)
+- Key handlers: `.` → toggle shadows, `,` → toggle fog, `;` → cycle vat_mode (0–3),
+  `'` → cycle lod_mode (0–3)
+- `step_m` computed from `vat_mode`: `dx / [20, 10, 5, 3][vat_mode]`
+- `dispatch_frame` and `hud.draw` updated to pass all 4 new values
+
+#### `src/viewer/hud_renderer.rs`
+- `settings_buffer` `set_size` height: `40.0` → `100.0` (fits 5 lines at 20px each)
+- Background rect `y1`: `36.0` → `116.0` (text top=10, height=100, plus 6px margins)
+- `draw()` takes 4 new params; builds 5-line settings string (AO + shadows + fog + quality + LOD)
+
+#### Callers updated with defaults (`shadows=1, fog=1, vat=1, lod=2`):
+- `render_buffer.rs`, `render_rexture.rs`, `render_gpu_combined.rs`
+- `multi_frame.rs`, `render_gif.rs`, `phase6.rs`
+
+### Key facts / lessons
+
+- `CameraUniforms` has `_pad5` through `_pad9` after `ao_mode` — 4 of those 5 slots consumed
+  by the new toggles; `_pad5` kept to maintain 16-byte group alignment
+- WGSL `select(false_val, true_val, condition)` is the branchless ternary; chained `select()`
+  handles 4-way enums without branches in the shader
+- `vat_mode` controls `step_m` (Rust side: `dx / divisor`) AND `sphere_factor` (shader side);
+  both must be consistent for quality to be meaningful
+- LOD divisors: Ultra=1e9 (off), High=20000/30000, Mid=8000/15000, Low=4000/8000
+- glyphon `set_size` height controls the text layout box — must match or exceed total line
+  height; background rect in `build_vertices` is separate and must be sized independently
+
+### Open items
+
+- Measure normals/shadow/AO startup time for 8001×8001 vs 3601×3601 (still pending)
+
+---
+
 ## 2026-04-25
 
 ### What we worked on

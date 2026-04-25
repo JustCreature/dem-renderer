@@ -22,7 +22,8 @@ pub fn render_gpu_buffer(
     ao_mode: u32,
 ) -> Vec<u8> {
     let cam: CameraUniforms = CameraUniforms::new(
-        origin, look_at, fov_deg, aspect, hm, sun_dir, width, height, step_m, t_max, ao_mode,
+        origin, look_at, fov_deg, aspect, hm, sun_dir, width, height, step_m, t_max, ao_mode, 1, 1,
+        1, 2,
     );
 
     // heightmap buffer

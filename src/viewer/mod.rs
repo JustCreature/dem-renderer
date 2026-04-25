@@ -27,6 +27,10 @@ struct Viewer {
     render_width: u32,
     vsync: bool,
     ao_mode: u32,
+    shadows_enabled: bool,
+    fog_enabled: bool,
+    vat_mode: u32, // 0=Ultra, 1=High, 2=Mid, 3=Low
+    lod_mode: u32, // 0=Ultra, 1=High, 2=Mid, 3=Low
     // fps counter
     fps_timer: std::time::Instant,
     frame_count: u32,
@@ -249,6 +253,8 @@ impl ApplicationHandler for Viewer {
                             label: Some("blit_enc"),
                         });
 
+                let vat_step_divisors = [20.0_f32, 10.0, 5.0, 3.0];
+                let step_m = scene.get_dx_meters() / vat_step_divisors[self.vat_mode as usize];
                 scene.dispatch_frame(
                     &mut encoder,
                     self.cam_pos,
@@ -256,9 +262,13 @@ impl ApplicationHandler for Viewer {
                     70.0,
                     self.width as f32 / self.height as f32,
                     sun_dir,
-                    scene.get_dx_meters() / 10.0, // step_m CONFIG_PERFORMANCE
+                    step_m,
                     200_000.0,
                     self.ao_mode,
+                    self.shadows_enabled as u32,
+                    self.fog_enabled as u32,
+                    self.vat_mode,
+                    self.lod_mode,
                 );
                 let output_buf: &wgpu::Buffer = scene.get_output_buffer();
 
@@ -294,6 +304,10 @@ impl ApplicationHandler for Viewer {
                         self.sim_day,
                         self.sim_hour,
                         self.ao_mode,
+                        self.shadows_enabled,
+                        self.fog_enabled,
+                        self.vat_mode,
+                        self.lod_mode,
                     );
                 }
 
@@ -352,6 +366,24 @@ impl ApplicationHandler for Viewer {
                     }
                     if kc == KeyCode::Slash && event.state == winit::event::ElementState::Pressed {
                         self.ao_mode = (self.ao_mode + 1).rem_euclid(6);
+                        return;
+                    }
+                    if kc == KeyCode::Period && event.state == winit::event::ElementState::Pressed {
+                        self.shadows_enabled = !self.shadows_enabled;
+                        return;
+                    }
+                    if kc == KeyCode::Comma && event.state == winit::event::ElementState::Pressed {
+                        self.fog_enabled = !self.fog_enabled;
+                        return;
+                    }
+                    if kc == KeyCode::Semicolon
+                        && event.state == winit::event::ElementState::Pressed
+                    {
+                        self.vat_mode = (self.vat_mode + 1).rem_euclid(4);
+                        return;
+                    }
+                    if kc == KeyCode::Quote && event.state == winit::event::ElementState::Pressed {
+                        self.lod_mode = (self.lod_mode + 1).rem_euclid(4);
                         return;
                     }
                     if kc == KeyCode::SuperLeft || kc == KeyCode::AltLeft {
@@ -474,12 +506,12 @@ fn lcc_epsg31287(lat_deg: f64, lon_deg: f64) -> (f64, f64) {
     let lon = lon_deg * to_rad;
 
     // EPSG:31287 defining parameters
-    let lat0 = 47.5 * to_rad;       // latitude of false origin
+    let lat0 = 47.5 * to_rad; // latitude of false origin
     let lon0 = 13.333_333 * to_rad; // central meridian
-    let lat1 = 49.0 * to_rad;       // standard parallel 1
-    let lat2 = 46.0 * to_rad;       // standard parallel 2
-    let fe = 400_000.0_f64;         // false easting
-    let fn_ = 400_000.0_f64;        // false northing
+    let lat1 = 49.0 * to_rad; // standard parallel 1
+    let lat2 = 46.0 * to_rad; // standard parallel 2
+    let fe = 400_000.0_f64; // false easting
+    let fn_ = 400_000.0_f64; // false northing
 
     // Helper: m (Snyder eq 15-11)
     let m = |phi: f64| {
@@ -521,10 +553,11 @@ fn laea_epsg3035(lat_deg: f64, lon_deg: f64) -> (f64, f64) {
     let fe = 4_321_000.0_f64;
     let fn_ = 3_210_000.0_f64;
 
-    let k = (2.0 / (1.0 + lat0.sin() * lat.sin() + lat0.cos() * lat.cos() * (lon - lon0).cos()))
-        .sqrt();
+    let k =
+        (2.0 / (1.0 + lat0.sin() * lat.sin() + lat0.cos() * lat.cos() * (lon - lon0).cos())).sqrt();
     let easting = fe + r * k * lat.cos() * (lon - lon0).sin();
-    let northing = fn_ + r * k * (lat0.cos() * lat.sin() - lat0.sin() * lat.cos() * (lon - lon0).cos());
+    let northing =
+        fn_ + r * k * (lat0.cos() * lat.sin() - lat0.sin() * lat.cos() * (lon - lon0).cos());
     (easting, northing)
 }
 
@@ -601,6 +634,10 @@ pub fn run(tile_path: &Path, width: u32, height: u32, vsync: bool) {
         render_width: width,
         vsync,
         ao_mode: 0,
+        shadows_enabled: true,
+        fog_enabled: true,
+        vat_mode: 2, // Mid
+        lod_mode: 1, // High
         // fps counter
         fps_timer: std::time::Instant::now(),
         frame_count: 0,
@@ -675,9 +712,9 @@ fn prepare_scene(tile_path: &Path, width: u32, height: u32) -> (GpuScene, Arc<He
         let result = if scale >= 5.0 {
             dem_io::parse_geotiff_epsg_31287(tile_path) // EPSG:31287 Austria Lambert (5m+)
         } else if scale >= 1.0 {
-            dem_io::parse_geotiff_epsg_3035(tile_path)  // EPSG:3035 LAEA Europe (1m)
+            dem_io::parse_geotiff_epsg_3035(tile_path) // EPSG:3035 LAEA Europe (1m)
         } else {
-            dem_io::parse_geotiff(tile_path)            // EPSG:4326 geographic (GLO-30 etc.)
+            dem_io::parse_geotiff(tile_path) // EPSG:4326 geographic (GLO-30 etc.)
         };
         match result {
             Ok(hm) => hm,

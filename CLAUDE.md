@@ -242,11 +242,14 @@ Known open items carried into Phase 8:
 
 Phase 8 artifacts (in progress):
 - `docs/planning/viewer-phase-8.md` — Part 0 data source plan + viewer roadmap
-- `docs/sessions/phase-8/main-session.md` — session log (2026-04-20)
+- `docs/sessions/phase-8/main-session.md` — session log (2026-04-20, 2026-04-25)
 - `crates/dem_io/src/geotiff.rs` — `geotiff_pixel_scale()`, `parse_geotiff_epsg_3035()`, `laea_epsg3035_inverse()`; `Limits::unlimited()` in EPSG:3035 parser
 - `crates/dem_io/src/heightmap.rs` — `Heightmap` extended: `crs_origin_x`, `crs_origin_y`, `crs_epsg`
 - `crates/render_gpu/src/context.rs` — `required_limits: adapter.limits()` to unlock full hardware buffer sizes
-- `src/viewer/mod.rs` — auto-dispatch by pixel scale; `lcc_epsg31287()`, `laea_epsg3035()` forward projections; `latlon_to_tile_metres()` dispatching on `crs_epsg`; named camera position (47°04'34.36"N 11°41'15.33"E, 3258m)
+- `src/viewer/mod.rs` — auto-dispatch by pixel scale; `lcc_epsg31287()`, `laea_epsg3035()` forward projections; `latlon_to_tile_metres()` dispatching on `crs_epsg`; named camera position; shadow/fog/vat/lod toggles (`.`, `,`, `;`, `'` keys)
+- `src/viewer/hud_renderer.rs` — 5-line settings panel (AO + shadows + fog + quality + LOD); background rect sized to match
+- `crates/render_gpu/src/camera.rs` — `CameraUniforms` extended with `shadows_enabled`, `fog_enabled`, `vat_mode`, `lod_mode`
+- `crates/render_gpu/src/shader_texture.wgsl` — shadow/fog/vat/lod shader logic from uniform fields
 - DEM tiles: `hintertux_5m.tif`, `hintertux_18km_5m.tif`, `hintertux_8km_1m.tif` (EPSG:3035, 8001×8001)
 
 Phase 8 key facts (2026-04-20):
@@ -271,7 +274,6 @@ Ready to continue with viewer feature items.
 
 Phase 8 open items:
 - Measure normals/shadow/AO startup time for 8001×8001 vs 3601×3601
-- Viewer feature items from roadmap: shadow toggle (`.`), fog toggle (`,`), VAT presets (`;`), LOD presets (`'`)
 
 Known open items from Phase 4:
 - Supersampled ray optimization considered but not implemented: march 1 reference ray, approximate 3 neighbor heights via `h ≈ h_center + grad_x * Δcol + grad_y * Δrow` (using Phase 2 normal map). Would reduce gather 4→1 per step. Breaks at sharp discrete peaks.

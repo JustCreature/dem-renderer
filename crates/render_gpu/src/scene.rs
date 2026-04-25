@@ -55,11 +55,7 @@ impl GpuScene {
         height: u32,
     ) -> Self {
         // heightmap texture
-        let hm_data: Vec<half::f16> = hm
-            .data
-            .iter()
-            .map(|&v| half::f16::from_f32(v))
-            .collect();
+        let hm_data: Vec<half::f16> = hm.data.iter().map(|&v| half::f16::from_f32(v)).collect();
         let hm_texture = gpu_ctx.device.create_texture(&wgpu::TextureDescriptor {
             label: Some("scene_hm_tex"),
             size: wgpu::Extent3d {
@@ -450,6 +446,10 @@ impl GpuScene {
         step_m: f32,
         t_max: f32,
         ao_mode: u32,
+        shadows_enabled: u32,
+        fog_enabled: u32,
+        vat_mode: u32,
+        lod_mode: u32,
     ) -> Vec<u8> {
         // Build camera uniforms inline (no hm needed — scalars stored in scene)
         let forward = crate::vector_utils::normalize(crate::vector_utils::sub(look_at, origin));
@@ -482,10 +482,10 @@ impl GpuScene {
             t_max,
             ao_mode,
             _pad5: 0.0,
-            _pad6: 0.0,
-            _pad7: 0.0,
-            _pad8: 0.0,
-            _pad9: 0.0,
+            shadows_enabled,
+            fog_enabled,
+            vat_mode,
+            lod_mode,
         };
 
         self.gpu_ctx
@@ -549,6 +549,10 @@ impl GpuScene {
         step_m: f32,
         t_max: f32,
         ao_mode: u32,
+        shadows_enabled: u32,
+        fog_enabled: u32,
+        vat_mode: u32,
+        lod_mode: u32,
     ) {
         // Build camera uniforms inline (no hm needed — scalars stored in scene)
         let forward = crate::vector_utils::normalize(crate::vector_utils::sub(look_at, origin));
@@ -581,10 +585,10 @@ impl GpuScene {
             t_max,
             ao_mode,
             _pad5: 0.0,
-            _pad6: 0.0,
-            _pad7: 0.0,
-            _pad8: 0.0,
-            _pad9: 0.0,
+            shadows_enabled,
+            fog_enabled,
+            vat_mode,
+            lod_mode,
         };
 
         self.gpu_ctx

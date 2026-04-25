@@ -217,7 +217,8 @@ pub fn render_gpu_combined(
 
     // ── render pipeline ───────────────────────────────────────────────────
     let cam = CameraUniforms::new(
-        origin, look_at, fov_deg, aspect, hm, sun_dir, width, height, step_m, t_max, ao_mode,
+        origin, look_at, fov_deg, aspect, hm, sun_dir, width, height, step_m, t_max, ao_mode, 1, 1,
+        1, 2,
     );
     let cam_buf = gpu_ctx
         .device

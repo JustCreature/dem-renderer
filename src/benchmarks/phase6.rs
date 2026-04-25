@@ -1441,6 +1441,10 @@ pub(crate) fn bench_fps(
                 step_m,
                 FPS_T_MAX,
                 0,
+                1,
+                1,
+                1,
+                2,
             );
             ctx.queue.submit([enc.finish()]);
             let _ = ctx.device.poll(wgpu::PollType::Wait {
@@ -1467,6 +1471,10 @@ pub(crate) fn bench_fps(
                 step_m,
                 FPS_T_MAX,
                 0,
+                1,
+                1,
+                1,
+                2,
             );
             std::hint::black_box(ctx.queue.submit([enc.finish()]));
             let _ = ctx.device.poll(wgpu::PollType::Wait {
