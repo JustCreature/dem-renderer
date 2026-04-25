@@ -1,0 +1,18 @@
+benchmark,resolution,unit,m4_mac,asus_pentium,mac_intel_i7,win_nitro_i5_gtx1650,notes
+cpu_parallel,2000x900,seconds,0.084,7.02,0.817,1.262,CPU rayon parallel raymarching
+cpu_vector_single,2000x900,seconds,0.834,27.22,3.088,3.543,CPU SIMD 4-wide single-thread
+cpu_vector_parallel,2000x900,seconds,0.089,7.06,0.840,1.092,CPU SIMD 4-wide parallel
+cpu_shadows_parallel,2000x900,seconds,0.084,7.08,0.898,1.244,CPU parallel + shadow integration
+gpu_buffer,2000x900,seconds,0.060,1.957,0.447,0.159,GPU wgpu compute (storage buffer heightmap)
+cpu_big_parallel,8000x2667,seconds,1.265,124.53,12.93,21.55,CPU parallel 8000x2667 (21.3 Mpix)
+gpu_big_buffer,8000x2667,seconds,0.136,15.15,1.268,0.352,GPU buffer 8000x2667
+gpu_big_texture,8000x2667,seconds,0.138,15.15,1.570,0.375,GPU texture 8000x2667
+gpu_big_combined,8000x2667,seconds,0.108,15.16,1.465,0.343,GPU combined (normals on GPU)
+speedup_gpu_vs_cpu_big,,ratio,9.3,8.2,10.2,62.9,GPU speedup over CPU for 8000x2667
+multi_frame_gpu_separate,8000x2667,ms_per_frame,133.3,20984.6,1972.4,495.6,10-frame multi-frame benchmark
+multi_frame_gpu_combined,8000x2667,ms_per_frame,118.9,20767.1,1984.6,453.5,
+multi_frame_gpu_scene,8000x2667,ms_per_frame,97.6,19904.0,1802.1,409.3,GpuScene: persistent resources reused
+gif_ms_per_frame,1600x533,ms_per_frame,47.4,1232.2,188.5,125.3,60-frame GIF animation
+gif_total_s,1600x533,seconds,2.8,73.9,11.3,7.5,total GIF render time
+scene_speedup_vs_separate,,ratio,1.37,1.05,1.09,1.21,GpuScene speedup over GPU_separate
+buffer_vs_texture,,ratio,0.99,1.00,0.81,0.94,buffer faster than texture (< 1 means buffer wins)

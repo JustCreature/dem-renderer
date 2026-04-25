@@ -231,3 +231,34 @@ pub unsafe fn compute_normals_neon_tiled_parallel(hm: &dem_io::TiledHeightmap) -
         cols,
     }
 }
+
+// Scalar fallback for platforms without SIMD: uses get() to access tiled data.
+// Slow but correct — only reached when neither NEON nor AVX2 is available.
+pub fn compute_normals_scalar_tiled(hm: &dem_io::TiledHeightmap) -> NormalMap {
+    let rows = hm.rows;
+    let cols = hm.cols;
+    let inv_2dx = 1.0f32 / (2.0 * hm.dx_meters as f32);
+    let inv_2dy = 1.0f32 / (2.0 * hm.dy_meters as f32);
+
+    let mut nx = vec![0.0f32; rows * cols];
+    let mut ny = vec![0.0f32; rows * cols];
+    let mut nz = vec![0.0f32; rows * cols];
+
+    for r in 1..rows - 1 {
+        for c in 1..cols - 1 {
+            let east  = hm.get(r, c + 1) as f32;
+            let west  = hm.get(r, c - 1) as f32;
+            let south = hm.get(r + 1, c) as f32;
+            let north = hm.get(r - 1, c) as f32;
+            let dzdx = (east - west) * inv_2dx;
+            let dzdy = (south - north) * inv_2dy;
+            let len = (dzdx * dzdx + dzdy * dzdy + 1.0f32).sqrt();
+            let idx = r * cols + c;
+            nx[idx] = -dzdx / len;
+            ny[idx] = -dzdy / len;
+            nz[idx] = 1.0 / len;
+        }
+    }
+
+    NormalMap { nx, ny, nz, rows, cols }
+}

@@ -1,3 +1,5 @@
+⛔ NEVER write code, edit files, or run commands without explicitly announcing Code Exception Mode first. This is a learning project — guide, don't implement.
+
 # CLAUDE.md
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
@@ -34,7 +36,7 @@ A learning-first, cache-optimized terrain + sunlight renderer in Rust using real
 
 ## Status
 
-**Current phase: Phase 6** (Phases 0, 1, 2, 3, 4, 5 complete)
+**Current phase: Phase 7** (Phases 0, 1, 2, 3, 4, 5, 6 complete)
 
 Phase 0 artifacts:
 - `crates/profiling/src/lib.rs` — `now()` (cntvct_el0 via inline asm), `timed()`, tests
@@ -155,11 +157,44 @@ Phase 5 lessons:
 - The GPU readback floor (~88ms for 85 MB) limits max frame rate; eliminating it requires a display/swap-chain architecture
 - Workgroup size (shape or thread count 64→256) has no effect: all variants ±3% because the 85 MB readback dominates; dispatch itself is ~5–10 ms
 
-Known open items from Phase 5:
-- GPU shadow via parallel prefix scan not implemented — would potentially match CPU NEON for cardinal direction
-- Occupancy analysis via Instruments/Metal GPU trace deferred — requires full Xcode.app; not a priority since workgroup tuning shows no effect with readback dominating
-- GIF rendering uses CPU readback + GIF encoding; the 85 MB readback dominates per-frame cost
-- `render_gif::render_gif` is commented out in main.rs — re-enable when generating animations
+Phase 6 artifacts:
+- `src/benchmarks/phase6.rs` — all 9 experiments
+- `docs/sessions/phase-6/main-session.md` — session log (2 sessions)
+- `docs/lessons/phase-6/long-report.md` — comprehensive Phase 6 student textbook (includes cross-system synthesis)
+- `docs/lessons/phase-6/short-report.md` — Phase 6 reference card (includes cross-system synthesis)
+- `docs/benchmark_results/report_1/` — all CSV data + interactive HTML + MD report for all 4 machines
+- `skills/learning-guide.skill` — repackaged with stricter code-exception enforcement
+
+Phase 6 key numbers (M4 Max, 3601×3601, cold cache, 2026-04-06):
+- Stencil row-major: 60–72 GB/s (auto-vec 8-wide NEON) | tiled all sizes: ~11 GB/s (`continue` blocks vec)
+- Thread scaling writes: linear to 8T (85 GB/s), ceiling at 12T (101 GB/s)
+- Thread scaling reads: linear to 10T (259 GB/s), ceiling at 12T (247 GB/s) — write 3× narrower than read
+- AoS vs SoA: 1.00× single-thread | 1.13× parallel (barely BW-limited on M4)
+- Morton vs row-major tiled: 1.00× — OOO ROB hides L2 latency, never reaches DRAM
+- Software prefetch: +14% max at D=64 — M4 ROB (~600) already issues speculative loads
+- NEON 1-acc: 18 GB/s | 4-acc: 71 GB/s | 8-acc: 120 GB/s (SLC-bound)
+- TLB knees: 4 MB (L1 DTLB, 256×16KB) and 16–64 MB (L2 TLB, ~48 MB)
+
+Cross-system key numbers (Win Nitro i5+GTX1650 / Mac Intel i7 / Asus Pentium N3700, 2026-04-09):
+- Auto-vec penalty universal: 6.5–10× on every machine (same root cause, different ISA)
+- Write/read asymmetry: M4 0.40 | Mac i7 0.26 | Asus 0.33 | Win 0.16 (write-allocate RFO)
+- TLB: x86 exhausts at 1 MB (256 entries × 4 KB); M4 exhausts at 4 MB (256 entries × 16 KB)
+- FPS benchmark (1600×533): M4 46.4 fps | Win GTX1650 15.2 fps | Mac i7 11.8 fps | Asus 4.5 fps
+- GTX1650: compute ~20 ms, PCIe readback ~47 ms → 15 fps measures PCIe BW not shader throughput
+- SoA advantage: M4 1.13× parallel | Win 2.3× | Asus 2.7× — scales with bandwidth starvation
+
+Phase 6 lessons:
+- Vectorisation gates everything — a single `continue` cut throughput 6× regardless of ISA, tile size, or thread count
+- Write path saturates at fewer threads than read path on every machine (RFO + store buffer)
+- SoA advantage is invisible when compute-bound; grows to 2–3× when bandwidth-starved
+- M4 16 KB pages give 4× TLB reach vs x86 — critical at large working sets (26 MB heightmap)
+- PCIe readback is the fps ceiling on discrete GPU; unified memory (M4) eliminates this tax entirely
+- Serial reduction chains need multiple accumulators; Morton ordering needs DRAM pressure to matter
+
+Known open items carried into Phase 7:
+- GPU shadow via parallel prefix scan not implemented — would potentially match CPU NEON for cardinal direction (deferred from Phase 5)
+- `render_gif::render_gif` is commented out in main.rs — re-enable when generating animations (deferred from Phase 5)
+- Occupancy analysis via Instruments/Metal GPU trace deferred — requires full Xcode.app (deferred from Phase 5)
 
 Known open items from Phase 4:
 - Supersampled ray optimization considered but not implemented: march 1 reference ray, approximate 3 neighbor heights via `h ≈ h_center + grad_x * Δcol + grad_y * Δrow` (using Phase 2 normal map). Would reduce gather 4→1 per step. Breaks at sharp discrete peaks.

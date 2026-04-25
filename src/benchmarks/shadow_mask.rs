@@ -2,8 +2,8 @@ use crate::utils::*;
 
 use dem_io::Heightmap;
 use terrain::{
-    compute_shadow_neon, compute_shadow_neon_parallel, compute_shadow_neon_parallel_with_azimuth,
-    compute_shadow_scalar, compute_shadow_scalar_with_azimuth, ShadowMask,
+    compute_shadow_scalar, compute_shadow_scalar_with_azimuth, compute_shadow_vector,
+    compute_shadow_vector_par, compute_shadow_vector_par_with_azimuth, ShadowMask,
 };
 
 pub(crate) fn benchmark_shadow_mask_scalar(
@@ -105,20 +105,20 @@ pub(crate) fn benchmark_shadow_mask_scalar_with_azimuth_labeled(
     shadow_mask
 }
 
-pub(crate) fn benchmark_shadow_mask_neon(
+pub(crate) fn benchmark_shadow_mask_vector(
     heightmap: &Heightmap,
     sun_elevation_rad: f32,
 ) -> ShadowMask {
     let (ticks, shadow_mask) =
-        profiling::timed("build shadow mask NEON from row-major hm", || unsafe {
-            compute_shadow_neon(&heightmap, sun_elevation_rad)
+        profiling::timed("build shadow mask VECTOR from row-major hm", || {
+            compute_shadow_vector(&heightmap, sun_elevation_rad)
         });
     let gb_per_second: f64 = count_gb_per_sec(
         ticks,
         Some(2 * heightmap.rows * heightmap.cols + 4 * heightmap.rows * heightmap.cols),
     );
     println!(
-        "compute_shadows_neon_from_row_major_hm: {:.1} GB/s",
+        "compute_shadows_vector_from_row_major_hm: {:.1} GB/s",
         gb_per_second
     );
 
@@ -129,26 +129,26 @@ pub(crate) fn benchmark_shadow_mask_neon(
         .collect();
     image::GrayImage::from_raw(heightmap.cols as u32, heightmap.rows as u32, pixels)
         .unwrap()
-        .save("artifacts/shadow_mask_neon_west_to_east.png")
+        .save("artifacts/shadow_mask_vector_west_to_east.png")
         .unwrap();
 
     shadow_mask
 }
 
-pub(crate) fn benchmark_shadow_mask_neon_parallel(
+pub(crate) fn benchmark_shadow_mask_vector_parallel(
     heightmap: &Heightmap,
     sun_elevation_rad: f32,
 ) -> ShadowMask {
     let (ticks, shadow_mask) = profiling::timed(
-        "build shadow mask NEON parallel from row-major hm",
-        || unsafe { compute_shadow_neon_parallel(&heightmap, sun_elevation_rad) },
+        "build shadow mask VECTOR parallel from row-major hm",
+        || compute_shadow_vector_par(&heightmap, sun_elevation_rad),
     );
     let gb_per_second: f64 = count_gb_per_sec(
         ticks,
         Some(2 * heightmap.rows * heightmap.cols + 4 * heightmap.rows * heightmap.cols),
     );
     println!(
-        "compute_shadows_neon_parallel_from_row_major_hm: {:.1} GB/s",
+        "compute_shadows_vector_parallel_from_row_major_hm: {:.1} GB/s",
         gb_per_second
     );
 
@@ -159,13 +159,13 @@ pub(crate) fn benchmark_shadow_mask_neon_parallel(
         .collect();
     image::GrayImage::from_raw(heightmap.cols as u32, heightmap.rows as u32, pixels)
         .unwrap()
-        .save("artifacts/shadow_mask_neon_parallel_west_to_east.png")
+        .save("artifacts/shadow_mask_vector_parallel_west_to_east.png")
         .unwrap();
 
     shadow_mask
 }
 
-pub(crate) fn benchmark_shadow_mask_neon_parallel_with_azimuth_labeled(
+pub(crate) fn benchmark_shadow_mask_vector_parallel_with_azimuth_labeled(
     heightmap: &Heightmap,
     sun_azimuth_rad: f32,
     sun_elevation_rad: f32,
@@ -173,23 +173,17 @@ pub(crate) fn benchmark_shadow_mask_neon_parallel_with_azimuth_labeled(
 ) -> ShadowMask {
     let (ticks, shadow_mask) = profiling::timed(
         &format!(
-            "[[ {} ]] build shadow mask NEON parallel from row-major hm",
+            "[[ {} ]] build shadow mask VECTOR parallel with_azimuth from row-major hm",
             cur_label
         ),
-        || unsafe {
-            compute_shadow_neon_parallel_with_azimuth(
-                &heightmap,
-                sun_azimuth_rad,
-                sun_elevation_rad,
-            )
-        },
+        || compute_shadow_vector_par_with_azimuth(&heightmap, sun_azimuth_rad, sun_elevation_rad),
     );
     let gb_per_second: f64 = count_gb_per_sec(
         ticks,
         Some(2 * heightmap.rows * heightmap.cols + 4 * heightmap.rows * heightmap.cols),
     );
     println!(
-        "compute_shadows_neon_parallel_labeled_from_row_major_hm: {:.1} GB/s",
+        "compute_shadows_vector_parallel_labeled_from_row_major_hm: {:.1} GB/s",
         gb_per_second
     );
 
@@ -201,7 +195,7 @@ pub(crate) fn benchmark_shadow_mask_neon_parallel_with_azimuth_labeled(
     image::GrayImage::from_raw(heightmap.cols as u32, heightmap.rows as u32, pixels)
         .unwrap()
         .save(&format!(
-            "artifacts/[{}]_shadow_mask_neon_parallel_west_to_east.png",
+            "artifacts/[{}]_shadow_mask_vector_parallel_west_to_east.png",
             cur_label
         ))
         .unwrap();

@@ -1,15 +1,151 @@
 mod camera;
 mod raymarch;
+#[cfg(target_arch = "x86_64")]
+mod raymarch_avx2;
+#[cfg(target_arch = "aarch64")]
 mod raymarch_neon;
 mod render;
+#[cfg(target_arch = "x86_64")]
+mod render_avx2;
+#[cfg(target_arch = "aarch64")]
 mod render_neon;
 mod vector_utils;
 
 pub use camera::{Camera, Ray};
 pub use raymarch::raymarch;
+#[cfg(target_arch = "x86_64")]
+pub use raymarch_avx2::{RayPacketAvx2, raymarch_avx2};
+#[cfg(target_arch = "aarch64")]
 pub use raymarch_neon::{RayPacket, raymarch_neon};
 pub use render::{render, render_par};
+#[cfg(target_arch = "x86_64")]
+pub use render_avx2::{render_avx2, render_avx2_par};
+#[cfg(target_arch = "aarch64")]
 pub use render_neon::{render_neon, render_neon_par};
+
+pub fn render_vector(
+    cam: &Camera,
+    hm: &dem_io::Heightmap,
+    normals: &terrain::NormalMap,
+    shadow_mask: &terrain::ShadowMask,
+    sun_dir: [f32; 3],
+    width: u32,
+    height: u32,
+    step_m: f32,
+    t_max: f32,
+) -> Vec<u8> {
+    #[cfg(target_arch = "aarch64")]
+    return render_neon(
+        cam,
+        hm,
+        normals,
+        shadow_mask,
+        sun_dir,
+        width,
+        height,
+        step_m,
+        t_max,
+    );
+
+    #[cfg(target_arch = "x86_64")]
+    if is_x86_feature_detected!("avx2") && width % 8 == 0 {
+        return unsafe {
+            render_avx2(
+                cam,
+                hm,
+                normals,
+                shadow_mask,
+                sun_dir,
+                width,
+                height,
+                step_m,
+                t_max,
+            )
+        };
+    }
+
+    // Fallback: scalar (any platform without SIMD, or x86_64 without AVX2, or odd width)
+    #[cfg(not(target_arch = "aarch64"))]
+    {
+        #[cfg(target_arch = "x86_64")]
+        eprintln!("[SCALAR FALLBACK] render_vector: AVX2 not detected or width ({width}) not divisible by 8");
+        #[cfg(not(target_arch = "x86_64"))]
+        eprintln!("[SCALAR FALLBACK] render_vector: no SIMD for this architecture");
+        return render(
+            cam,
+            hm,
+            normals,
+            shadow_mask,
+            sun_dir,
+            width,
+            height,
+            step_m,
+            t_max,
+        );
+    }
+}
+
+pub fn render_vector_par(
+    cam: &Camera,
+    hm: &dem_io::Heightmap,
+    normals: &terrain::NormalMap,
+    shadow_mask: &terrain::ShadowMask,
+    sun_dir: [f32; 3],
+    width: u32,
+    height: u32,
+    step_m: f32,
+    t_max: f32,
+) -> Vec<u8> {
+    #[cfg(target_arch = "aarch64")]
+    return render_neon_par(
+        cam,
+        hm,
+        normals,
+        shadow_mask,
+        sun_dir,
+        width,
+        height,
+        step_m,
+        t_max,
+    );
+
+    #[cfg(target_arch = "x86_64")]
+    if is_x86_feature_detected!("avx2") && width % 8 == 0 {
+        return unsafe {
+            render_avx2_par(
+                cam,
+                hm,
+                normals,
+                shadow_mask,
+                sun_dir,
+                width,
+                height,
+                step_m,
+                t_max,
+            )
+        };
+    }
+
+    // Fallback: scalar parallel
+    #[cfg(not(target_arch = "aarch64"))]
+    {
+        #[cfg(target_arch = "x86_64")]
+        eprintln!("[SCALAR FALLBACK] render_vector_par: AVX2 not detected or width ({width}) not divisible by 8");
+        #[cfg(not(target_arch = "x86_64"))]
+        eprintln!("[SCALAR FALLBACK] render_vector_par: no SIMD for this architecture");
+        return render_par(
+            cam,
+            hm,
+            normals,
+            shadow_mask,
+            sun_dir,
+            width,
+            height,
+            step_m,
+            t_max,
+        );
+    }
+}
 
 use crate::vector_utils::normalize;
 use dem_io::Heightmap;

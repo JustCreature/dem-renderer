@@ -1,7 +1,22 @@
 mod benchmarks;
 mod frame_render_final;
 mod render_gif;
+mod system_info;
 mod utils;
+
+// Tell the NVIDIA Optimus and AMD Hybrid driver to route this process through the discrete GPU.
+// The driver checks for these exported symbols at process load time, before any D3D12/Vulkan
+// calls are made.  Without this, Optimus may route compute dispatches through the iGPU even
+// when the correct wgpu adapter is selected in software.
+#[cfg(target_os = "windows")]
+#[unsafe(no_mangle)]
+#[used]
+pub static NvOptimusEnablement: u32 = 1;
+
+#[cfg(target_os = "windows")]
+#[unsafe(no_mangle)]
+#[used]
+pub static AmdPowerXpressRequestHighPerformance: u32 = 1;
 
 use std::path::Path;
 
@@ -13,14 +28,15 @@ use dem_io::{Heightmap, TiledHeightmap};
 use terrain::{NormalMap, ShadowMask};
 
 fn main() {
+    system_info::print_system_info();
     println!("dem_renderer");
     let data: Vec<f32> = (0..N).map(|i| i as f32).collect();
 
-    seq_read_simd(&data);
+    seq_read_vector(&data);
     println!("--------");
     seq_read(&data);
     println!("--------");
-    random_read_simd(&data);
+    random_read_vector(&data);
     println!("--------");
     random_read(&data);
     println!("--------");
@@ -117,7 +133,7 @@ fn main() {
 
     let gpu_ctx = render_gpu::GpuContext::new();
 
-    let (ticks, normal_map_gpu) = profiling::timed("compute_normals_gpu", || {
+    let (ticks, _normal_map_gpu) = profiling::timed("compute_normals_gpu", || {
         render_gpu::compute_normals_gpu(&gpu_ctx, &heightmap)
     });
     println!(
@@ -140,13 +156,13 @@ fn main() {
     let evict: Vec<i32> = (0..100 * 1024 * 1024).map(|i| i as i32).collect();
     std::hint::black_box(evict);
 
-    benchmark_shadow_mask_neon(&heightmap, sun_elevation_rad_const);
+    benchmark_shadow_mask_vector(&heightmap, sun_elevation_rad_const);
 
     // evict heightmap from cach
     let evict: Vec<i32> = (0..100 * 1024 * 1024).map(|i| i as i32).collect();
     std::hint::black_box(evict);
 
-    benchmark_shadow_mask_neon_parallel(&heightmap, sun_elevation_rad_const);
+    benchmark_shadow_mask_vector_parallel(&heightmap, sun_elevation_rad_const);
 
     // evict heightmap from cach
     let evict: Vec<i32> = (0..100 * 1024 * 1024).map(|i| i as i32).collect();
@@ -185,7 +201,7 @@ fn main() {
     let evict: Vec<i32> = (0..100 * 1024 * 1024).map(|i| i as i32).collect();
     std::hint::black_box(evict);
 
-    benchmark_shadow_mask_neon_parallel_with_azimuth_labeled(
+    benchmark_shadow_mask_vector_parallel_with_azimuth_labeled(
         &heightmap,
         270f32.to_radians(),
         10f32.to_radians(),
@@ -287,13 +303,6 @@ fn main() {
     );
     println!("hit: {:?}", hit);
 
-    let r0 = cam.ray_for_pixel(500, 500, 1000, 1000);
-    let packet = render_cpu::RayPacket::new(&r0, &r0, &r0, &r0);
-    let hits = unsafe {
-        render_cpu::raymarch_neon(&packet, &heightmap, heightmap.dx_meters as f32, 200_000.0)
-    };
-    println!("neon hits: {:?}", hits);
-
     let sun_dir = [0.4f32, 0.5f32, 0.7f32]; // [east, south, up] — morning sun NE
 
     let (ticks, fb) = profiling::timed("render_cpu_parallel", || {
@@ -318,11 +327,11 @@ fn main() {
 
     image::RgbImage::from_raw(pic_width, pic_height, fb)
         .unwrap()
-        .save("artifacts/render_cpu[parallel].png")
+        .save("artifacts/render_cpu_parallel.png")
         .unwrap();
 
-    let (ticks, fb) = profiling::timed("render_cpu[NEON]", || {
-        render_cpu::render_neon(
+    let (ticks, fb) = profiling::timed("render_cpu[VECTOR]", || {
+        render_cpu::render_vector(
             &cam,
             &heightmap,
             &normal_map,
@@ -335,18 +344,18 @@ fn main() {
         )
     });
     println!(
-        "render_cpu [NEON] {}x{}: {:.2}s",
+        "render_cpu [VECTOR] {}x{}: {:.2}s",
         pic_width,
         pic_height,
         ticks as f64 / counter_frequency()
     );
     image::RgbImage::from_raw(pic_width, pic_height, fb)
         .unwrap()
-        .save("artifacts/render_cpu[NEON].png")
+        .save("artifacts/render_cpu_VECTOR.png")
         .unwrap();
 
-    let (ticks, fb) = profiling::timed("render_cpu_NEON_parallel", || {
-        render_cpu::render_neon_par(
+    let (ticks, fb) = profiling::timed("render_cpu_VECTOR_parallel", || {
+        render_cpu::render_vector_par(
             &cam,
             &heightmap,
             &normal_map,
@@ -359,7 +368,7 @@ fn main() {
         )
     });
     println!(
-        "render_cpu NEON PARALLEL {}x{}: {:.2}s",
+        "render_cpu VECTOR PARALLEL {}x{}: {:.2}s",
         pic_width,
         pic_height,
         ticks as f64 / counter_frequency()
@@ -367,7 +376,7 @@ fn main() {
 
     image::RgbImage::from_raw(pic_width, pic_height, fb)
         .unwrap()
-        .save("artifacts/render_cpu[NEON_parallel].png")
+        .save("artifacts/render_cpu_VECTOR_parallel.png")
         .unwrap();
 
     render_3d_pic_cpu(tile_path);
@@ -466,7 +475,7 @@ fn main() {
 
     image::RgbaImage::from_raw(pic_width, pic_height, fb)
         .unwrap()
-        .save("artifacts/render_gpu[texture].png")
+        .save("artifacts/render_gpu_texture.png")
         .unwrap();
 
     let (ticks, fb) = profiling::timed("render_gpu[combined]", || {
@@ -493,7 +502,7 @@ fn main() {
     );
     image::RgbaImage::from_raw(pic_width, pic_height, fb)
         .unwrap()
-        .save("artifacts/render_gpu[combined].png")
+        .save("artifacts/render_gpu_combined.png")
         .unwrap();
 
     // -- Multi-frame benchmark
@@ -505,5 +514,100 @@ fn main() {
     // GpuScene takes ctx by value (owns it) — create a dedicated one
     benchmark_multi_frame_gpu_scene(render_gpu::GpuContext::new(), &heightmap, &shadow_mask);
 
-    // render_gif::render_gif(tile_path);
+    render_gif::render_gif(tile_path);
+
+    // -- Phase 6 benchmarks
+    println!("---------- Phase 6 Benchmarks ----------");
+
+    // evict before phase 6
+    let evict: Vec<i32> = (0..100 * 1024 * 1024).map(|i| i as i32).collect();
+    std::hint::black_box(evict);
+
+    bench_tile_size_sweep(&heightmap);
+    bench_thread_count_scaling(&heightmap);
+    bench_thread_count_scaling_readonly(&heightmap);
+
+    run_phase_6_benchmarks(&heightmap, &normal_map, &data);
+
+    println!("---------- FPS Benchmark ----------");
+    bench_fps(&heightmap, &normal_map, &shadow_mask, &gpu_ctx);
+
+    // -- Valley render
+    // Camera: 47°03'52.84"N 11°42'26.24"E, alt 3284m, heading 165°, tilt 72° from nadir
+    // Google Earth cursor alt 2339m → used as look-at altitude
+    // row = (48 - 47.064678) * 3600 = 3367, col = (11.707289 - 11) * 3600 = 2546
+    // moved 200m back (opposite heading) and tilted down to 72° (was 78°)
+    {
+        let cam_col_v = 2546.0f32;
+        let cam_row_v = 3367.0f32;
+        let cam_alt_v = 3284.0f32;
+        let look_alt_v = 2339.0f32;
+        let heading_rad_v = 165.0f32.to_radians();
+        // move 200m back: opposite heading direction
+        let cam_x_v = cam_col_v * dx - 800.0 * heading_rad_v.sin();
+        let cam_y_v = cam_row_v * dy + 800.0 * heading_rad_v.cos(); // cos(165°)<0 → moves north
+                                                                    // tilt down to 72° from nadir (was 78°): shorter horizontal lookahead
+        let horiz_v = (cam_alt_v - look_alt_v) * 77.0f32.to_radians().tan();
+        let look_x_v = cam_x_v + horiz_v * heading_rad_v.sin();
+        let look_y_v = cam_y_v + horiz_v * (-heading_rad_v.cos());
+
+        let (ticks, fb) = profiling::timed("render valley", || {
+            render_gpu::render_gpu_texture(
+                &gpu_ctx,
+                [cam_x_v, cam_y_v, cam_alt_v],
+                [look_x_v, look_y_v, look_alt_v],
+                70.0,
+                8000.0 / 2667.0,
+                &heightmap,
+                &normal_map,
+                &shadow_mask,
+                sun_dir,
+                8000,
+                2667,
+                heightmap.dx_meters as f32 / 0.8,
+                200_000.0,
+            )
+        });
+        println!("valley render: {:.2}s", ticks as f64 / counter_frequency());
+
+        image::RgbaImage::from_raw(8000, 2667, fb)
+            .unwrap()
+            .save("artifacts/valley.png")
+            .unwrap();
+    }
+}
+
+fn run_phase_6_benchmarks(heightmap: &Heightmap, normal_map: &NormalMap, data: &Vec<f32>) {
+    // evict before exp 4
+    let evict: Vec<i32> = (0..100 * 1024 * 1024).map(|i| i as i32).collect();
+    std::hint::black_box(evict);
+
+    bench_aos_vs_soa(&normal_map);
+
+    // evict before exp 5
+    let evict: Vec<i32> = (0..100 * 1024 * 1024).map(|i| i as i32).collect();
+    std::hint::black_box(evict);
+
+    bench_morton_vs_rowmajor(&heightmap);
+
+    // evict before exp 6/7
+    let evict: Vec<i32> = (0..100 * 1024 * 1024).map(|i| i as i32).collect();
+    std::hint::black_box(evict);
+
+    bench_software_prefetch(&data);
+
+    let evict: Vec<i32> = (0..100 * 1024 * 1024).map(|i| i as i32).collect();
+    std::hint::black_box(evict);
+
+    bench_vector_accumulators(&normal_map);
+
+    let evict: Vec<i32> = (0..100 * 1024 * 1024).map(|i| i as i32).collect();
+    std::hint::black_box(evict);
+
+    bench_gather_ray_packets(&heightmap);
+
+    let evict: Vec<i32> = (0..100 * 1024 * 1024).map(|i| i as i32).collect();
+    std::hint::black_box(evict);
+
+    bench_tlb_sweep(&data);
 }

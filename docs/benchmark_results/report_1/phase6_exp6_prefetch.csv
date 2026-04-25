@@ -1,0 +1,8 @@
+prefetch_distance,m4_mac_gbs,asus_pentium_gbs,mac_intel_i7_gbs,win_nitro_gbs,notes
+no_prefetch,1.32,0.03,0.32,0.34,random 268 MB array — fully latency-bound
+prefetch_D4,1.35,,,,+2% on M4 (only M4 ran full sweep)
+prefetch_D16,1.41,,,,+7% on M4
+prefetch_D64,1.48,,,,+12% on M4 — best result
+max_gain_pct,12,,,,all systems: OOO ROB hides latency; manual prefetch marginal
+seq_ceiling_gbs,71.25,5.80,26.38,17.84,sequential ceiling for reference (ratio shows latency vs bandwidth gap)
+random_to_seq_ratio,0.019,0.005,0.012,0.019,random / sequential — shows TLB+cache miss penalty

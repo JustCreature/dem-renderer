@@ -1,0 +1,9 @@
+benchmark,unit,m4_mac,asus_pentium,mac_intel_i7,win_nitro_i5_gtx1650,notes
+scalar,GB/s,19.1,0.4,4.3,8.1,scalar finite differences single-thread
+vectorized,GB/s,20.6,0.4,4.3,9.5,auto-vectorised scalar single-thread
+parallel_vectorized,GB/s,54.7,0.4,14.0,20.1,auto-vectorised parallel (rayon)
+tiled_vectorized,GB/s,31.4,0.2,10.7,3.7,tiled NEON single-thread
+tiled_parallel_vectorized,GB/s,110.9,0.2,11.2,12.3,tiled NEON parallel (rayon)
+gpu_compute_normals_s,seconds,0.069,2.132,0.247,0.116,GPU normals compute pass
+speedup_parallel_vs_scalar,,2.9,1.0,3.3,2.5,parallel speedup over scalar
+speedup_tiled_par_vs_scalar,,5.8,0.5,2.6,1.5,tiled parallel speedup over scalar
