@@ -241,7 +241,26 @@ Known open items carried into Phase 8:
 - Occupancy analysis via Instruments/Metal GPU trace — requires full Xcode.app (deferred from Phase 5)
 
 Phase 8 artifacts (in progress):
-- `docs/planning/viewer-phase-8.md` — roadmap: shadow toggle (`.`), fog toggle (`,`), Visual Artifact Tolerance (`;`, 4 modes), LOD Distance (`'`, 4 modes), out-of-core tile streaming
+- `docs/planning/viewer-phase-8.md` — Part 0 data source plan + viewer roadmap
+- `docs/sessions/phase-8/main-session.md` — session log (2026-04-20)
+- `crates/dem_io/src/geotiff.rs` — `geotiff_pixel_scale()`, `parse_geotiff_epsg_3035()`, `laea_epsg3035_inverse()`; `Limits::unlimited()` in EPSG:3035 parser
+- `crates/dem_io/src/heightmap.rs` — `Heightmap` extended: `crs_origin_x`, `crs_origin_y`, `crs_epsg`
+- `crates/render_gpu/src/context.rs` — `required_limits: adapter.limits()` to unlock full hardware buffer sizes
+- `src/viewer/mod.rs` — auto-dispatch by pixel scale; `lcc_epsg31287()`, `laea_epsg3035()` forward projections; `latlon_to_tile_metres()` dispatching on `crs_epsg`; named camera position (47°04'34.36"N 11°41'15.33"E, 3258m)
+- DEM tiles: `hintertux_5m.tif`, `hintertux_18km_5m.tif`, `hintertux_8km_1m.tif` (EPSG:3035, 8001×8001)
+
+Phase 8 key facts (2026-04-20):
+- EPSG:3035 LAEA Europe: FE=4321000, FN=3210000, lat0=52°N, lon0=10°E, GRS 1980; scale = metres directly
+- EPSG:31287 Austria Lambert: FE=FN=400000, lat0=47.5°N, lon0=13.333°E, Bessel 1841; 5m/pixel
+- wgpu default buffer binding limit 128 MB; fix: `adapter.limits()`; texture dimension limit 8192 px
+- `tiff` crate default memory limit: fix `Limits::unlimited()` for tiles > 128 MB
+- BEV DGM 5m NoData sentinel = 0.0 (safe: min Austrian elevation >> 0)
+- Hintertux centre: WGS84 47.076211°N 11.687592°E → EPSG:31287 (273605, 356962) → EPSG:3035 (4449262, 2663978)
+
+Phase 8 open items:
+- Confirm `hintertux_8km_1m.tif` renders correctly (session ended before verification)
+- Measure normals/shadow/AO startup time for 8001×8001 vs 3601×3601
+- Viewer feature items from roadmap: shadow toggle (`.`), fog toggle (`,`), VAT presets (`;`), LOD presets (`'`)
 
 Known open items from Phase 4:
 - Supersampled ray optimization considered but not implemented: march 1 reference ray, approximate 3 neighbor heights via `h ≈ h_center + grad_x * Δcol + grad_y * Δrow` (using Phase 2 normal map). Would reduce gather 4→1 per step. Breaks at sharp discrete peaks.

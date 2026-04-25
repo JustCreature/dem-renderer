@@ -13,6 +13,12 @@ pub struct Heightmap {
     pub dy_deg: f64,     // degrees per row (south = negative, from .blw)
     pub dx_meters: f64,  // real-world cell width (for normals in Phase 2)
     pub dy_meters: f64,  // real-world cell height (for normals in Phase 2)
+    /// Raw tiepoint from the file in its native CRS units.
+    /// Geographic (EPSG:4326): same as origin_lon / origin_lat (degrees).
+    /// Projected (EPSG:31287): easting / northing of the top-left corner (metres).
+    pub crs_origin_x: f64,
+    pub crs_origin_y: f64,
+    pub crs_epsg: u32, // 4326 = geographic, 31287 = Austria Lambert, 3035 = LAEA Europe
 }
 
 #[derive(Debug)]
@@ -239,6 +245,9 @@ pub fn parse_bil(bil_path: &Path) -> Result<Heightmap, DemError> {
         dy_deg,
         dx_meters,
         dy_meters,
+        crs_origin_x: hdr_map.origin_lon,
+        crs_origin_y: hdr_map.origin_lat,
+        crs_epsg: 4326,
     };
 
     build_grayscale_png(&heightmap, hdr_map.cols, hdr_map.rows);

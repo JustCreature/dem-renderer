@@ -40,7 +40,10 @@ impl GpuContext {
             println!("  [GPU] selected: {} ({:?})", info.name, info.device_type);
 
             let (device, queue) = adapter
-                .request_device(&wgpu::DeviceDescriptor::default())
+                .request_device(&wgpu::DeviceDescriptor {
+                    required_limits: adapter.limits(),
+                    ..Default::default()
+                })
                 .await
                 .expect("failed to get device");
 

@@ -10,6 +10,14 @@ you can boost performance but it will introdice visual artefacts, especially at 
 
 get data from copernicus: `aws s3 cp s3://copernicus-dem-30m/Copernicus_DSM_COG_10_N47_00_E011_00_DEM/ ./tiles/Copernicus_DSM_COG_10_N47_00_E011_00_DEM --recursive --no-sign-request`
 https://portal.opentopography.org/raster?opentopoID=OTSDEM.032021.4326.3
+https://data.bev.gv.at/geonetwork/srv/eng/catalog.search#/search?isTemplate=n&resourceTemporalDateRange=%7B%22range%22:%7B%22resourceTemporalDateRange%22:%7B%22gte%22:null,%22lte%22:null,%22relation%22:%22intersects%22%7D%7D%7D&sortBy=relevance&sortOrder=desc&query_string=%7B%22resourceType%22:%7B%22dataset%22:true%7D,%22format%22:%7B%22GeoTIFF%22:true%7D%7D&from=1&to=50&geometry=POLYGON((11.710905660381197%2047.13083187339504,11.710905660381197%2047.019120862733104,11.557580864143874%2047.019120862733104,11.557580864143874%2047.13083187339504,11.710905660381197%2047.13083187339504))
+
+
+echo "11.667 47.100" | gdaltransform -s_srs EPSG:4326 -t_srs EPSG:31287
+
+echo "11.687592 47.076211" | gdaltransform -s_srs EPSG:4326 -t_srs EPSG:3035
+
+gdal_translate -projwin 4446400 2665778 4450000 2662178 -of GTiff tiles/big_size/1m_innsbruck_area/CRS3035RES50000mN2650000E4400000.tif tiles/big_size/hintertux_3km_1m.tif
 
 
 
