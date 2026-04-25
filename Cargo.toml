@@ -21,4 +21,5 @@ path = "src/main.rs"
 profiling = { path = "crates/profiling" }
 dem_io = { path = "crates/dem_io" }
 terrain = { path = "crates/terrain" }
+render_cpu = { path = "crates/render_cpu" }
 image = "0.25"

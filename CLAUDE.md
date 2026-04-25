@@ -16,7 +16,7 @@ A learning-first, cache-optimized terrain + sunlight renderer in Rust using real
 
 ## Status
 
-**Current phase: Phase 4** (Phases 0, 1, 2, 3 complete)
+**Current phase: Phase 5** (Phases 0, 1, 2, 3, 4 complete)
 
 Phase 0 artifacts:
 - `crates/profiling/src/lib.rs` — `now()` (cntvct_el0 via inline asm), `timed()`, tests
@@ -75,6 +75,30 @@ Phase 3 key numbers (M4 Max, cold cache, isolated runs):
 - Lesson: branchless wins (31%) despite accurate branch prediction — unconditional store pattern is more pipeline-friendly
 - Lesson: NEON vectorises across rows (not within), breaking the serial dependency chain 4×
 - NEON parallel gives 3.4× from parallelism (not 10×) — memory bandwidth is the ceiling at 58.6 GB/s
+
+Phase 4 artifacts:
+- `crates/render_cpu/src/camera.rs` — `Camera`, `Ray`, `Camera::new`, `ray_for_pixel`
+- `crates/render_cpu/src/vector_utils.rs` — `pub(crate)`: `add`, `sub`, `scale`, `normalize`, `cross`
+- `crates/render_cpu/src/raymarch.rs` — `raymarch()`, `binary_search_hit()` (private)
+- `crates/render_cpu/src/raymarch_neon.rs` — `RayPacket` (SoA), `raymarch_neon()`, `binary_search_hit_neon()` (private)
+- `crates/render_cpu/src/render.rs` — `render()` (scalar), `render_par()` (rayon), `shade()` (pub(crate))
+- `crates/render_cpu/src/render_neon.rs` — `render_neon()`, `render_neon_par()` (NEON + rayon)
+- `crates/render_cpu/src/lib.rs` — mod declarations, pub re-exports
+- `src/frame_render_cpu.rs` — camera setup from Google Earth coords, all 4 render variants timed
+- `docs/lessons/phase-4/long-report.md` — comprehensive Phase 4 student textbook
+- `docs/lessons/phase-4/short-report.md` — comprehensive Phase 4 reference
+- `docs/sessions/phase-4/main-session.md` — session log
+
+Phase 4 key numbers (M4 Max, 2000×900 image, step_m = dx_meters ≈ 20.7m):
+- Scalar single-thread: 0.80s | NEON single-thread: 0.80s (same — gather overhead cancels SIMD gain)
+- Scalar parallel (10 cores): 0.08s | NEON parallel (10 cores): 0.08s — 10× speedup, near-ideal scaling
+- Average steps per ray: 506 (≈10.5 km travel)
+- Effective read rate: ~22 GB/s << M4 Max 400 GB/s — not bandwidth-limited, compute-bound
+- Lesson: for memory-bound code with sequential access, parallelism >> manual SIMD; NEON gain cancelled by gather overhead + compiler auto-vectorization of scalar
+- Lesson: screen-space tiling not beneficial here — horizontal 1×4 packets already give optimal cache-line reuse; bottleneck is gather count not cache misses
+
+Known open items from Phase 4:
+- Supersampled ray optimization considered but not implemented: march 1 reference ray, approximate 3 neighbor heights via `h ≈ h_center + grad_x * Δcol + grad_y * Δrow` (using Phase 2 normal map). Would reduce gather 4→1 per step. Breaks at sharp discrete peaks.
 
 Known open items from Phase 3:
 - `compute_shadow_neon_parallel_with_azimuth` written but not yet benchmarked at various azimuths — pending diagonal vs cardinal comparison

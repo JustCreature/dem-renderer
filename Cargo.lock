@@ -245,6 +245,7 @@ dependencies = [
  "dem_io",
  "image",
  "profiling 0.1.0",
+ "render_cpu",
  "terrain",
 ]
 
@@ -791,6 +792,11 @@ dependencies = [
 [[package]]
 name = "render_cpu"
 version = "0.1.0"
+dependencies = [
+ "dem_io",
+ "rayon",
+ "terrain",
+]
 
 [[package]]
 name = "render_gpu"
