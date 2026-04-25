@@ -261,26 +261,28 @@ LOD: Low
 
 ---
 
-## 5 — Out-of-core tile streaming
+## ~~5 — Out-of-core tile streaming~~
 
-**What:** support terrain datasets larger than GPU VRAM by keeping only the tiles
-visible from the current camera position resident on the GPU.
+~~**What:** support terrain datasets larger than GPU VRAM by keeping only the tiles
+visible from the current camera position resident on the GPU.~~
 
-**Why it's interesting at the hardware level:**
-- Exposes the CPU→GPU upload bandwidth as a distinct bottleneck (separate from shader compute)
-- On M4 unified memory, "upload" is a pointer hand-off — near zero cost
-- On discrete GPU (PCIe), a 26 MB tile upload ≈ 1.7ms; 4 new tiles/frame = 6.8ms stall
-- The measurable question: at what camera speed does streaming become the bottleneck?
+~~**Why it's interesting at the hardware level:**~~
+~~- Exposes the CPU→GPU upload bandwidth as a distinct bottleneck (separate from shader compute)~~
+~~- On M4 unified memory, "upload" is a pointer hand-off — near zero cost~~
+~~- On discrete GPU (PCIe), a 26 MB tile upload ≈ 1.7ms; 4 new tiles/frame = 6.8ms stall~~
+~~- The measurable question: at what camera speed does streaming become the bottleneck?~~
 
-**Key concepts to build:**
-1. **Spatial tiling on disk** — world divided into fixed-size chunks (e.g. 256×256 height
-   samples), each a seekable region. Camera position maps to a set of visible chunk coords.
-2. **GPU tile cache** — fixed-size 2D texture array on the GPU (e.g. 8×8 = 64 slots).
-   LRU eviction when a new tile is needed and all slots are full.
-3. **Indirection table (page table)** — small texture the shader consults:
-   `tile_id → slot_index`. If tile not resident, render a lower-res fallback or flag the pixel.
+~~**Key concepts to build:**~~
+~~1. **Spatial tiling on disk** — world divided into fixed-size chunks (e.g. 256×256 height~~
+~~   samples), each a seekable region. Camera position maps to a set of visible chunk coords.~~
+~~2. **GPU tile cache** — fixed-size 2D texture array on the GPU (e.g. 8×8 = 64 slots).~~
+~~   LRU eviction when a new tile is needed and all slots are full.~~
+~~3. **Indirection table (page table)** — small texture the shader consults:~~
+~~   `tile_id → slot_index`. If tile not resident, render a lower-res fallback or flag the pixel.~~
 
-**This is what GPU hardware calls:** sparse/virtual textures ("tiled resources" in DirectX,
-"sparse binding" in Vulkan). Building it manually makes the abstraction concrete.
+~~**This is what GPU hardware calls:** sparse/virtual textures ("tiled resources" in DirectX,~~
+~~"sparse binding" in Vulkan). Building it manually makes the abstraction concrete.~~
 
-**Prerequisite:** multi-tile SRTM data (currently only one tile loaded).
+~~**Prerequisite:** multi-tile SRTM data (currently only one tile loaded).~~
+
+**Superseded by:** `docs/planning/multi-tile-multiple-resolution-load.md`

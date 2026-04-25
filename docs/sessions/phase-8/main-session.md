@@ -2,6 +2,65 @@
 
 ---
 
+## 2026-04-25 (session 3)
+
+### What we worked on
+
+Planning for Item 5 (tile streaming). Replaced the original chunk-based LRU plan with a
+multi-tier multi-resolution architecture that matches the actual data sources. Decided on a
+3×3 sliding window for 30m tiles with geometric justification. Created a new dedicated plan
+document.
+
+### Codebase changes this session
+
+#### `docs/planning/viewer-phase-8.md`
+- Item 5 struck through (superseded)
+- Link added to new plan document
+
+#### `docs/planning/multi-tile-multiple-resolution-load.md` (new)
+- Full 5-step plan for multi-tile multi-resolution terrain loading
+- Step 1: 30m 3×3 sliding window (tile-boundary crossing trigger, half-res outer tiles)
+- Step 2: windowed GeoTIFF extraction (in-process `-projwin` equivalent)
+- Step 3: per-tier background loader threads with coarse fallback
+- Step 4: multi-source-tile stitching for 5m and 1m tiers
+- Step 5: multi-tier shader with distance-based tier selection and lerp blend zone
+
+#### `CLAUDE.md`
+- Removed "Measure normals/shadow/AO startup time for 8001×8001" open item (dropped)
+- Updated Phase 8 open items to reflect new plan
+
+### Key design decisions
+
+- **3×3 not 2×2**: at 47°N tiles are 111 km N-S × 76 km E-W; fog distance 60 km always
+  overshoots E/W edges (38 km to edge) and overshoots N/S edges from most of the tile (55.5 km
+  to edge). 3×3 covers all positions without conditional loading logic.
+- **Sliding trigger**: camera always in centre tile; tile-boundary crossing (floor(lat/lon)
+  change) triggers slide. Drop 3 trailing tiles, load 3 leading tiles, keep 6.
+- **Texture limit workaround**: 3×3601 = 10801 px exceeds wgpu 8192 limit. Outer 8 tiles
+  stored at half-res (1801 px) → assembled grid = 5401 px. Justified: outer tiles only used
+  beyond ~38 km where 30m detail is invisible.
+- **Preprocessing asymmetry**: centre tile gets full normals+shadows+AO; outer 8 get normals
+  only (shadows/AO only matter at close range).
+- **No chunking of 30m tiles**: each SRTM/Copernicus tile is already ~52 MB — manageable as
+  a unit. Chunking adds complexity with no benefit at this scale.
+- **wgpu sparse textures not available**: wgpu does not expose VkSparseBinding or Metal sparse
+  textures; software indirection is the only option within the wgpu abstraction layer.
+- **Three resolution tiers**: 30m (3×3 sliding grid), 5m (windowed extraction, default 10 km
+  radius), 1m (windowed extraction, default 5 km radius). Radii configurable.
+- **Reload threshold**: drift > 40% of window radius triggers re-extraction for 5m/1m tiers.
+- **Blend zone**: lerp between tier boundaries over configurable distance (default 10% of
+  tier radius) to avoid hard seams where data sources disagree.
+- **Per-tier background threads**: one thread per resolution tier; coarse fallback when camera
+  outpaces loader.
+
+### Open items
+
+- Download the 8 surrounding Copernicus GLO-30 tiles for Hintertux 3×3 grid:
+  N46E010, N46E011, N46E012, N47E010, N47E012, N48E010, N48E011, N48E012
+- Begin implementation: Step 1 (30m sliding 3×3 window)
+
+---
+
 ## 2026-04-25 (session 2)
 
 ### What we worked on
