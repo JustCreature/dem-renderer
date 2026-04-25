@@ -243,7 +243,9 @@ name = "dem_renderer"
 version = "0.1.0"
 dependencies = [
  "dem_io",
+ "image",
  "profiling 0.1.0",
+ "terrain",
 ]
 
 [[package]]
@@ -853,6 +855,10 @@ dependencies = [
 [[package]]
 name = "terrain"
 version = "0.1.0"
+dependencies = [
+ "dem_io",
+ "rayon",
+]
 
 [[package]]
 name = "thiserror"

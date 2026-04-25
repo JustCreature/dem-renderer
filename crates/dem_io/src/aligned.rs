@@ -20,6 +20,11 @@ impl Drop for AlignedBuffer {
     }
 }
 
+// Safety: AlignedBuffer owns a unique allocation. After construction, TiledHeightmap
+// only reads from it — no concurrent mutation. Safe to share across threads.
+unsafe impl Send for AlignedBuffer {}
+unsafe impl Sync for AlignedBuffer {}
+
 impl std::ops::Deref for AlignedBuffer {
     type Target = [i16];
 
