@@ -1,9 +1,15 @@
 mod row_major;
+mod shadow;
 mod tiled;
 
 pub use row_major::{
     compute_normals_neon, compute_normals_neon_8, compute_normals_neon_parallel,
     compute_normals_scalar,
+};
+pub use shadow::{
+    ShadowMask, compute_shadow_neon, compute_shadow_neon_parallel,
+    compute_shadow_neon_parallel_with_azimuth, compute_shadow_scalar,
+    compute_shadow_scalar_branchless, compute_shadow_scalar_with_azimuth,
 };
 pub use tiled::{compute_normals_neon_tiled, compute_normals_neon_tiled_parallel};
 
