@@ -562,7 +562,12 @@ fn prepare_scene(tile_path: &Path, width: u32, height: u32) -> (GpuScene, Arc<He
             ),
         }
     } else if dem_format == "tif" {
-        match dem_io::parse_geotiff(tile_path) {
+        let parser = if dem_io::geotiff_is_projected(tile_path) {
+            dem_io::parse_geotiff_epsg_31287
+        } else {
+            dem_io::parse_geotiff
+        };
+        match parser(tile_path) {
             Ok(hm) => hm,
             Err(error) => panic!(
                 "Couldn't open the file {:?}; errors: {:?}",

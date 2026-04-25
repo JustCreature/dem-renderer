@@ -31,7 +31,8 @@ use terrain::{NormalMap, ShadowMask};
 fn main() {
     let args: Vec<String> = std::env::args().collect();
     // let tile_path = Path::new("n47_e011_1arc_v3_bil/n47_e011_1arc_v3.bil");
-    let tile_path = Path::new("tiles/Copernicus_DSM_COG_10_N47_00_E011_00_DEM/Copernicus_DSM_COG_10_N47_00_E011_00_DEM.tif");
+    // let tile_path = Path::new("tiles/Copernicus_DSM_COG_10_N47_00_E011_00_DEM/Copernicus_DSM_COG_10_N47_00_E011_00_DEM.tif");
+    let tile_path = Path::new("tiles/big_size/hintertux_5m.tif");
     const WIDTH: u32 = 1600;
     const HEIGHT: u32 = 533;
     // const WIDTH: u32 = 8000;
