@@ -33,3 +33,40 @@ lerp = linear interpolation. Given two values a and b and a weight t ∈ [0, 1]:
   - n11: fx*fy = 0.3 × 0.7 = 0.21                                                                                                                                
                                                                                                                                                                  
   Sum = 1.0 — a proper weighted average.          
+
+
+The GPU draws rectangles as two triangles. Each triangle needs 3 vertices (x, y). Here's the fps box as a diagram:
+
+  (4,4) ─────────── (180,4)
+    │  ╲  triangle 1  │
+    │    ╲             │
+    │      ╲           │
+    │  tri2  ╲         │
+    │          ╲       │
+  (4,36) ──────── (180,36)
+
+  Triangle 1 (top-right half): (4,4) → (180,4) → (180,36) — top-left, top-right, bottom-right
+  Triangle 2 (bottom-left half): (4,4) → (180,36) → (4,36) — top-left, bottom-right, bottom-left
+
+  Together they tile the rectangle without overlap or gap.
+
+  ---
+  Now the settings box sits at the top-right, so:
+  - x0 = width - 296 (left edge, 296px from right)
+  - x1 = width - 4   (right edge, 4px margin)
+  - y0 = 4            (top, same as fps)
+  - y1 = 36           (bottom, same as fps)
+
+  (w-296, 4) ─────────── (w-4, 4)
+       │  ╲  triangle 1    │
+       │    ╲               │
+       │  tri2 ╲            │
+       │          ╲         │
+  (w-296,36) ─────── (w-4, 36)
+
+  Triangle 1: (w-296,4) → (w-4,4) → (w-4,36)
+  Triangle 2: (w-296,4) → (w-4,36) → (w-296,36)
+
+  The rule is always the same: top-left → top-right → bottom-right for T1, then top-left → bottom-right → bottom-left for T2. The diagonal goes from top-left to
+  bottom-right.
+

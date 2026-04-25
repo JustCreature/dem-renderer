@@ -19,12 +19,12 @@ struct CameraUniforms {
     dy_meters: f32,
     step_m: f32,
     t_max: f32,
+    ao_mode: u32,
     _pad5: f32,
     _pad6: f32,
     _pad7: f32,
     _pad8: f32,
     _pad9: f32,
-    _pad10: f32,
 }
 
 // camera uniforms struct
@@ -40,6 +40,100 @@ struct CameraUniforms {
 @group(0) @binding(6) var<storage, read> nz: array<f32>;
 // shadows mask
 @group(0) @binding(7) var<storage, read> shadow: array<f32>;
+// AO texture + sampler                                                                                                                                 
+@group(0) @binding(8) var ao_tex: texture_2d<f32>;
+@group(0) @binding(9) var ao_sampler: sampler;
+
+const ssao_16x_kernel: array<vec3<f32>, 16> = array<vec3<f32>, 16>(
+    // x = cos(el) * cos(az)
+    // y = cos(el) * sin(az)                                                                                                                                          
+    // z = sin(el)
+    //   Ring │ Elevation │ Azimuth │
+    // ├──────┼───────────┼─────────┼
+    // │ 1    │ 30°       │ 0°      │
+    // ├──────┼───────────┼─────────┼
+    // │ 1    │ 30°       │ 90°     │
+    // ├──────┼───────────┼─────────┼
+    // │ 1    │ 30°       │ 180°    │
+    // ├──────┼───────────┼─────────┼
+    // │ 1    │ 30°       │ 270°    │
+    // ├──────┼───────────┼─────────┼
+    // │ 2    │ 60°       │ 45°     │
+    // ├──────┼───────────┼─────────┼
+    // │ 2    │ 60°       │ 135°    │
+    // ├──────┼───────────┼─────────┼
+    // │ 2    │ 60°       │ 225°    │
+    // ├──────┼───────────┼─────────┼
+    // │ 2    │ 60°       │ 315°    │
+    // ├──────┼───────────┼─────────┼
+    // │ 3    │ 45°       │ 22.5°   │
+    // ├──────┼───────────┼─────────┼
+    // │ 3    │ 45°       │ 112.5°  │
+    // ├──────┼───────────┼─────────┼
+    // │ 3    │ 45°       │ 202.5°  │
+    // ├──────┼───────────┼─────────┼
+    // │ 3    │ 45°       │ 292.5°  │
+    // ├──────┼───────────┼─────────┼
+    // │ 4    │ 15°       │ 45°     │
+    // ├──────┼───────────┼─────────┼
+    // │ 4    │ 15°       │ 135°    │
+    // ├──────┼───────────┼─────────┼
+    // │ 4    │ 15°       │ 225°    │
+    // ├──────┼───────────┼─────────┼
+    // │ 4    │ 15°       │ 315°    │
+    // ├──────┼───────────┼─────────┼
+    // ring 1
+    vec3<f32>(0.866, 0.0, 0.5),
+    vec3<f32>(0.0, 0.866, 0.5),
+    vec3<f32>(-0.866, 0.0, 0.5),
+    vec3<f32>(0.0, -0.866, 0.5),
+    // ring 2
+    vec3<f32>(0.354, 0.354, 0.866),
+    vec3<f32>(-0.354, 0.354, 0.866),
+    vec3<f32>(-0.354, -0.354, 0.866),
+    vec3<f32>(0.354, -0.354, 0.866),
+    // ring 3
+    vec3<f32>(0.653, 0.271, 0.707),
+    vec3<f32>(-0.271, 0.653, 0.707),
+    vec3<f32>(-0.653, -0.271, 0.707),
+    vec3<f32>(0.271, -0.653, 0.707),
+    // ring 4
+    vec3<f32>(0.683, 0.683, 0.259),
+    vec3<f32>(-0.683, 0.683, 0.259),
+    vec3<f32>(-0.683, -0.683, 0.259),
+    vec3<f32>(0.683, -0.683, 0.259),
+);
+
+const hbao_8x_kernel: array<vec2<f32>, 8> = array<vec2<f32>, 8>(
+    // │ Angle │   dx   │   dy   │
+    // ├───────┼────────┼────────┤
+    // │ 0°    │ 1.0    │ 0.0    │
+    // ├───────┼────────┼────────┤
+    // │ 45°   │ 0.707  │ 0.707  │
+    // ├───────┼────────┼────────┤
+    // │ 90°   │ 0.0    │ 1.0    │
+    // ├───────┼────────┼────────┤
+    // │ 135°  │ -0.707 │ 0.707  │
+    // ├───────┼────────┼────────┤
+    // │ 180°  │ -1.0   │ 0.0    │
+    // ├───────┼────────┼────────┤
+    // │ 225°  │ -0.707 │ -0.707 │
+    // ├───────┼────────┼────────┤
+    // │ 270°  │ 0.0    │ -1.0   │
+    // ├───────┼────────┼────────┤
+    // │ 315°  │ 0.707  │ -0.707 │
+    // └───────┴────────┴────────┘
+    // x4
+    vec2<f32>(1.0, 0.0),
+    vec2<f32>(0.707, 0.707),
+    vec2<f32>(0.0, 1.0),
+    vec2<f32>(-0.707, 0.707),
+    // x8
+    vec2<f32>(-1.0, 0.0),
+    vec2<f32>(-0.707, -0.707),
+    vec2<f32>(0.0, -1.0),
+    vec2<f32>(0.707, -0.707),
+);
 
 fn binary_search_hit(t_lo_in: f32, t_hi_in: f32, dir: vec3<f32>, iterations: i32) -> vec3<f32> {
     // binary search to refine hit position between t_prev (above) and t (below)
@@ -106,7 +200,8 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
             (pos.x / cam.dx_meters + 0.5) / f32(cam.hm_cols),
             (pos.y / cam.dy_meters + 0.5) / f32(cam.hm_rows)
         );
-        let h = textureSampleLevel(hm_tex, hm_sampler, uv, 0.0).r;
+        let mip_lod = log2(1.0 + t / 15000.0);  // mipmap downsampling start at distance CONFIG_PERFORMANCE
+        let h = textureSampleLevel(hm_tex, hm_sampler, uv, mip_lod).r;
 
         if pos.z <= h {
             hit = true;
@@ -121,7 +216,9 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
         // cam.step_m is the minimum step to prevent stalling near-surface
         t_prev = t;
         // t += cam.step_m;
-        t += max((pos.z - h) * 0.3, cam.step_m);
+        // t += max((pos.z - h) * 0.3, cam.step_m);
+        let lod_min_step = cam.step_m * (0.7 + t / 8000.0);  // step reduction with distance CONFIG_PERFORMANCE
+        t += max((pos.z - h) * 0.2, lod_min_step);  // step reduction spherical CONFIG_PERFORMANCE
         pos = cam.origin + dir * t;
     }
 
@@ -133,6 +230,9 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
         let row0 = i32(row_f);
         let fx = col_f - f32(col0);
         let fy = row_f - f32(row0);
+
+        let hit_uv: vec2<f32> = vec2<f32>(col_f / f32(cam.hm_cols), row_f / f32(cam.hm_rows));
+        // let ao_factor: f32 = select(1.0, textureSampleLevel(ao_tex, ao_sampler, hit_uv, 0.0).r, cam.ao_mode == 5u);
 
         let i00 = u32(row0) * cam.hm_cols + u32(col0);
         let i10 = u32(row0) * cam.hm_cols + u32(col0 + 1);
@@ -147,6 +247,68 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
         let normal = normalize(mix(mix(n00, n10, fx), mix(n01, n11, fx), fy));
         let idx = i00;   // still needed for shadow lookup below
 
+        var ao_factor: f32 = 1.0;
+        if cam.ao_mode == 5u {
+            ao_factor = textureSampleLevel(ao_tex, ao_sampler, hit_uv, 0.0).r;
+            // the higher the last value the less pronounced the effect (less darkening)
+            ao_factor = mix(1.0, ao_factor, 0.8);
+        } else if cam.ao_mode == 1u || cam.ao_mode == 2u {
+            let up_ref = select(vec3<f32>(1.0, 0.0, 0.0), vec3<f32>(0.0, 1.0, 0.0), abs(normal.y) < 0.9);
+            let T = normalize(cross(normal, up_ref));
+            let B = cross(normal, T);
+            let N = normal;
+            let n_samples: u32 = select(8u, 16u, cam.ao_mode == 2u);
+
+            var open_factor: f32 = 0.0;
+            for (var i = 0u; i < n_samples; i++) {
+                let kernel_dir = ssao_16x_kernel[i];
+                let world_d = T * kernel_dir.x + B * kernel_dir.y + N * kernel_dir.z;
+                let sampling_distance = 600.0;
+                let sample_pos = pos + world_d * sampling_distance;
+
+                let sample_uv: vec2<f32> = vec2<f32>(
+                    (sample_pos.x / cam.dx_meters + 0.5) / f32(cam.hm_cols),
+                    (sample_pos.y / cam.dy_meters + 0.5) / f32(cam.hm_rows)
+                );
+                let sample_h = textureSampleLevel(hm_tex, hm_sampler, sample_uv, 0.0).r;
+
+                open_factor += smoothstep(-50.0, 50.0, sample_pos.z - sample_h);
+            }
+            ao_factor = open_factor / f32(n_samples);
+        } else if cam.ao_mode == 3u || cam.ao_mode == 4u {
+            let n_samples: u32 = select(4u, 8u, cam.ao_mode == 4u);
+
+            var open_factor: f32 = 0.0;
+            for (var i = 0u; i < n_samples; i++) {
+
+                var sampling_distance = 600.0;
+                var probe_dist = 25.0;
+                var max_angle: f32 = 0.0;
+                loop {
+                    if probe_dist > sampling_distance {
+                        break;
+                    }
+
+                    let kernel_dir = hbao_8x_kernel[i];
+                    let world_d = vec3<f32>(kernel_dir.x, kernel_dir.y, 0.0);
+                    let sample_pos = pos + world_d * probe_dist;
+
+                    let sample_uv: vec2<f32> = vec2<f32>(
+                        (sample_pos.x / cam.dx_meters + 0.5) / f32(cam.hm_cols),
+                        (sample_pos.y / cam.dy_meters + 0.5) / f32(cam.hm_rows)
+                    );
+                    let sample_h = textureSampleLevel(hm_tex, hm_sampler, sample_uv, 0.0).r;
+
+                    let cur_angle = atan2(sample_h - sample_pos.z, probe_dist);
+                    max_angle = select(max_angle, cur_angle, cur_angle > max_angle);
+
+                    probe_dist += 25.0;
+                }
+                open_factor += 1.0 - sin(max(0.0, max_angle));
+            }
+            ao_factor = open_factor / f32(n_samples);
+        }
+
         // dot(normal, sun_dir) — sun_dir must also be normalized
         let normalized_sun_dir = normalize(cam.sun_dir);
         let diffuse = max(0.0, dot(normal, normalized_sun_dir));
@@ -160,7 +322,7 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
         let s11 = shadow[i11];
         let in_shadow = mix(mix(s00, s10, fx), mix(s01, s11, fx), fy);
         let shadow_factor: f32 = 0.5 + 0.5 * in_shadow;
-        let brightness = (ambient + (1.0 - ambient) * diffuse) * shadow_factor;
+        let brightness = (ambient * ao_factor + (1.0 - ambient) * diffuse) * shadow_factor;
 
         // set colors for different heights
         let green = vec3<f32>(120.0, 160.0, 80.0);

@@ -156,8 +156,8 @@ pub fn compute_shadow_scalar_with_azimuth(
         let (mut r_f, mut c_f) = (start_r, start_c);
 
         while r_f >= 0.0 && r_f < hm.rows as f32 && c_f >= 0.0 && c_f < hm.cols as f32 {
-            let r = r_f.round() as usize;
-            let c = c_f.round() as usize;
+            let r = r_f.floor() as usize;
+            let c = c_f.floor() as usize;
             let h_eff = hm.data[r * hm.cols + c] as f32 + dist * tan_sun;
 
             if h_eff < running_max {
@@ -342,8 +342,8 @@ pub unsafe fn compute_shadow_neon_parallel_with_azimuth(
     penumbra_meters: f32,
 ) -> ShadowMask {
     use std::arch::aarch64::{
-        float32x4_t, vaddq_f32, vdupq_n_f32, vgetq_lane_f32,
-        vld1q_f32, vmaxq_f32, vmulq_n_f32, vsubq_f32,
+        float32x4_t, vaddq_f32, vdupq_n_f32, vgetq_lane_f32, vld1q_f32, vmaxq_f32, vmulq_n_f32,
+        vsubq_f32,
     };
     let inv_penumbra = 1.0 / penumbra_meters;
     let mut data: Vec<f32> = vec![1.0f32; hm.rows * hm.cols];
@@ -370,8 +370,8 @@ pub unsafe fn compute_shadow_neon_parallel_with_azimuth(
                 let mut dist = 0.0f32;
                 let (mut rf, mut cf) = (sr, sc);
                 while rf >= 0.0 && rf < hm.rows as f32 && cf >= 0.0 && cf < hm.cols as f32 {
-                    let r = rf.round() as usize;
-                    let c = cf.round() as usize;
+                    let r = rf.floor() as usize;
+                    let c = cf.floor() as usize;
                     let h_eff = hm.data[r * hm.cols + c] as f32 + dist * tan_sun;
                     if h_eff < rm {
                         let margin = rm - h_eff;
@@ -401,10 +401,12 @@ pub unsafe fn compute_shadow_neon_parallel_with_azimuth(
             .all(|(&r, &c)| r >= 0.0 && r < hm.rows as f32 && c >= 0.0 && c < hm.cols as f32)
         {
             let idxs = [
-                rf[0].round() as usize * hm.cols + cf[0].round() as usize,
-                rf[1].round() as usize * hm.cols + cf[1].round() as usize,
-                rf[2].round() as usize * hm.cols + cf[2].round() as usize,
-                rf[3].round() as usize * hm.cols + cf[3].round() as usize,
+                // should always be floor, otherwise an edge case with some azimuth
+                // (probably direct south e.g.) causes out of bounds panic.
+                rf[0].floor() as usize * hm.cols + cf[0].floor() as usize,
+                rf[1].floor() as usize * hm.cols + cf[1].floor() as usize,
+                rf[2].floor() as usize * hm.cols + cf[2].floor() as usize,
+                rf[3].floor() as usize * hm.cols + cf[3].floor() as usize,
             ];
             let heights = [
                 hm.data[idxs[0]] as f32,
@@ -453,8 +455,8 @@ pub unsafe fn compute_shadow_neon_parallel_with_azimuth(
             let mut c_f = cf[i];
             let mut d = dist;
             while r_f >= 0.0 && r_f < hm.rows as f32 && c_f >= 0.0 && c_f < hm.cols as f32 {
-                let r = r_f.round() as usize;
-                let c = c_f.round() as usize;
+                let r = r_f.floor() as usize;
+                let c = c_f.floor() as usize;
                 let h_eff = hm.data[r * hm.cols + c] as f32 + d * tan_sun;
                 if h_eff < rm {
                     let margin = rm - h_eff;

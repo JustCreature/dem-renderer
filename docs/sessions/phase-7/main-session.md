@@ -843,3 +843,308 @@ No code written. Three topics explored and formalised into `docs/planning/viewer
 ### Open items for this phase
 - GPU timestamp queries (explicitly deferred — low priority)
 - Implement viewer improvements from `viewer-improvements-plan.md` (AO first)
+
+---
+
+## 2026-04-16 (session 13)
+
+### What was covered
+
+**AO infrastructure (step C) — key binding, scene uniform, settings HUD.**
+
+All wiring done; no shader AO logic yet.
+
+#### Plan update: 6 AO modes instead of 4
+
+Expanded the mode list to give each sample count its own slot — makes the scaling curve directly measurable:
+
+| Mode | ao_mode | Notes |
+|---|---|---|
+| Off | 0 | Baseline |
+| SSAO ×8 | 1 | N=8 random hemisphere samples |
+| SSAO ×16 | 2 | N=16; measures whether fps drops 2× or more |
+| HBAO ×4 | 3 | D=4 directions |
+| HBAO ×8 | 4 | D=8; diagonal stride penalty measurable |
+| True Hemi | 5 | Precomputed, render-time = one texture fetch |
+
+`rem_euclid(6)` wraps the cycle. One shader with uniform branch on `ao_mode` — zero wave divergence since all threads share the same mode value.
+
+`ao_mode` lives on the scene uniform (with camera/render parameters), not the sun HUD uniform. Settings HUD is a new separate panel, extensible for future settings.
+
+`viewer-improvements-plan.md` updated to reflect 6 modes, uniform branch rationale, and settings HUD.
+
+#### Code changes
+
+**`crates/render_gpu/src/camera.rs`**
+- `ao_mode: u32` added to `CameraUniforms` struct (replaced `_pad5`)
+- Passed through `CameraUniforms::new()`
+
+**`crates/render_gpu/src/scene.rs`**
+- Both `CameraUniforms::new()` call sites (lines 334, 433) now take `ao_mode`
+
+**`crates/render_gpu/src/shader_texture.wgsl`**
+- `ao_mode: u32` added to WGSL `CameraUniforms` struct (same byte position as Rust)
+- Not yet read by shader logic — wired but unused until AO modes implemented
+
+**`src/viewer/mod.rs`**
+- `ao_mode: u32` field on `Viewer`, initialised to `0`
+- `/` key (`KeyCode::Slash`) handler: `self.ao_mode = (self.ao_mode + 1).rem_euclid(6)`
+- `ao_mode` passed to both `CameraUniforms::new()` and `hud_renderer.draw()`
+
+**`src/viewer/hud_renderer.rs`**
+- `settings_buffer: glyphon::Buffer` field — top-right settings HUD label
+- `draw()` signature extended with `ao_mode: u32`
+- `match ao_mode` produces label string (`"AO: Off  (Press / to change)"` etc.)
+- `settings_buffer.set_text()` called each frame with current label
+- `build_vertices` extended to `[f32; 36]` — third rect for settings background (top-right, `x0=w-296, x1=w-4, y0=4, y1=36`)
+- GPU buffer size: `96 → 144` bytes; draw call: `0..12 → 0..18`
+- TextArea added for `settings_buffer` at `left: w - 292.0, top: 10.0`
+
+#### Key concepts discussed
+
+- **Wave / warp / wavefront**: GPU executes threads in fixed-size lockstep groups (~32 threads on NVIDIA, 64 on AMD). All threads in a wave execute the same instruction each cycle. A uniform branch (same condition for all threads) costs ~zero — the wave takes one path. A divergent branch (different threads take different paths) forces both paths to execute with masks — up to 2× cost.
+- **`rem_euclid` vs `%`**: `%` on signed integers can return negative values; `rem_euclid` always returns non-negative. For `u32` the result is identical, but `rem_euclid` signals "wrap in a cycle" intent clearly.
+- **Two-triangle rectangle**: each rect = 2 triangles × 3 vertices × 2 floats. T1 = top-left → top-right → bottom-right; T2 = top-left → bottom-right → bottom-left. The diagonal always runs top-left to bottom-right.
+- **Buffer width must match TextArea left**: if `settings_buffer` width is 400px but `left = w - 300`, text overflows the screen by 100px. Fix: set buffer width = rect width (292px) and `left = w - 296`.
+
+### Next step
+Implement True Hemisphere AO (ao_mode == 5):
+- CPU: `compute_ao_true_hemi(hm, n_directions=16, penumbra_meters)` in `crates/terrain/src/shadow.rs` — sweep 16 evenly-spaced azimuths at elevation=0, accumulate lit fractions, average → `Vec<f32>`
+- GPU upload: convert to `u8` (× 255), upload as `R8Unorm` texture in `GpuScene::new()`
+- Shader: sample AO texture at hit UV, multiply into colour when `ao_mode == 5`
+
+### Open items for this phase
+- GPU timestamp queries (explicitly deferred — low priority)
+- AO implementation: True Hemi (next), then SSAO ×8/×16, then HBAO ×4/×8
+
+---
+
+## 2026-04-18
+
+### Objective
+Implement True Hemisphere AO (ao_mode == 5): CPU bake, GPU upload as R8Unorm texture, shader sampling.
+
+### What was built
+
+**`crates/terrain/src/lib.rs`** — new public function `compute_ao_true_hemi`:
+- Signature: `pub fn compute_ao_true_hemi(hm: &Heightmap, n_directions: usize, elevation_rad: f32, penumbra_meters: f32) -> Vec<f32>`
+- Allocates `vec![0.0f32; hm.rows * hm.cols]`
+- Loops `n_directions` times; azimuth = `i as f32 * TAU / n_directions as f32`
+- Calls the platform dispatcher `compute_shadow_vector_par_with_azimuth` each iteration
+- Accumulates `mask.data` into output, divides by `n_directions as f32` at end
+- Lives in `lib.rs` (not `shadow.rs`) so it can call the platform dispatcher directly
+
+**`src/viewer/mod.rs`** (`prepare_scene`):
+- Calls `terrain::compute_ao_true_hemi(&hm, 16, 5.0_f32.to_radians(), 200.0)` at startup
+- Passes result as `&ao_data_mask` to `GpuScene::new()`
+
+**`crates/render_gpu/src/scene.rs`**:
+- `GpuScene::new()` signature extended with `ao_data_mask: &Vec<f32>`
+- Converts to `Vec<u8>` via `(v * 255.0) as u8`
+- Creates `R8Unorm` 2D texture (`width: hm.cols as u32`, `height: hm.rows as u32`)
+- Uploads via `write_texture` with `bytes_per_row: Some(hm.cols as u32)` (1 byte/texel)
+- Creates `ao_view` and `ao_sampler` (bilinear)
+- Struct fields: `_ao_view: wgpu::TextureView`, `_ao_sampler: wgpu::Sampler` (underscore = keep-alive)
+- `BindGroupLayout` entries at binding 8 (texture, float filterable) and 9 (sampler, filtering)
+- Both bind group creation sites (initial + `resize()`) updated with bindings 8 and 9
+
+**`crates/render_gpu/src/shader_texture.wgsl`**:
+- Bindings 8 and 9 already declared from previous session
+- After `fx`/`fy` computation: `let hit_uv = vec2<f32>(col_f / f32(cam.hm_cols), row_f / f32(cam.hm_rows))`
+- `let ao_factor = select(1.0, textureSampleLevel(ao_tex, ao_sampler, hit_uv, 0.0).r, cam.ao_mode == 5u)`
+- Brightness formula updated: `(ambient * ao_factor + (1.0 - ambient) * diffuse) * shadow_factor` — AO scales ambient only, not direct light
+
+**`crates/terrain/src/shadow.rs` + `shadow_avx2.rs`** — bug fix:
+- All 22 `.round() as usize` occurrences replaced with `.floor() as usize`
+- Root cause: `.round()` rounds values in `[N-0.5, N)` up to `N` (out-of-bounds row/col), while `.floor()` correctly returns the cell index containing the position
+- Bug was dormant because specific sun azimuths never produced boundary row values in `[3600.5, 3601.0)`. Exposed by AO bake sweeping all 16 directions including pure cardinals.
+
+### Key concepts discussed
+
+- **True Hemisphere AO is terrain-static**: AO measures "what fraction of sky hemisphere is visible from this point" — a property of geometry, not sun position. Baked once at startup, never recomputed when sun moves. Shadow mask (dynamic) and AO (static) are orthogonal.
+- **Why not elevation=0.0**: In a mountain range, every point below a ridge sees peaks in every direction when sweeping at exactly 0°. Even a mountain 20km away at 2000m higher has elevation angle atan2(2000,20000) ≈ 5.7° > 0°. Result: all valleys get AO ≈ 0. Fix: use a small threshold (5°) so only terrain rising more than 5° above the horizon blocks — captures local valley walls, ignores distant ranges.
+- **R8Unorm**: stores `u8` byte, GPU reads as `float = byte / 255.0`. Round-trip: `(v * 255.0) as u8` on CPU, `textureSample().r` returns `f32` in [0,1] in shader. 8-bit quantization (256 levels, precision ≈ 0.004) is invisible for a smooth ambient term.
+- **Why × 255.0**: `f32 [0,1]` maps to `u8 [0,255]`. Without it, `(0.73) as u8 = 0` — the truncation destroys all non-1.0 values.
+- **R8Unorm vs R32Float**: R8Unorm = 13 MB (1 byte/texel), R32Float = 52 MB (4 bytes/texel). For AO the 8-bit precision is invisible; the 39 MB saving is the only reason for the conversion.
+- **AO on ambient only**: `brightness = (ambient * ao_factor + (1.0 - ambient) * diffuse) * shadow_factor`. AO reduces sky light; direct sun is unaffected. Applying AO to the whole brightness would double-penalise valley floors already in shadow.
+- **`select(false, true, cond)` vs `if`**: For a uniform condition (same value for all threads), both compile identically — the wave takes one path, zero divergence cost. `select` is preferred for style: expresses "default to 1.0" in one line.
+- **`.floor()` vs `.round()` for DDA cell lookup**: `.floor()` gives "which cell contains coordinate 3600.6" = 3600 (correct). `.round()` gives "nearest integer to 3600.6" = 3601 (out of bounds at grid edge). DDA should always use `.floor()`.
+- **`i` suffix in WGSL/Rust**: `i` = integer = signed by convention (signed integers came first; `u` was added to mark the exception). `5i` = `i32`, `5u` = `u32`, `5.0` = `f32`.
+
+### Next step
+- SSAO ×8 and ×16 (ao_mode 1 and 2) — screen-space AO computed per-frame in the shader
+
+### Open items for this phase
+- GPU timestamp queries (explicitly deferred — low priority)
+- SSAO ×8/×16 (ao_mode 1, 2)
+- HBAO ×4/×8 (ao_mode 3, 4)
+
+---
+
+## 2026-04-18 (session 15)
+
+### What was built
+
+**SSAO ×8 and ×16 (ao_modes 1 and 2) — screen-space AO in shader.**
+
+**`crates/render_gpu/src/shader_texture.wgsl`**:
+
+Kernel array extended to 16 directions — `ssao_16x_kernel: array<vec3<f32>, 16>`:
+- 4 rings at elevations 15°, 30°, 45°, 60° with 4 directions each
+- Azimuth offsets staggered between rings (0°/45°/22.5°/45°) for even coverage
+- First 8 entries (rings at 30° and 60°) used for ×8 mode; all 16 for ×16 mode
+- Directions precomputed offline: `x = cos(el)*cos(az)`, `y = cos(el)*sin(az)`, `z = sin(el)`
+
+TBN frame construction after `normal` is computed (line ~251):
+```wgsl
+let up_ref = select(vec3<f32>(1.0,0.0,0.0), vec3<f32>(0.0,1.0,0.0), abs(normal.y) < 0.9);
+let T = normalize(cross(normal, up_ref));
+let B = cross(normal, T);
+```
+`up_ref` swap avoids `cross(N, N) = 0` on cliff faces (normal nearly equal to reference).
+
+Sample loop (C-style, 0..n_samples):
+```wgsl
+let world_d = T * d.x + B * d.y + N * d.z;
+let sample_pos = pos + world_d * 600.0;
+// sample hm_tex at sample_pos UV
+open_factor += smoothstep(-50.0, 50.0, sample_pos.z - sample_h);
+```
+`ao_factor = open_factor / f32(n_samples)` — ratio of open samples.
+
+`n_samples` selected via: `select(8u, 16u, cam.ao_mode == 2u)`.
+
+`ao_factor` now declared as `var` after normal computation; mode 5 (True Hemi) and modes 1/2 (SSAO) are `if/else if` branches.
+
+**HBAO ×4 and ×8 (ao_modes 3 and 4):**
+
+New `hbao_8x_kernel: array<vec2<f32>, 8>` — 8 horizontal 2D directions at 0°/45°/90°/135°/180°/225°/270°/315°. First 4 used for ×4 mode.
+
+Inner loop: 24 steps × 25m = 600m reach per direction. Tracks running maximum elevation angle:
+```wgsl
+let cur_angle = atan2(sample_h - pos.z, probe_dist);
+max_angle = max(max_angle, cur_angle);
+```
+Per-direction occlusion: `1.0 - sin(max(0.0, max_angle))`. Averaged across directions → `ao_factor`.
+
+Bug fixed during implementation: `probe_dist` started at `0.0` → `atan2(h, 0) = ±π/2` → max occlusion at step 1. Fix: start `probe_dist = 25.0` (first step at one cell away).
+
+True Hemi blend softened: `ao_factor = mix(1.0, raw_ao, 0.8)` — applies 80% of raw AO effect, prevents over-darkening of valleys.
+
+### Key concepts discussed
+
+- **Kernel = fixed array of sample directions**: borrowed from signal processing (convolution kernel). Small, fixed pattern applied at every pixel uniformly — never computed at runtime.
+- **Why hardcode not compute**: kernel values are constants. Computing `sin()`/`cos()` per-pixel = 16 trig calls × 850k pixels = 13M trig calls/frame for data that never changes. `const` array = zero runtime cost.
+- **One 16-entry array for both modes**: first 8 entries are well-distributed (rings at 30°+60°). ×8 loops 0..8, ×16 loops 0..16. No duplicate array to maintain.
+- **TBN frame orientation**: samples oriented around surface normal, not world-up. On a 45° slope, world-up hemisphere contains directions pointing into the rock face (always occluded → false darkening). Normal-oriented hemisphere starts all samples above the actual surface.
+- **`up_ref` swap condition**: `cross(N, N) = (0,0,0)` → `normalize` → NaN. When normal is nearly vertical (cliff face, `|N.y| > 0.9`), switch reference to X axis. WGSL `select(a, b, cond)` = branchless conditional.
+- **Smooth SSAO via `smoothstep`**: binary `select(0,1, z > h)` gives hard AO borders. `smoothstep(-50, 50, z - h)` transitions smoothly across a 100m band around the surface. Physically: near-surface samples contribute partially rather than all-or-nothing.
+- **SSAO radius 600m**: too small (< 20m = 1 cell) = sub-pixel noise. Too large (> 1km) = approaches True Hemi (redundant). 600m (30 cells) captures immediate local topology at 20m/cell resolution.
+- **SSAO cost negligible**: +8–16 texture samples per pixel vs ~500 already spent in the raymarch. SSAO adds 1.6–3.2% — lost in noise. Measured: no perceptible fps difference across all 5 AO modes.
+- **HBAO marches horizontally**: 2D kernel, no TBN frame needed — always marches at terrain level. Horizon angle derived from height difference and horizontal distance.
+- **`sin(horizon_angle)` for occlusion**: `sin(0°) = 0` (flat horizon, unoccluded), `sin(90°) = 1` (vertical wall). Natural [0,1] range without clamping. Physically represents the fraction of a unit hemisphere sector blocked.
+- **HBAO vs SSAO character**: SSAO checks "is a point above/below terrain" → captures local bumps. HBAO finds "maximum horizon angle" → captures directional sky exposure. HBAO is closer to True Hemi AO in character; SSAO looks more like contact shadow.
+- **True Hemi over-darkening**: sweeps full terrain at 5° threshold — valleys surrounded by distant mountains get nearly 0 sky exposure. Perceptually too aggressive. Blend with `mix(1.0, ao, 0.8)` softens it.
+- **HBAO more perceptually pleasing than True Hemi**: 600m radius ignores distant mountains → wide open valleys stay bright. Less physically accurate but better visual result. Standard game engine trade-off.
+
+### Measured numbers
+
+- All 5 AO modes (0=off, 1=SSAO×8, 2=SSAO×16, 3=HBAO×4, 4=HBAO×8, 5=True Hemi): **no perceptible fps difference** — raymarch dominates at ~500 samples/pixel; SSAO/HBAO add <3%.
+- HBAO cost: 4 dirs × 24 steps = 96 samples (×4); 8 dirs × 24 steps = 192 samples (×8). Still negligible vs 500-step raymarch.
+
+### Open items for this phase
+- GPU timestamp queries (explicitly deferred — low priority)
+
+---
+
+## 2026-04-18
+
+### Objective
+Explore LOD (Level of Detail) for the terrain raymarcher — reduce work for distant terrain. Two approaches: step-size LOD (fewer loop iterations at distance) and mipmap LOD (coarser texture fetches at distance).
+
+### What was built
+
+**Step-size LOD (in `shader_texture.wgsl`)**
+- Formula: `lod_min_step = cam.step_m * (0.7 + t / D)` replaces fixed `cam.step_m` as the minimum step
+- At D=500: visible "wave" artifacts — rays skip over narrow ridges (200–300m crests) at 20km+ where step > 820m
+- At D=5000–10000: no perceptible fps change on M4 (extra iterations are cache hits on M4's large unified L2/SLC)
+- Current value: D=8000 (`0.7 + t / 8000.0`)
+
+**Mipmap LOD (`crates/render_gpu/src/scene.rs` + `shader_texture.wgsl`)**
+
+`scene.rs` — mip generation:
+- `mip_level_count: 1` → `mip_level_count: 8` in `TextureDescriptor` for `hm_tex`
+- Added loop after mip-0 `write_texture`: generates mip levels 1–7 using **max filter** (2×2 → 1 takes maximum, not average)
+- Max filter is conservative — preserves ridge peaks; average filter would lower peaks → rays miss ridges at distance
+- Each mip uploaded via `wgpu::TexelCopyTextureInfo { mip_level: i, ... }` instead of `as_image_copy()`
+
+`scene.rs` — sampler:
+- Added `mipmap_filter: wgpu::MipmapFilterMode::Linear` to `hm_sampler` `SamplerDescriptor`
+- Default was `Nearest` (hard snap between mip levels) → visible traveling wave as camera moves
+- `Linear` = trilinear filtering → smooth blend between mip levels, no wave
+
+`shader_texture.wgsl`:
+- Main loop: `let mip_lod = log2(1.0 + t / 15000.0);` then `textureSampleLevel(hm_tex, hm_sampler, uv, mip_lod)`
+- lod=0 at t=0, lod=1 at t=15km (just past fog onset at 15km), lod=2 at t=45km, lod=3 at t=105km
+- Binary search (`binary_search_hit`) left at mip 0 — always runs near-surface after a hit, no distance needed
+- SSAO/HBAO samples remain at mip 0 — screen-space, also near-surface
+
+### Key concepts discussed
+
+- **Step-size LOD — ridge miss artifact**: large minimum step → `pos.z <= h` never triggers for a narrow ridge → binary search never runs (no hit registered) → pixel rendered as sky. Manifests as wave of missed terrain across the landscape. Not fixable by binary search — the hit itself is missed. Safe maximum multiplier ≈ 5× (Nyquist: step ≤ ½ narrowest feature, ~100m for 200m ridges = 5× base step_m ≈ 20m).
+- **Why no fps gain on M4**: extra loop iterations at distance are cache hits. M4's large unified L2/SLC likely fits the entire 13 MB R16Float heightmap. On GTX 1650 (smaller GDDR6 texture cache), extra iterations may cause cache misses → larger predicted benefit.
+- **Max filter for heightmap mipmaps**: each mip texel must be the max of its 4 source texels, not average. Reason: the raymarcher checks `pos.z <= h` — if mip stores average, peaks are lowered → ray jumps over them without triggering a hit. Max filter is conservative: it never underestimates terrain height.
+- **Trilinear filtering**: `mag_filter` (zoom in) and `min_filter` (zoom out, within one mip) were already `Linear`. `mipmap_filter` controls interpolation *between* mip levels. `Nearest` = snap at boundary = hard wave. `Linear` = blend based on fractional part of `lod` float = trilinear. Name: bi-linear (2D within mip) × linear (between mips) = 3 dimensions of interpolation.
+- **wgpu type distinction**: `FilterMode` for mag/min, `MipmapFilterMode` for mipmap — separate enums despite same variants.
+- **LOD formula `log2(1.0 + t/D)`**: lod=0 at t=0 (full res near camera), grows slowly with distance. `D` shifts the knee — D=15000 means lod=1 starts at 15km. Log scale matches perceptual importance: doubling distance halves useful resolution.
+
+### Measured numbers
+- Step-size LOD D=5000–15000: no perceptible fps change on M4 at 4K — cache-hit bound
+- Mipmap LOD: no perceptible fps change on M4 — same reason (fits in cache)
+- Both effects expected to be larger on GTX 1650 (smaller texture cache, more cache pressure from extra iterations)
+
+### Open items
+- Measure mipmap LOD fps on GTX 1650 — predicted meaningful gain vs M4
+- GPU timestamp queries (explicitly deferred — low priority)
+
+---
+
+## 2026-04-18 (session 2)
+
+### Objective
+Plan phase 8 viewer improvements: shadow toggle, fog toggle, visual artifact tolerance presets, LOD distance presets, and out-of-core tile streaming.
+
+### What was done
+
+Created `docs/planning/viewer-phase-8.md` with 5 planned items:
+
+1. **Shadow toggle** (`.` key) — `shadows_enabled: bool` on Viewer; `u32` in CameraUniforms replacing a `_pad`; shader: `select(1.0, shadow_factor, enabled)`; HUD label in settings panel
+2. **Fog toggle** (`,` key) — same pattern; `fog_enabled: bool`; shader: `select(0.0, fog_t, enabled)` for the mix blend factor; HUD label
+3. **Visual Artifact Tolerance** (`;` key, 4 modes Ultra/High/Mid/Low) — controls two near-camera quality parameters: `step_m` divisor (`dx/20`, `dx/10`, `dx/5`, `dx/3`) and sphere tracing factor (`0.1`, `0.2`, `0.4`, `0.8`); `vat_mode: u32` in CameraUniforms; HUD label
+4. **LOD Distance** (`'` key, 4 modes Ultra/High/Mid/Low) — controls two distance parameters: step LOD divisor (∞, 20000, 8000, 4000) and mip LOD divisor (∞, 30000, 15000, 8000); Ultra = no LOD at all; `lod_mode: u32` in CameraUniforms; HUD label
+5. **Out-of-core tile streaming** — moved from `viewer-improvements-plan.md` (item 2); original entry left with strikethrough + redirect note
+
+Updated `viewer-improvements-plan.md`: item 2 struck through with note pointing to phase-8 plan.
+
+### Key decisions
+
+- vat_mode and lod_mode are **orthogonal** — near-camera quality (step_m, sphere factor) vs distance LOD aggressiveness (when LOD kicks in). Separating them lets you tune each independently.
+- All four new uniforms (`shadows_enabled`, `fog_enabled`, `vat_mode`, `lod_mode`) replace existing `_pad` fields in `CameraUniforms` — no bind group or buffer size changes needed.
+- LOD Ultra = no LOD (divisor = ∞) matches the previous "Off" concept but named consistently with vat_mode.
+- Shadow background thread keeps running regardless of shadows_enabled toggle — toggle only affects shading, not computation.
+
+### Open items
+- Implement items 1–4 from viewer-phase-8.md
+- Tile streaming (item 5) requires multi-tile SRTM data as prerequisite
+
+---
+
+## 2026-04-18 — Phase 7 Finalisation (--v--FORCE)
+
+Generated `docs/lessons/phase-7/long-report.md` and `docs/lessons/phase-7/short-report.md`.
+
+Carried forward as open items to Phase 8:
+- GPU timestamp queries (explicitly deferred throughout phase, low priority)
+- Mipmap LOD fps measurement on GTX 1650 (predicted meaningful gain, unmeasured)
+
+CLAUDE.md bumped to **Phase 8**.

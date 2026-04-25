@@ -8,6 +8,9 @@ mod tiled;
 #[cfg(target_arch = "x86_64")]
 mod tiled_avx2;
 
+use std::usize;
+
+use dem_io::Heightmap;
 pub use row_major::compute_normals_scalar;
 #[cfg(target_arch = "aarch64")]
 pub use row_major::{compute_normals_neon, compute_normals_neon_8, compute_normals_neon_parallel};
@@ -86,9 +89,13 @@ pub fn compute_normals_vector_tiled(tiled_hm: &dem_io::TiledHeightmap) -> Normal
     #[cfg(not(target_arch = "aarch64"))]
     {
         #[cfg(target_arch = "x86_64")]
-        eprintln!("[SCALAR FALLBACK] compute_normals_vector_tiled: AVX2 not detected — using scalar via get()");
+        eprintln!(
+            "[SCALAR FALLBACK] compute_normals_vector_tiled: AVX2 not detected — using scalar via get()"
+        );
         #[cfg(not(target_arch = "x86_64"))]
-        eprintln!("[SCALAR FALLBACK] compute_normals_vector_tiled: no SIMD for this architecture — using scalar via get()");
+        eprintln!(
+            "[SCALAR FALLBACK] compute_normals_vector_tiled: no SIMD for this architecture — using scalar via get()"
+        );
         return tiled::compute_normals_scalar_tiled(tiled_hm);
     }
 }
@@ -105,9 +112,13 @@ pub fn compute_normals_vector_tiled_par(tiled_hm: &dem_io::TiledHeightmap) -> No
     #[cfg(not(target_arch = "aarch64"))]
     {
         #[cfg(target_arch = "x86_64")]
-        eprintln!("[SCALAR FALLBACK] compute_normals_vector_tiled_par: AVX2 not detected — using scalar via get()");
+        eprintln!(
+            "[SCALAR FALLBACK] compute_normals_vector_tiled_par: AVX2 not detected — using scalar via get()"
+        );
         #[cfg(not(target_arch = "x86_64"))]
-        eprintln!("[SCALAR FALLBACK] compute_normals_vector_tiled_par: no SIMD for this architecture — using scalar via get()");
+        eprintln!(
+            "[SCALAR FALLBACK] compute_normals_vector_tiled_par: no SIMD for this architecture — using scalar via get()"
+        );
         return tiled::compute_normals_scalar_tiled(tiled_hm);
     }
 }
@@ -158,7 +169,12 @@ pub fn compute_shadow_vector_par_with_azimuth(
 ) -> ShadowMask {
     #[cfg(target_arch = "aarch64")]
     return unsafe {
-        shadow::compute_shadow_neon_parallel_with_azimuth(hm, sun_azimuth_rad, sun_elevation_rad, penumbra_meters)
+        shadow::compute_shadow_neon_parallel_with_azimuth(
+            hm,
+            sun_azimuth_rad,
+            sun_elevation_rad,
+            penumbra_meters,
+        )
     };
 
     #[cfg(target_arch = "x86_64")]
@@ -178,8 +194,15 @@ pub fn compute_shadow_vector_par_with_azimuth(
         #[cfg(target_arch = "x86_64")]
         eprintln!("[SCALAR FALLBACK] compute_shadow_vector_par_with_azimuth: AVX2 not detected");
         #[cfg(not(target_arch = "x86_64"))]
-        eprintln!("[SCALAR FALLBACK] compute_shadow_vector_par_with_azimuth: no SIMD for this architecture");
-        return shadow::compute_shadow_scalar_with_azimuth(hm, sun_azimuth_rad, sun_elevation_rad, penumbra_meters);
+        eprintln!(
+            "[SCALAR FALLBACK] compute_shadow_vector_par_with_azimuth: no SIMD for this architecture"
+        );
+        return shadow::compute_shadow_scalar_with_azimuth(
+            hm,
+            sun_azimuth_rad,
+            sun_elevation_rad,
+            penumbra_meters,
+        );
     }
 }
 
@@ -204,4 +227,29 @@ pub struct NormalMap {
     pub nz: Vec<f32>,
     pub rows: usize,
     pub cols: usize,
+}
+
+pub fn compute_ao_true_hemi(
+    hm: &Heightmap,
+    n_directions: usize,
+    ray_elevation_rad: f32,
+    penumbra_meters: f32,
+) -> Vec<f32> {
+    let mut output: Vec<f32> = vec![0.0f32; hm.rows * hm.cols];
+
+    for i in 0..n_directions {
+        let azimuth: f32 = i as f32 * std::f32::consts::TAU / n_directions as f32;
+        let mask: ShadowMask =
+            compute_shadow_vector_par_with_azimuth(hm, azimuth, ray_elevation_rad, penumbra_meters);
+
+        for j in 0..output.len() {
+            output[j] += mask.data[j];
+        }
+    }
+
+    for x in output.iter_mut() {
+        *x /= n_directions as f32;
+    }
+
+    output
 }

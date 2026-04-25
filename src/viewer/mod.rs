@@ -26,6 +26,7 @@ struct Viewer {
     height: u32,
     render_width: u32,
     vsync: bool,
+    ao_mode: u32,
     // fps counter
     fps_timer: std::time::Instant,
     frame_count: u32,
@@ -255,8 +256,9 @@ impl ApplicationHandler for Viewer {
                     70.0,
                     self.width as f32 / self.height as f32,
                     sun_dir,
-                    scene.get_dx_meters() / 5.0,
+                    scene.get_dx_meters() / 10.0, // step_m CONFIG_PERFORMANCE
                     200_000.0,
+                    self.ao_mode,
                 );
                 let output_buf: &wgpu::Buffer = scene.get_output_buffer();
 
@@ -291,6 +293,7 @@ impl ApplicationHandler for Viewer {
                         1000.0,
                         self.sim_day,
                         self.sim_hour,
+                        self.ao_mode,
                     );
                 }
 
@@ -345,6 +348,10 @@ impl ApplicationHandler for Viewer {
                     }
                     if kc == KeyCode::KeyE && event.state == winit::event::ElementState::Pressed {
                         self.hud_visible = !self.hud_visible;
+                        return;
+                    }
+                    if kc == KeyCode::Slash && event.state == winit::event::ElementState::Pressed {
+                        self.ao_mode = (self.ao_mode + 1).rem_euclid(6);
                         return;
                     }
                     if kc == KeyCode::SuperLeft || kc == KeyCode::AltLeft {
@@ -484,6 +491,7 @@ pub fn run(tile_path: &Path, width: u32, height: u32, vsync: bool) {
         height,
         render_width: width,
         vsync,
+        ao_mode: 0,
         // fps counter
         fps_timer: std::time::Instant::now(),
         frame_count: 0,
@@ -559,9 +567,21 @@ fn prepare_scene(tile_path: &Path, width: u32, height: u32) -> (GpuScene, Arc<He
     let shadow_mask: ShadowMask =
         terrain::compute_shadow_vector_par_with_azimuth(&hm, init_az, init_el, 200.0);
 
+    // AO compute, the higher the ray_elevation_rad the less pronounced the effect (less darkening)
+    let ao_data_mask: Vec<f32> =
+        terrain::compute_ao_true_hemi(&hm, 16, 10.0f32.to_radians(), 200.0);
+
     let gpu_ctx: GpuContext = GpuContext::new();
     let hm = Arc::new(hm);
-    let scene: GpuScene = GpuScene::new(gpu_ctx, &hm, &normal_map, &shadow_mask, width, height);
+    let scene: GpuScene = GpuScene::new(
+        gpu_ctx,
+        &hm,
+        &normal_map,
+        &shadow_mask,
+        &ao_data_mask,
+        width,
+        height,
+    );
 
     (scene, hm, lat_rad)
 }
