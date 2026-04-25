@@ -36,11 +36,11 @@ fn stencil_rowmajor(hm: &Heightmap, output: &mut [f32]) {
     let data = &hm.data;
     for r in 1..rows - 1 {
         for c in 1..cols - 1 {
-            output[r * cols + c] = data[r * cols + c] as f32
-                + data[(r - 1) * cols + c] as f32
-                + data[(r + 1) * cols + c] as f32
-                + data[r * cols + c - 1] as f32
-                + data[r * cols + c + 1] as f32;
+            output[r * cols + c] = data[r * cols + c]
+                + data[(r - 1) * cols + c]
+                + data[(r + 1) * cols + c]
+                + data[r * cols + c - 1]
+                + data[r * cols + c + 1];
         }
     }
 }
@@ -98,7 +98,7 @@ fn stencil_tiled(hm: &TiledHeightmap, output: &mut [f32]) {
                         continue;
                     }
 
-                    let center = tiles[tile_base + r * ts + c] as f32;
+                    let center = tiles[tile_base + r * ts + c];
 
                     let north = if r > 0 {
                         tiles[tile_base + (r - 1) * ts + c]
@@ -171,7 +171,7 @@ fn morton2(x: u32, y: u32) -> u32 {
 }
 
 struct MortonHeightmap {
-    data: Vec<i16>,
+    data: Vec<f32>,
     rows: usize,
     cols: usize,
     tile_size: usize,
@@ -185,7 +185,7 @@ fn build_morton_heightmap(hm: &Heightmap, tile_size: usize) -> MortonHeightmap {
     let tile_cols = (hm.cols + tile_size - 1) / tile_size;
     let dim = next_pow2(tile_rows.max(tile_cols));
     let ts2 = tile_size * tile_size;
-    let mut data = vec![0i16; dim * dim * ts2];
+    let mut data = vec![0.0f32; dim * dim * ts2];
 
     for tr in 0..tile_rows {
         for tc in 0..tile_cols {
@@ -256,7 +256,7 @@ fn stencil_morton(hm: &MortonHeightmap, output: &mut [f32]) {
                         continue;
                     }
 
-                    let center = data[tile_base + r * ts + c] as f32;
+                    let center = data[tile_base + r * ts + c];
                     let north = if r > 0 {
                         data[tile_base + (r - 1) * ts + c]
                     } else {
@@ -392,11 +392,11 @@ pub(crate) fn bench_thread_count_scaling(hm: &Heightmap) {
                     .take(rows - 2)
                     .for_each(|(r, row_out)| {
                         for c in 1..cols - 1 {
-                            row_out[c] = data[r * cols + c] as f32
-                                + data[(r - 1) * cols + c] as f32
-                                + data[(r + 1) * cols + c] as f32
-                                + data[r * cols + c - 1] as f32
-                                + data[r * cols + c + 1] as f32;
+                            row_out[c] = data[r * cols + c]
+                                + data[(r - 1) * cols + c]
+                                + data[(r + 1) * cols + c]
+                                + data[r * cols + c - 1]
+                                + data[r * cols + c + 1];
                         }
                     });
                 std::hint::black_box(&output);
@@ -494,7 +494,7 @@ pub(crate) fn bench_thread_count_scaling_readonly(hm: &Heightmap) {
 // spends most steps in the "strided/random" regime — this is the gather cost.
 
 #[inline(never)]
-fn gather_1wide(data: &[i16], positions: &[usize]) -> i64 {
+fn gather_1wide(data: &[f32], positions: &[usize]) -> i64 {
     let mut sum = 0i64;
     for &p in positions {
         sum += data[p] as i64;
@@ -503,7 +503,7 @@ fn gather_1wide(data: &[i16], positions: &[usize]) -> i64 {
 }
 
 #[inline(never)]
-fn gather_4wide_adjacent(data: &[i16], positions: &[usize]) -> i64 {
+fn gather_4wide_adjacent(data: &[f32], positions: &[usize]) -> i64 {
     // Best case: 4 pixels at p, p+1, p+2, p+3 — all within the same cache line
     // (4 × i16 = 8 bytes; a 64-byte line holds 32 i16s)
     let mut sum = 0i64;
@@ -514,7 +514,7 @@ fn gather_4wide_adjacent(data: &[i16], positions: &[usize]) -> i64 {
 }
 
 #[inline(never)]
-fn gather_4wide_strided(data: &[i16], positions: &[usize], cols: usize) -> i64 {
+fn gather_4wide_strided(data: &[f32], positions: &[usize], cols: usize) -> i64 {
     // Diverged rows: p, p+cols, p+2*cols, p+3*cols — each on a different row
     // Row stride = cols * 2 bytes = 3601 * 2 = 7202 bytes → always a separate cache line
     let mut sum = 0i64;
@@ -528,7 +528,7 @@ fn gather_4wide_strided(data: &[i16], positions: &[usize], cols: usize) -> i64 {
 }
 
 #[inline(never)]
-fn gather_4wide_random(data: &[i16], pos4: &[[usize; 4]]) -> i64 {
+fn gather_4wide_random(data: &[f32], pos4: &[[usize; 4]]) -> i64 {
     // 4 fully random positions per step — maximum divergence
     let mut sum = 0i64;
     for p in pos4 {
@@ -1441,6 +1441,10 @@ pub(crate) fn bench_fps(
                 step_m,
                 FPS_T_MAX,
                 0,
+                1,
+                1,
+                1,
+                2,
             );
             ctx.queue.submit([enc.finish()]);
             let _ = ctx.device.poll(wgpu::PollType::Wait {
@@ -1467,6 +1471,10 @@ pub(crate) fn bench_fps(
                 step_m,
                 FPS_T_MAX,
                 0,
+                1,
+                1,
+                1,
+                2,
             );
             std::hint::black_box(ctx.queue.submit([enc.finish()]));
             let _ = ctx.device.poll(wgpu::PollType::Wait {

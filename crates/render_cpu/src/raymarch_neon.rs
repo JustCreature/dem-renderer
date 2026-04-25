@@ -98,13 +98,13 @@ pub unsafe fn raymarch_neon(
             let safe_row = |r: isize| r.clamp(0, hm.rows as isize - 1);
 
             let t0: f32 =
-                hm.data[safe_row(rows[0]) as usize * hm.cols + safe_col(cols[0]) as usize] as f32;
+                hm.data[safe_row(rows[0]) as usize * hm.cols + safe_col(cols[0]) as usize];
             let t1: f32 =
-                hm.data[safe_row(rows[1]) as usize * hm.cols + safe_col(cols[1]) as usize] as f32;
+                hm.data[safe_row(rows[1]) as usize * hm.cols + safe_col(cols[1]) as usize];
             let t2: f32 =
-                hm.data[safe_row(rows[2]) as usize * hm.cols + safe_col(cols[2]) as usize] as f32;
+                hm.data[safe_row(rows[2]) as usize * hm.cols + safe_col(cols[2]) as usize];
             let t3: f32 =
-                hm.data[safe_row(rows[3]) as usize * hm.cols + safe_col(cols[3]) as usize] as f32;
+                hm.data[safe_row(rows[3]) as usize * hm.cols + safe_col(cols[3]) as usize];
             let terrain_z: float32x4_t = vld1q_f32([t0, t1, t2, t3].as_ptr());
 
             // 5. hit test + update active mask + store results
@@ -188,10 +188,10 @@ unsafe fn binary_search_hit_neon(
             vgetq_lane_f32(row_f, 3) as isize,
         ];
 
-        let h0 = hm.data[safe_row(rows[0]) as usize * hm.cols + safe_col(cols[0]) as usize] as f32;
-        let h1 = hm.data[safe_row(rows[1]) as usize * hm.cols + safe_col(cols[1]) as usize] as f32;
-        let h2 = hm.data[safe_row(rows[2]) as usize * hm.cols + safe_col(cols[2]) as usize] as f32;
-        let h3 = hm.data[safe_row(rows[3]) as usize * hm.cols + safe_col(cols[3]) as usize] as f32;
+        let h0 = hm.data[safe_row(rows[0]) as usize * hm.cols + safe_col(cols[0]) as usize];
+        let h1 = hm.data[safe_row(rows[1]) as usize * hm.cols + safe_col(cols[1]) as usize];
+        let h2 = hm.data[safe_row(rows[2]) as usize * hm.cols + safe_col(cols[2]) as usize];
+        let h3 = hm.data[safe_row(rows[3]) as usize * hm.cols + safe_col(cols[3]) as usize];
         let terrain_z = vld1q_f32([h0, h1, h2, h3].as_ptr());
 
         // if p_z < terrain_z → below → t_hi = t_mid, else t_lo = t_mid

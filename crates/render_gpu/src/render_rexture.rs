@@ -22,11 +22,12 @@ pub fn render_gpu_texture(
     ao_mode: u32,
 ) -> Vec<u8> {
     let cam: CameraUniforms = CameraUniforms::new(
-        origin, look_at, fov_deg, aspect, hm, sun_dir, width, height, step_m, t_max, ao_mode,
+        origin, look_at, fov_deg, aspect, hm, sun_dir, width, height, step_m, t_max, ao_mode, 1, 1,
+        1, 2,
     );
 
     // heightmap texture
-    let hm_f32: Vec<f32> = hm.data.iter().map(|&v| v as f32).collect();
+    let hm_f32 = &hm.data;
     let hm_texture = gpu_ctx.device.create_texture(&wgpu::TextureDescriptor {
         label: Some("heightmap_texture"),
         size: wgpu::Extent3d {
@@ -43,7 +44,7 @@ pub fn render_gpu_texture(
     });
     gpu_ctx.queue.write_texture(
         hm_texture.as_image_copy(),
-        bytemuck::cast_slice(&hm_f32),
+        bytemuck::cast_slice(hm_f32),
         wgpu::TexelCopyBufferLayout {
             offset: 0,
             bytes_per_row: Some(hm.cols as u32 * 4),

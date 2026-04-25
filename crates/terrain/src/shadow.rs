@@ -83,7 +83,7 @@ pub fn compute_shadow_scalar(hm: &Heightmap, sun_elevation_rad: f32) -> ShadowMa
     for r in 0..hm.rows {
         let mut running_max: f32 = f32::NEG_INFINITY;
         for c in 0..hm.cols {
-            let height: f32 = hm.data[r * hm.cols + c] as f32;
+            let height: f32 = hm.data[r * hm.cols + c];
             let dist: f32 = c as f32 * dx;
             let h_eff: f32 = height + dist * tan_sun;
 
@@ -112,7 +112,7 @@ pub fn compute_shadow_scalar_branchless(hm: &Heightmap, sun_elevation_rad: f32) 
     for r in 0..hm.rows {
         let mut running_max: f32 = f32::NEG_INFINITY;
         for c in 0..hm.cols {
-            let height: f32 = hm.data[r * hm.cols + c] as f32;
+            let height: f32 = hm.data[r * hm.cols + c];
             let dist: f32 = c as f32 * dx;
             let h_eff: f32 = height + dist * tan_sun;
 
@@ -158,7 +158,7 @@ pub fn compute_shadow_scalar_with_azimuth(
         while r_f >= 0.0 && r_f < hm.rows as f32 && c_f >= 0.0 && c_f < hm.cols as f32 {
             let r = r_f.floor() as usize;
             let c = c_f.floor() as usize;
-            let h_eff = hm.data[r * hm.cols + c] as f32 + dist * tan_sun;
+            let h_eff = hm.data[r * hm.cols + c] + dist * tan_sun;
 
             if h_eff < running_max {
                 let margin = running_max - h_eff;
@@ -204,10 +204,10 @@ pub unsafe fn compute_shadow_neon(hm: &Heightmap, sun_elevation_rad: f32) -> Sha
 
         for c in 0..hm.cols {
             let heights = [
-                hm.data[base[0] + c] as f32,
-                hm.data[base[1] + c] as f32,
-                hm.data[base[2] + c] as f32,
-                hm.data[base[3] + c] as f32,
+                hm.data[base[0] + c],
+                hm.data[base[1] + c],
+                hm.data[base[2] + c],
+                hm.data[base[3] + c],
             ];
             unsafe {
                 let h_vec = vld1q_f32(heights.as_ptr());
@@ -230,7 +230,7 @@ pub unsafe fn compute_shadow_neon(hm: &Heightmap, sun_elevation_rad: f32) -> Sha
     while r < hm.rows {
         let mut running_max = f32::NEG_INFINITY;
         for c in 0..hm.cols {
-            let h_eff = hm.data[r * hm.cols + c] as f32 + c as f32 * step;
+            let h_eff = hm.data[r * hm.cols + c] + c as f32 * step;
             if h_eff < running_max {
                 data[r * hm.cols + c] = 0.0;
             }
@@ -270,7 +270,7 @@ pub unsafe fn compute_shadow_neon_parallel(hm: &Heightmap, sun_elevation_rad: f3
                     let global_r = chunk_idx * 4 + local_r;
                     let mut running_max = f32::NEG_INFINITY;
                     for c in 0..hm.cols {
-                        let h_eff = hm.data[global_r * hm.cols + c] as f32 + c as f32 * step;
+                        let h_eff = hm.data[global_r * hm.cols + c] + c as f32 * step;
                         if h_eff < running_max {
                             chunk[local_r * hm.cols + c] = 0.0;
                         }
@@ -291,10 +291,10 @@ pub unsafe fn compute_shadow_neon_parallel(hm: &Heightmap, sun_elevation_rad: f3
 
             for c in 0..hm.cols {
                 let heights = [
-                    hm.data[base[0] + c] as f32,
-                    hm.data[base[1] + c] as f32,
-                    hm.data[base[2] + c] as f32,
-                    hm.data[base[3] + c] as f32,
+                    hm.data[base[0] + c],
+                    hm.data[base[1] + c],
+                    hm.data[base[2] + c],
+                    hm.data[base[3] + c],
                 ];
                 unsafe {
                     let h_vec = vld1q_f32(heights.as_ptr());
@@ -372,7 +372,7 @@ pub unsafe fn compute_shadow_neon_parallel_with_azimuth(
                 while rf >= 0.0 && rf < hm.rows as f32 && cf >= 0.0 && cf < hm.cols as f32 {
                     let r = rf.floor() as usize;
                     let c = cf.floor() as usize;
-                    let h_eff = hm.data[r * hm.cols + c] as f32 + dist * tan_sun;
+                    let h_eff = hm.data[r * hm.cols + c] + dist * tan_sun;
                     if h_eff < rm {
                         let margin = rm - h_eff;
                         unsafe {
@@ -409,10 +409,10 @@ pub unsafe fn compute_shadow_neon_parallel_with_azimuth(
                 rf[3].floor() as usize * hm.cols + cf[3].floor() as usize,
             ];
             let heights = [
-                hm.data[idxs[0]] as f32,
-                hm.data[idxs[1]] as f32,
-                hm.data[idxs[2]] as f32,
-                hm.data[idxs[3]] as f32,
+                hm.data[idxs[0]],
+                hm.data[idxs[1]],
+                hm.data[idxs[2]],
+                hm.data[idxs[3]],
             ];
 
             unsafe {
@@ -457,7 +457,7 @@ pub unsafe fn compute_shadow_neon_parallel_with_azimuth(
             while r_f >= 0.0 && r_f < hm.rows as f32 && c_f >= 0.0 && c_f < hm.cols as f32 {
                 let r = r_f.floor() as usize;
                 let c = c_f.floor() as usize;
-                let h_eff = hm.data[r * hm.cols + c] as f32 + d * tan_sun;
+                let h_eff = hm.data[r * hm.cols + c] + d * tan_sun;
                 if h_eff < rm {
                     let margin = rm - h_eff;
                     unsafe {

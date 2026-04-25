@@ -37,16 +37,16 @@ pub unsafe fn compute_normals_neon_tiled(hm: &dem_io::TiledHeightmap) -> NormalM
                         }
 
                         let ptr_upper = tile_ptr.add((local_r - 1) * hm.tile_size + local_c);
-                        let upper = vcvtq_f32_s32(vmovl_s16(vld1_s16(ptr_upper)));
+                        let upper = vld1q_f32(ptr_upper);
 
                         let ptr_lower = tile_ptr.add((local_r + 1) * hm.tile_size + local_c);
-                        let lower = vcvtq_f32_s32(vmovl_s16(vld1_s16(ptr_lower)));
+                        let lower = vld1q_f32(ptr_lower);
 
                         let ptr_left = tile_ptr.add(local_r * hm.tile_size + (local_c - 1));
-                        let left = vcvtq_f32_s32(vmovl_s16(vld1_s16(ptr_left)));
+                        let left = vld1q_f32(ptr_left);
 
                         let ptr_right = tile_ptr.add(local_r * hm.tile_size + (local_c + 1));
-                        let right = vcvtq_f32_s32(vmovl_s16(vld1_s16(ptr_right)));
+                        let right = vld1q_f32(ptr_right);
 
                         let vec_nx = vmulq_f32(vsubq_f32(left, right), inv_2dx);
                         let vec_ny = vmulq_f32(vsubq_f32(upper, lower), inv_2dy);
@@ -161,16 +161,16 @@ pub unsafe fn compute_normals_neon_tiled_parallel(hm: &dem_io::TiledHeightmap) -
                         }
 
                         let ptr_upper = tile_ptr.add((local_r - 1) * tile_size + local_c);
-                        let upper = vcvtq_f32_s32(vmovl_s16(vld1_s16(ptr_upper)));
+                        let upper = vld1q_f32(ptr_upper);
 
                         let ptr_lower = tile_ptr.add((local_r + 1) * tile_size + local_c);
-                        let lower = vcvtq_f32_s32(vmovl_s16(vld1_s16(ptr_lower)));
+                        let lower = vld1q_f32(ptr_lower);
 
                         let ptr_left = tile_ptr.add(local_r * tile_size + (local_c - 1));
-                        let left = vcvtq_f32_s32(vmovl_s16(vld1_s16(ptr_left)));
+                        let left = vld1q_f32(ptr_left);
 
                         let ptr_right = tile_ptr.add(local_r * tile_size + (local_c + 1));
-                        let right = vcvtq_f32_s32(vmovl_s16(vld1_s16(ptr_right)));
+                        let right = vld1q_f32(ptr_right);
 
                         let vec_nx = vmulq_f32(vsubq_f32(left, right), inv_2dx);
                         let vec_ny = vmulq_f32(vsubq_f32(upper, lower), inv_2dy);

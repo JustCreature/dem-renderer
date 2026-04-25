@@ -1,20 +1,20 @@
-pub(crate) struct AlignedBuffer {
-    ptr: *mut i16,
+pub(crate) struct AlignedBuffer<T> {
+    ptr: *mut T,
     len: usize,
     layout: std::alloc::Layout,
 }
 
-impl AlignedBuffer {
-    pub fn new(len: usize, align: usize) -> AlignedBuffer {
+impl<T> AlignedBuffer<T> {
+    pub fn new(len: usize, align: usize) -> AlignedBuffer<T> {
         let layout =
-            std::alloc::Layout::from_size_align(len * std::mem::size_of::<i16>(), align).unwrap();
-        let ptr = unsafe { std::alloc::alloc_zeroed(layout) } as *mut i16;
+            std::alloc::Layout::from_size_align(len * std::mem::size_of::<T>(), align).unwrap();
+        let ptr = unsafe { std::alloc::alloc_zeroed(layout) } as *mut T;
 
         AlignedBuffer { ptr, len, layout }
     }
 }
 
-impl Drop for AlignedBuffer {
+impl<T> Drop for AlignedBuffer<T> {
     fn drop(&mut self) {
         unsafe { std::alloc::dealloc(self.ptr as *mut u8, self.layout) }
     }
@@ -22,19 +22,19 @@ impl Drop for AlignedBuffer {
 
 // Safety: AlignedBuffer owns a unique allocation. After construction, TiledHeightmap
 // only reads from it — no concurrent mutation. Safe to share across threads.
-unsafe impl Send for AlignedBuffer {}
-unsafe impl Sync for AlignedBuffer {}
+unsafe impl<T: Send> Send for AlignedBuffer<T> {}
+unsafe impl<T: Sync> Sync for AlignedBuffer<T> {}
 
-impl std::ops::Deref for AlignedBuffer {
-    type Target = [i16];
+impl<T> std::ops::Deref for AlignedBuffer<T> {
+    type Target = [T];
 
-    fn deref(&self) -> &[i16] {
+    fn deref(&self) -> &[T] {
         unsafe { std::slice::from_raw_parts(self.ptr, self.len) }
     }
 }
 
-impl std::ops::DerefMut for AlignedBuffer {
-    fn deref_mut(&mut self) -> &mut [i16] {
+impl<T> std::ops::DerefMut for AlignedBuffer<T> {
+    fn deref_mut(&mut self) -> &mut [T] {
         unsafe { std::slice::from_raw_parts_mut(self.ptr, self.len) }
     }
 }

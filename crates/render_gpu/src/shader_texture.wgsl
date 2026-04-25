@@ -21,10 +21,10 @@ struct CameraUniforms {
     t_max: f32,
     ao_mode: u32,
     _pad5: f32,
-    _pad6: f32,
-    _pad7: f32,
-    _pad8: f32,
-    _pad9: f32,
+    shadows_enabled: u32,
+    fog_enabled: u32,
+    vat_mode: u32,
+    lod_mode: u32,
 }
 
 // camera uniforms struct
@@ -200,7 +200,10 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
             (pos.x / cam.dx_meters + 0.5) / f32(cam.hm_cols),
             (pos.y / cam.dy_meters + 0.5) / f32(cam.hm_rows)
         );
-        let mip_lod = log2(1.0 + t / 15000.0);  // mipmap downsampling start at distance CONFIG_PERFORMANCE
+        // lod_mode: 0=Ultra(off), 1=High, 2=Mid(default), 3=Low
+        let lod_step_div = select(select(select(4000.0, 8000.0, cam.lod_mode < 3u), 20000.0, cam.lod_mode < 2u), 1000000000.0, cam.lod_mode == 0u);
+        let lod_mip_div = select(select(select(8000.0, 15000.0, cam.lod_mode < 3u), 30000.0, cam.lod_mode < 2u), 1000000000.0, cam.lod_mode == 0u);
+        let mip_lod = log2(1.0 + t / lod_mip_div);  // mipmap downsampling start at distance CONFIG_PERFORMANCE
         let h = textureSampleLevel(hm_tex, hm_sampler, uv, mip_lod).r;
 
         if pos.z <= h {
@@ -217,8 +220,10 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
         t_prev = t;
         // t += cam.step_m;
         // t += max((pos.z - h) * 0.3, cam.step_m);
-        let lod_min_step = cam.step_m * (0.7 + t / 8000.0);  // step reduction with distance CONFIG_PERFORMANCE
-        t += max((pos.z - h) * 0.2, lod_min_step);  // step reduction spherical CONFIG_PERFORMANCE
+        let lod_min_step = cam.step_m * (0.7 + t / lod_step_div);  // step reduction with distance CONFIG_PERFORMANCE
+        // vat_mode: 0=Ultra→0.1, 1=High→0.2, 2=Mid→0.4, 3=Low→0.8
+        let sphere_factor = select(select(select(0.8, 0.4, cam.vat_mode < 3u), 0.2, cam.vat_mode < 2u), 0.1, cam.vat_mode == 0u);
+        t += max((pos.z - h) * sphere_factor, lod_min_step);  // step reduction spherical CONFIG_PERFORMANCE
         pos = cam.origin + dir * t;
     }
 
@@ -321,7 +326,7 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
         let s01 = shadow[i01];
         let s11 = shadow[i11];
         let in_shadow = mix(mix(s00, s10, fx), mix(s01, s11, fx), fy);
-        let shadow_factor: f32 = 0.5 + 0.5 * in_shadow;
+        let shadow_factor: f32 = select(1.0, 0.5 + 0.5 * in_shadow, cam.shadows_enabled == 1u);
         let brightness = (ambient * ao_factor + (1.0 - ambient) * diffuse) * shadow_factor;
 
         // set colors for different heights
@@ -347,7 +352,7 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
         let sky = vec3<f32>(135.0, 206.0, 235.0);  // same blue as your sky pixels                                                                                     
         let fog_near = 15000.0;   // fog starts at 15km                                                                                                                
         let fog_far = 60000.0;   // fully haze at 60km                                                                                                                
-        let fog_t = smoothstep(fog_near, fog_far, t);
+        let fog_t = select(0.0, smoothstep(fog_near, fog_far, t), cam.fog_enabled == 1u);
 
         let fr = mix(f32(r), sky.x, fog_t);
         let fg = mix(f32(g), sky.y, fog_t);

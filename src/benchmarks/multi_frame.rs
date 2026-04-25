@@ -187,15 +187,17 @@ pub(crate) fn benchmark_multi_frame_gpu_scene(
     // Warm-up: Metal compiles the render pipeline on first dispatch
     {
         let (origin, look_at) = frame_cam(0, dx, dy);
-        let _ = scene.render_frame(origin, look_at, FOV_DEG, aspect, SUN_DIR, step_m, T_MAX, 0);
+        let _ = scene.render_frame(
+            origin, look_at, FOV_DEG, aspect, SUN_DIR, step_m, T_MAX, 0, 1, 1, 1, 2,
+        );
     }
 
     let t0 = profiling::now();
     for i in 0..N_FRAMES {
         let (origin, look_at) = frame_cam(i, dx, dy);
-        let _ = std::hint::black_box(
-            scene.render_frame(origin, look_at, FOV_DEG, aspect, SUN_DIR, step_m, T_MAX, 0),
-        );
+        let _ = std::hint::black_box(scene.render_frame(
+            origin, look_at, FOV_DEG, aspect, SUN_DIR, step_m, T_MAX, 0, 1, 1, 1, 2,
+        ));
     }
     let total_s = (profiling::now() - t0) as f64 / counter_frequency();
     println!(

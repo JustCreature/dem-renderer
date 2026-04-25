@@ -3,16 +3,22 @@ use std::{collections::HashMap, path::Path};
 
 #[derive(Debug)]
 pub struct Heightmap {
-    pub data: Vec<i16>,
+    pub data: Vec<f32>,
     pub rows: usize,
     pub cols: usize,
-    pub nodata: i16,
+    pub nodata: f32,
     pub origin_lat: f64, // latitude of row 0 (north edge)
     pub origin_lon: f64, // longitude of col 0 (west edge)
     pub dx_deg: f64,     // degrees per column (east = positive)
     pub dy_deg: f64,     // degrees per row (south = negative, from .blw)
     pub dx_meters: f64,  // real-world cell width (for normals in Phase 2)
     pub dy_meters: f64,  // real-world cell height (for normals in Phase 2)
+    /// Raw tiepoint from the file in its native CRS units.
+    /// Geographic (EPSG:4326): same as origin_lon / origin_lat (degrees).
+    /// Projected (EPSG:31287): easting / northing of the top-left corner (metres).
+    pub crs_origin_x: f64,
+    pub crs_origin_y: f64,
+    pub crs_epsg: u32, // 4326 = geographic, 31287 = Austria Lambert, 3035 = LAEA Europe
 }
 
 #[derive(Debug)]
@@ -70,14 +76,14 @@ fn parse_hdr(hdr_path: &Path) -> Result<HdrMeta, DemError> {
 }
 
 fn get_value_from_neighbours(
-    data: &[i16],
+    data: &[f32],
     current_row: usize,
     current_col: usize,
     rows: usize,
     cols: usize,
-    nodata: i16,
-) -> i16 {
-    let mut neighbours: Vec<i16> = Vec::new();
+    nodata: f32,
+) -> f32 {
+    let mut neighbours: Vec<f32> = Vec::new();
 
     let mut up_searchin_row = current_row;
     while up_searchin_row > 0 {
@@ -123,18 +129,18 @@ fn get_value_from_neighbours(
         }
     }
 
-    let sum: i32 = neighbours.iter().map(|el| *el as i32).sum();
-    let count: i32 = neighbours.len() as i32;
+    let sum: f32 = neighbours.iter().sum();
+    let count = neighbours.len() as f32;
 
     // this if condition is ignored for now since it doesn't normally happens in the mountains
     // if count == 0 {
     //     // return something if no cells found
     // }
 
-    (sum / count) as i16
+    sum / count
 }
 
-fn fill_nodata(data: &mut [i16], rows: usize, cols: usize, nodata: i16) {
+pub(crate) fn fill_nodata(data: &mut [f32], rows: usize, cols: usize, nodata: f32) {
     for r in 0..rows {
         for c in 0..cols {
             let index = r * cols + c;
@@ -147,16 +153,17 @@ fn fill_nodata(data: &mut [i16], rows: usize, cols: usize, nodata: i16) {
 }
 
 fn build_grayscale_png(heightmap: &Heightmap, cols: usize, rows: usize) {
-    let min = *heightmap.data.iter().min().unwrap() as f32;
-    let max = *heightmap.data.iter().max().unwrap() as f32;
+    let min = heightmap.data.iter().cloned().fold(f32::INFINITY, f32::min);
+    let max = heightmap
+        .data
+        .iter()
+        .cloned()
+        .fold(f32::NEG_INFINITY, f32::max);
 
     let pixels: Vec<u8> = heightmap
         .data
         .iter()
-        .map(|&e| {
-            let e = e as f32;
-            ((e - min) / (max - min) * 255.0) as u8
-        })
+        .map(|&e| ((e - min) / (max - min) * 255.0) as u8)
         .collect();
 
     image::GrayImage::from_raw(cols as u32, rows as u32, pixels)
@@ -181,39 +188,46 @@ pub fn parse_bil(bil_path: &Path) -> Result<Heightmap, DemError> {
         .into());
     }
 
-    // convert to Vec<i16>
-    let mut bil_data: Vec<i16> = bil_bytes
+    const NODATA_F32: f32 = -9999.0;
+
+    // Parse i16 bytes and convert immediately to f32; map the i16 nodata sentinel to NODATA_F32.
+    let mut bil_data: Vec<f32> = bil_bytes
         .chunks_exact(2)
         .map(|chunk| {
             // The unwrap() is safe here because chunks_exact(2) guarantees every chunk is exactly 2 bytes — the compiler
             // just can't prove that statically, so try_into returns a Result.
             let arr: [u8; 2] = chunk.try_into().unwrap();
-            if hdr_map.little_endian {
+            let raw = if hdr_map.little_endian {
                 i16::from_le_bytes(arr)
             } else {
                 i16::from_be_bytes(arr)
+            };
+            if raw == hdr_map.nodata {
+                NODATA_F32
+            } else {
+                raw as f32
             }
         })
         .collect();
 
     drop(bil_bytes);
 
-    let before = bil_data.iter().filter(|&&v| v == hdr_map.nodata).count();
-    fill_nodata(&mut bil_data, hdr_map.rows, hdr_map.cols, hdr_map.nodata);
-    let after = bil_data.iter().filter(|&&v| v == hdr_map.nodata).count();
+    let before = bil_data.iter().filter(|&&v| v == NODATA_F32).count();
+    fill_nodata(&mut bil_data, hdr_map.rows, hdr_map.cols, NODATA_F32);
+    let after = bil_data.iter().filter(|&&v| v == NODATA_F32).count();
     println!("nodata cells — before: {}, after: {}", before, after);
 
     let min = bil_data
         .iter()
-        .filter(|&&v| v != hdr_map.nodata)
-        .copied()
-        .min();
+        .cloned()
+        .filter(|&v| v != NODATA_F32)
+        .fold(f32::INFINITY, f32::min);
     let max = bil_data
         .iter()
-        .filter(|&&v| v != hdr_map.nodata)
-        .copied()
-        .max();
-    println!("elevation range check: {:?} to {:?} metres", min, max);
+        .cloned()
+        .filter(|&v| v != NODATA_F32)
+        .fold(f32::NEG_INFINITY, f32::max);
+    println!("elevation range check: {} to {} metres", min, max);
 
     let dx_deg = hdr_map.x_dim;
     let dy_deg = -hdr_map.y_dim;
@@ -224,13 +238,16 @@ pub fn parse_bil(bil_path: &Path) -> Result<Heightmap, DemError> {
         data: bil_data,
         rows: hdr_map.rows,
         cols: hdr_map.cols,
-        nodata: hdr_map.nodata,
+        nodata: NODATA_F32,
         origin_lat: hdr_map.origin_lat,
         origin_lon: hdr_map.origin_lon,
         dx_deg,
         dy_deg,
         dx_meters,
         dy_meters,
+        crs_origin_x: hdr_map.origin_lon,
+        crs_origin_y: hdr_map.origin_lat,
+        crs_epsg: 4326,
     };
 
     build_grayscale_png(&heightmap, hdr_map.cols, hdr_map.rows);

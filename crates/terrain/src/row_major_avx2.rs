@@ -18,14 +18,13 @@ unsafe fn rsqrt_nr(len_sq: core::arch::x86_64::__m256) -> core::arch::x86_64::__
     _mm256_mul_ps(est, _mm256_sub_ps(_mm256_set1_ps(1.5), half_x_est_sq))
 }
 
-// Load 8 consecutive i16 values from ptr and convert to f32.
-// NEON: vcvtq_f32_s32(vmovl_s16(vld1_s16(ptr)))  [4-wide]
-// AVX2: _mm256_cvtepi32_ps(_mm256_cvtepi16_epi32(_mm_loadu_si128(ptr)))  [8-wide]
+// Load 8 consecutive f32 values.
+// Data is now f32 natively — no conversion needed; one _mm256_loadu_ps replaces
+// the two-step _mm_loadu_si128 + _mm256_cvtepi16_epi32 + _mm256_cvtepi32_ps.
 #[inline(always)]
-unsafe fn load_i16_to_f32_avx2(ptr: *const i16) -> core::arch::x86_64::__m256 {
+unsafe fn load_f32_avx2(ptr: *const f32) -> core::arch::x86_64::__m256 {
     use core::arch::x86_64::*;
-    let raw = _mm_loadu_si128(ptr as *const __m128i);
-    _mm256_cvtepi32_ps(_mm256_cvtepi16_epi32(raw))
+    _mm256_loadu_ps(ptr)
 }
 
 #[cfg(target_arch = "x86_64")]
@@ -44,10 +43,10 @@ pub unsafe fn compute_normals_avx2(hm: &dem_io::Heightmap) -> NormalMap {
     for r in 1..hm.rows - 1 {
         let mut c = 1usize;
         while c + 8 < hm.cols - 1 {
-            let upper = load_i16_to_f32_avx2(hm.data.as_ptr().add((r - 1) * hm.cols + c));
-            let lower = load_i16_to_f32_avx2(hm.data.as_ptr().add((r + 1) * hm.cols + c));
-            let left = load_i16_to_f32_avx2(hm.data.as_ptr().add(r * hm.cols + (c - 1)));
-            let right = load_i16_to_f32_avx2(hm.data.as_ptr().add(r * hm.cols + (c + 1)));
+            let upper = load_f32_avx2(hm.data.as_ptr().add((r - 1) * hm.cols + c));
+            let lower = load_f32_avx2(hm.data.as_ptr().add((r + 1) * hm.cols + c));
+            let left = load_f32_avx2(hm.data.as_ptr().add(r * hm.cols + (c - 1)));
+            let right = load_f32_avx2(hm.data.as_ptr().add(r * hm.cols + (c + 1)));
 
             let vec_nx = _mm256_mul_ps(_mm256_sub_ps(left, right), inv_2dx);
             let vec_ny = _mm256_mul_ps(_mm256_sub_ps(upper, lower), inv_2dy);
@@ -130,10 +129,10 @@ pub unsafe fn compute_normals_avx2_parallel(hm: &dem_io::Heightmap) -> NormalMap
 
         let mut c = 1usize;
         while c + 8 < hm.cols - 1 {
-            let upper = load_i16_to_f32_avx2(hm.data.as_ptr().add((r - 1) * hm.cols + c));
-            let lower = load_i16_to_f32_avx2(hm.data.as_ptr().add((r + 1) * hm.cols + c));
-            let left = load_i16_to_f32_avx2(hm.data.as_ptr().add(r * hm.cols + (c - 1)));
-            let right = load_i16_to_f32_avx2(hm.data.as_ptr().add(r * hm.cols + (c + 1)));
+            let upper = load_f32_avx2(hm.data.as_ptr().add((r - 1) * hm.cols + c));
+            let lower = load_f32_avx2(hm.data.as_ptr().add((r + 1) * hm.cols + c));
+            let left = load_f32_avx2(hm.data.as_ptr().add(r * hm.cols + (c - 1)));
+            let right = load_f32_avx2(hm.data.as_ptr().add(r * hm.cols + (c + 1)));
 
             let vec_nx = _mm256_mul_ps(_mm256_sub_ps(left, right), inv_2dx);
             let vec_ny = _mm256_mul_ps(_mm256_sub_ps(upper, lower), inv_2dy);

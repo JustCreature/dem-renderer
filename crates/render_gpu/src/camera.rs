@@ -29,10 +29,10 @@ pub struct CameraUniforms {
     pub t_max: f32,
     pub ao_mode: u32,
     pub _pad5: f32, // pad to 16-byte boundary
-    pub _pad6: f32,
-    pub _pad7: f32,
-    pub _pad8: f32,
-    pub _pad9: f32,
+    pub shadows_enabled: u32,
+    pub fog_enabled: u32,
+    pub vat_mode: u32,
+    pub lod_mode: u32,
 }
 
 impl CameraUniforms {
@@ -48,6 +48,10 @@ impl CameraUniforms {
         step_m: f32,
         t_max: f32,
         ao_mode: u32,
+        shadows_enabled: u32,
+        fog_enabled: u32,
+        vat_mode: u32,
+        lod_mode: u32,
     ) -> CameraUniforms {
         let forward: [f32; 3] = normalize(sub(look_at, origin));
         let right: [f32; 3] = normalize(cross(forward, [0.0, 0.0, 1.0]));
@@ -79,10 +83,10 @@ impl CameraUniforms {
             t_max,
             ao_mode,
             _pad5: 0.0,
-            _pad6: 0.0,
-            _pad7: 0.0,
-            _pad8: 0.0,
-            _pad9: 0.0,
+            shadows_enabled,
+            fog_enabled,
+            vat_mode,
+            lod_mode,
         }
     }
 }

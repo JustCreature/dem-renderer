@@ -5,10 +5,9 @@ use rayon::prelude::*;
 use crate::{NormalMap, SendPtr};
 
 #[inline(always)]
-unsafe fn load_i16_to_f32_avx2(ptr: *const i16) -> core::arch::x86_64::__m256 {
+unsafe fn load_f32_avx2(ptr: *const f32) -> core::arch::x86_64::__m256 {
     use core::arch::x86_64::*;
-    let raw = _mm_loadu_si128(ptr as *const __m128i);
-    _mm256_cvtepi32_ps(_mm256_cvtepi16_epi32(raw))
+    _mm256_loadu_ps(ptr)
 }
 
 #[inline(always)]
@@ -58,13 +57,13 @@ pub unsafe fn compute_normals_avx2_tiled(hm: &dem_io::TiledHeightmap) -> NormalM
                     }
 
                     let upper =
-                        load_i16_to_f32_avx2(tile_ptr.add((local_r - 1) * hm.tile_size + local_c));
+                        load_f32_avx2(tile_ptr.add((local_r - 1) * hm.tile_size + local_c));
                     let lower =
-                        load_i16_to_f32_avx2(tile_ptr.add((local_r + 1) * hm.tile_size + local_c));
+                        load_f32_avx2(tile_ptr.add((local_r + 1) * hm.tile_size + local_c));
                     let left =
-                        load_i16_to_f32_avx2(tile_ptr.add(local_r * hm.tile_size + (local_c - 1)));
+                        load_f32_avx2(tile_ptr.add(local_r * hm.tile_size + (local_c - 1)));
                     let right =
-                        load_i16_to_f32_avx2(tile_ptr.add(local_r * hm.tile_size + (local_c + 1)));
+                        load_f32_avx2(tile_ptr.add(local_r * hm.tile_size + (local_c + 1)));
 
                     let vec_nx = _mm256_mul_ps(_mm256_sub_ps(left, right), inv_2dx);
                     let vec_ny = _mm256_mul_ps(_mm256_sub_ps(upper, lower), inv_2dy);
@@ -177,16 +176,16 @@ pub unsafe fn compute_normals_avx2_tiled_parallel(hm: &dem_io::TiledHeightmap) -
                         break;
                     }
 
-                    let upper = load_i16_to_f32_avx2(
+                    let upper = load_f32_avx2(
                         tile_ptr.add((local_r - 1) * tile_size + local_c),
                     );
-                    let lower = load_i16_to_f32_avx2(
+                    let lower = load_f32_avx2(
                         tile_ptr.add((local_r + 1) * tile_size + local_c),
                     );
-                    let left = load_i16_to_f32_avx2(
+                    let left = load_f32_avx2(
                         tile_ptr.add(local_r * tile_size + (local_c - 1)),
                     );
-                    let right = load_i16_to_f32_avx2(
+                    let right = load_f32_avx2(
                         tile_ptr.add(local_r * tile_size + (local_c + 1)),
                     );
 

@@ -27,6 +27,10 @@ struct Viewer {
     render_width: u32,
     vsync: bool,
     ao_mode: u32,
+    shadows_enabled: bool,
+    fog_enabled: bool,
+    vat_mode: u32, // 0=Ultra, 1=High, 2=Mid, 3=Low
+    lod_mode: u32, // 0=Ultra, 1=High, 2=Mid, 3=Low
     // fps counter
     fps_timer: std::time::Instant,
     frame_count: u32,
@@ -249,6 +253,8 @@ impl ApplicationHandler for Viewer {
                             label: Some("blit_enc"),
                         });
 
+                let vat_step_divisors = [20.0_f32, 10.0, 5.0, 3.0];
+                let step_m = scene.get_dx_meters() / vat_step_divisors[self.vat_mode as usize];
                 scene.dispatch_frame(
                     &mut encoder,
                     self.cam_pos,
@@ -256,9 +262,13 @@ impl ApplicationHandler for Viewer {
                     70.0,
                     self.width as f32 / self.height as f32,
                     sun_dir,
-                    scene.get_dx_meters() / 10.0, // step_m CONFIG_PERFORMANCE
+                    step_m,
                     200_000.0,
                     self.ao_mode,
+                    self.shadows_enabled as u32,
+                    self.fog_enabled as u32,
+                    self.vat_mode,
+                    self.lod_mode,
                 );
                 let output_buf: &wgpu::Buffer = scene.get_output_buffer();
 
@@ -294,6 +304,10 @@ impl ApplicationHandler for Viewer {
                         self.sim_day,
                         self.sim_hour,
                         self.ao_mode,
+                        self.shadows_enabled,
+                        self.fog_enabled,
+                        self.vat_mode,
+                        self.lod_mode,
                     );
                 }
 
@@ -352,6 +366,24 @@ impl ApplicationHandler for Viewer {
                     }
                     if kc == KeyCode::Slash && event.state == winit::event::ElementState::Pressed {
                         self.ao_mode = (self.ao_mode + 1).rem_euclid(6);
+                        return;
+                    }
+                    if kc == KeyCode::Period && event.state == winit::event::ElementState::Pressed {
+                        self.shadows_enabled = !self.shadows_enabled;
+                        return;
+                    }
+                    if kc == KeyCode::Comma && event.state == winit::event::ElementState::Pressed {
+                        self.fog_enabled = !self.fog_enabled;
+                        return;
+                    }
+                    if kc == KeyCode::Semicolon
+                        && event.state == winit::event::ElementState::Pressed
+                    {
+                        self.vat_mode = (self.vat_mode + 1).rem_euclid(4);
+                        return;
+                    }
+                    if kc == KeyCode::Quote && event.state == winit::event::ElementState::Pressed {
+                        self.lod_mode = (self.lod_mode + 1).rem_euclid(4);
                         return;
                     }
                     if kc == KeyCode::SuperLeft || kc == KeyCode::AltLeft {
@@ -460,6 +492,104 @@ impl ApplicationHandler for Viewer {
     }
 }
 
+/// Lambert Conformal Conic forward projection for EPSG:31287 (MGI / Austria Lambert).
+/// Input: WGS84 lat/lon in degrees. Output: (easting, northing) in metres.
+fn lcc_epsg31287(lat_deg: f64, lon_deg: f64) -> (f64, f64) {
+    // Bessel 1841 ellipsoid
+    let a = 6_377_397.155_f64;
+    let f = 1.0 / 299.152_812_8_f64;
+    let e2 = 2.0 * f - f * f;
+    let e = e2.sqrt();
+
+    let to_rad = std::f64::consts::PI / 180.0;
+    let lat = lat_deg * to_rad;
+    let lon = lon_deg * to_rad;
+
+    // EPSG:31287 defining parameters
+    let lat0 = 47.5 * to_rad; // latitude of false origin
+    let lon0 = 13.333_333 * to_rad; // central meridian
+    let lat1 = 49.0 * to_rad; // standard parallel 1
+    let lat2 = 46.0 * to_rad; // standard parallel 2
+    let fe = 400_000.0_f64; // false easting
+    let fn_ = 400_000.0_f64; // false northing
+
+    // Helper: m (Snyder eq 15-11)
+    let m = |phi: f64| {
+        let sin_phi = phi.sin();
+        phi.cos() / (1.0 - e2 * sin_phi * sin_phi).sqrt()
+    };
+    // Helper: t (Snyder eq 15-9)
+    let t = |phi: f64| {
+        let sin_phi = phi.sin();
+        let e_sin = e * sin_phi;
+        ((1.0 - sin_phi) / (1.0 + sin_phi) * ((1.0 + e_sin) / (1.0 - e_sin)).powf(e)).sqrt()
+    };
+
+    let m1 = m(lat1);
+    let m2 = m(lat2);
+    let t0 = t(lat0);
+    let t1 = t(lat1);
+    let t2 = t(lat2);
+
+    let n = (m1.ln() - m2.ln()) / (t1.ln() - t2.ln());
+    let big_f = m1 / (n * t1.powf(n));
+    let rho0 = a * big_f * t0.powf(n);
+    let rho = a * big_f * t(lat).powf(n);
+    let theta = n * (lon - lon0);
+
+    let easting = fe + rho * theta.sin();
+    let northing = fn_ + rho0 - rho * theta.cos();
+    (easting, northing)
+}
+
+/// Spherical LAEA forward projection for EPSG:3035 (ETRS89 / LAEA Europe).
+/// Input: WGS84 lat/lon degrees. Output: (easting, northing) metres.
+fn laea_epsg3035(lat_deg: f64, lon_deg: f64) -> (f64, f64) {
+    let r = 6_371_000.0_f64;
+    let lat = lat_deg.to_radians();
+    let lon = lon_deg.to_radians();
+    let lat0 = 52.0_f64.to_radians();
+    let lon0 = 10.0_f64.to_radians();
+    let fe = 4_321_000.0_f64;
+    let fn_ = 3_210_000.0_f64;
+
+    let k =
+        (2.0 / (1.0 + lat0.sin() * lat.sin() + lat0.cos() * lat.cos() * (lon - lon0).cos())).sqrt();
+    let easting = fe + r * k * lat.cos() * (lon - lon0).sin();
+    let northing =
+        fn_ + r * k * (lat0.cos() * lat.sin() - lat0.sin() * lat.cos() * (lon - lon0).cos());
+    (easting, northing)
+}
+
+/// Convert WGS84 lat/lon to tile-local metres (cam_pos.x, cam_pos.y).
+/// Returns None if the position falls outside the tile bounds.
+fn latlon_to_tile_metres(lat: f64, lon: f64, hm: &Heightmap) -> Option<(f32, f32)> {
+    let (x, y) = match hm.crs_epsg {
+        31287 => {
+            let (easting, northing) = lcc_epsg31287(lat, lon);
+            (easting - hm.crs_origin_x, hm.crs_origin_y - northing)
+        }
+        3035 => {
+            let (easting, northing) = laea_epsg3035(lat, lon);
+            (easting - hm.crs_origin_x, hm.crs_origin_y - northing)
+        }
+        _ => {
+            // Geographic (EPSG:4326)
+            let x = (lon - hm.crs_origin_x) / hm.dx_deg * hm.dx_meters;
+            let y = (hm.crs_origin_y - lat) / hm.dy_deg.abs() * hm.dy_meters;
+            (x, y)
+        }
+    };
+
+    let max_x = hm.cols as f64 * hm.dx_meters;
+    let max_y = hm.rows as f64 * hm.dy_meters;
+    if x >= 0.0 && x <= max_x && y >= 0.0 && y <= max_y {
+        Some((x as f32, y as f32))
+    } else {
+        None
+    }
+}
+
 pub fn run(tile_path: &Path, width: u32, height: u32, vsync: bool) {
     let (scene, hm, lat_rad) = prepare_scene(tile_path, width, height);
     let dx: f32 = scene.get_dx_meters();
@@ -482,6 +612,18 @@ pub fn run(tile_path: &Path, width: u32, height: u32, vsync: bool) {
 
     let event_loop = EventLoop::new().expect("error creating winit event loop");
 
+    // Named camera position: Hintertux glacier tongue, WGS84.
+    // Converted to tile-local metres at runtime — works for any tile that contains this point.
+    const CAM_LAT: f64 = 47.076211; // 47°04'34.36"N
+    const CAM_LON: f64 = 11.687592; // 11°41'15.33"E
+    const CAM_ELEV: f32 = 3258.0;
+
+    let init_cam_pos = latlon_to_tile_metres(CAM_LAT, CAM_LON, &hm)
+        .map(|(x, y)| [x, y, CAM_ELEV])
+        .unwrap_or([2457.0 * dx, 3328.0 * dy, 3341.0]);
+    let init_yaw = (19627.0_f32).atan2(1718.0_f32);
+    let init_pitch = (-3472.0_f32).atan2(19702.0_f32);
+
     let mut viewer: Viewer = Viewer {
         scene: Some(scene),
         window: None,
@@ -492,15 +634,19 @@ pub fn run(tile_path: &Path, width: u32, height: u32, vsync: bool) {
         render_width: width,
         vsync,
         ao_mode: 0,
+        shadows_enabled: true,
+        fog_enabled: true,
+        vat_mode: 2, // Mid
+        lod_mode: 1, // High
         // fps counter
         fps_timer: std::time::Instant::now(),
         frame_count: 0,
         fps: 0.0,
         // initial cam pos
         last_frame: std::time::Instant::now(),
-        cam_pos: [2457.0 * dx, 3328.0 * dy, 3341.0],
-        yaw: (19627.0_f32).atan2(1718.0_f32),
-        pitch: (-3472.0_f32).atan2(19702.0_f32),
+        cam_pos: init_cam_pos,
+        yaw: init_yaw,
+        pitch: init_pitch,
         keys_held: std::collections::HashSet::new(),
         mouse_look: false,
         immersive_mode: false,
@@ -549,12 +695,36 @@ fn sun_position(lat_rad: f32, day: i32, hour: f32) -> (f32, f32) {
 }
 
 fn prepare_scene(tile_path: &Path, width: u32, height: u32) -> (GpuScene, Arc<Heightmap>, f32) {
-    let hm: Heightmap = match dem_io::parse_bil(tile_path) {
-        Ok(hm) => hm,
-        Err(error) => panic!(
-            "Couldn't open the file {:?}; errors: {:?}",
-            tile_path, error
-        ),
+    let dem_format = tile_path
+        .extension()
+        .expect("error getting extension of DEM data");
+
+    let hm: Heightmap = if dem_format == "bil" {
+        match dem_io::parse_bil(tile_path) {
+            Ok(hm) => hm,
+            Err(error) => panic!(
+                "Couldn't open the file {:?}; errors: {:?}",
+                tile_path, error
+            ),
+        }
+    } else if dem_format == "tif" {
+        let scale = dem_io::geotiff_pixel_scale(tile_path);
+        let result = if scale >= 5.0 {
+            dem_io::parse_geotiff_epsg_31287(tile_path) // EPSG:31287 Austria Lambert (5m+)
+        } else if scale >= 1.0 {
+            dem_io::parse_geotiff_epsg_3035(tile_path) // EPSG:3035 LAEA Europe (1m)
+        } else {
+            dem_io::parse_geotiff(tile_path) // EPSG:4326 geographic (GLO-30 etc.)
+        };
+        match result {
+            Ok(hm) => hm,
+            Err(error) => panic!(
+                "Couldn't open the file {:?}; errors: {:?}",
+                tile_path, error
+            ),
+        }
+    } else {
+        panic!("DEM format is not supported {:?}", dem_format)
     };
 
     let normal_map = terrain::compute_normals_vector_par(&hm);

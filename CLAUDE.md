@@ -36,7 +36,7 @@ A learning-first, cache-optimized terrain + sunlight renderer in Rust using real
 
 ## Status
 
-**Current phase: Phase 8** (Phases 0, 1, 2, 3, 4, 5, 6, 7 complete)
+**Current phase: Phase 9** (Phases 0, 1, 2, 3, 4, 5, 6, 7, 8 complete)
 
 Phase 0 artifacts:
 - `crates/profiling/src/lib.rs` — `now()` (cntvct_el0 via inline asm), `timed()`, tests
@@ -240,8 +240,61 @@ Known open items carried into Phase 8:
 - `render_gif::render_gif` commented out in main.rs — deferred from Phase 5
 - Occupancy analysis via Instruments/Metal GPU trace — requires full Xcode.app (deferred from Phase 5)
 
-Phase 8 artifacts (in progress):
-- `docs/planning/viewer-phase-8.md` — roadmap: shadow toggle (`.`), fog toggle (`,`), Visual Artifact Tolerance (`;`, 4 modes), LOD Distance (`'`, 4 modes), out-of-core tile streaming
+Phase 8 artifacts:
+- `docs/planning/viewer-phase-8.md` — Part 0 data source plan + viewer roadmap (Item 5 struck through)
+- `docs/planning/multi-tile-multiple-resolution-load.md` — 5-step multi-tile multi-resolution plan
+- `docs/sessions/phase-8/main-session.md` — session log (2026-04-20, 2026-04-25 ×3)
+- `crates/dem_io/src/geotiff.rs` — `geotiff_pixel_scale()`, `parse_geotiff_epsg_3035()`, `laea_epsg3035_inverse()`; `Limits::unlimited()` in EPSG:3035 parser
+- `crates/dem_io/src/heightmap.rs` — `Heightmap` extended: `crs_origin_x`, `crs_origin_y`, `crs_epsg`
+- `crates/render_gpu/src/context.rs` — `required_limits: adapter.limits()` to unlock full hardware buffer sizes
+- `src/viewer/mod.rs` — auto-dispatch by pixel scale; `lcc_epsg31287()`, `laea_epsg3035()` forward projections; `latlon_to_tile_metres()` dispatching on `crs_epsg`; named camera position; shadow/fog/vat/lod toggles (`.`, `,`, `;`, `'` keys)
+- `src/viewer/hud_renderer.rs` — 5-line settings panel (AO + shadows + fog + quality + LOD); background rect sized to match
+- `crates/render_gpu/src/camera.rs` — `CameraUniforms` extended with `shadows_enabled`, `fog_enabled`, `vat_mode`, `lod_mode`
+- `crates/render_gpu/src/shader_texture.wgsl` — shadow/fog/vat/lod shader logic from uniform fields
+- DEM tiles: `hintertux_5m.tif`, `hintertux_18km_5m.tif`, `hintertux_8km_1m.tif` (EPSG:3035, 8001×8001)
+
+Phase 8 key facts:
+- EPSG:3035 LAEA Europe: FE=4321000, FN=3210000, lat0=52°N, lon0=10°E, GRS 1980; scale = metres directly
+- EPSG:31287 Austria Lambert: FE=FN=400000, lat0=47.5°N, lon0=13.333°E, Bessel 1841; 5m/pixel
+- wgpu default buffer binding limit 128 MB; fix: `adapter.limits()`; texture dimension limit 8192 px
+- `tiff` crate default memory limit: fix `Limits::unlimited()` for tiles > 128 MB
+- BEV DGM 5m NoData sentinel = 0.0 (safe: min Austrian elevation >> 0)
+- Hintertux centre: WGS84 47.076211°N 11.687592°E → EPSG:31287 (273605, 356962) → EPSG:3035 (4449262, 2663978)
+- `hintertux_8km_1m.tif` confirmed rendering correctly (8001×8001, EPSG:3035, 1m/px)
+- Out-of-bounds ray fix (remove bounds break, use `in_bounds` guard + 5× step): correct visually
+  but fps-prohibitive — reverted. Hard break is the right trade-off.
+- At 47°N: SRTM tiles are 111 km N-S × 76 km E-W; fog 60 km always overshoots E/W edges →
+  3×3 tile grid required; 10801 px assembled > wgpu 8192 limit → outer 8 tiles at half-res (5401 px)
+- wgpu does not expose VkSparseBinding or Metal sparse textures; software indirection is the only
+  option within the wgpu abstraction layer
+
+Phase 8 lessons:
+- GeoTIFF CRS diversity (EPSG:4326, 31287, 3035) requires per-CRS forward+inverse projections;
+  pixel-scale tag value distinguishes geographic (<0.1) from projected (≥1.0) at load time
+- wgpu resource limits have safe defaults far below hardware maximums; always request
+  `adapter.limits()` for production use with large data
+- Tile geometry at mid-latitudes is asymmetric: E-W width shrinks with cos(lat), making E/W
+  neighbours mandatory and N/S neighbours conditional on camera position within the tile
+- Half-resolution preprocessing for outer tiles is justified: detail beyond ~38 km is invisible
+  at 30m resolution and within the fog blend zone anyway
+- Software page tables are the correct abstraction when hardware sparse textures are unavailable;
+  the indirection cost is negligible compared to texture sample latency
+
+Known open items carried into Phase 9:
+- Multi-tile multi-resolution streaming — full plan in `docs/planning/multi-tile-multiple-resolution-load.md`
+  - Step 1: 30m 3×3 sliding window (download 8 surrounding Copernicus tiles first:
+    N46E010, N46E011, N46E012, N47E010, N47E012, N48E010, N48E011, N48E012)
+  - Step 2: windowed GeoTIFF extraction (in-process `-projwin`)
+  - Step 3: per-tier background loader threads with coarse fallback
+  - Step 4: multi-source-tile stitching
+  - Step 5: multi-tier shader with lerp blend zones
+- GPU timestamp queries — deferred (low priority, carried from Phase 7)
+- Mipmap LOD fps measurement on GTX 1650 — carried from Phase 7
+- GPU shadow via parallel prefix scan — deferred from Phase 5
+- `render_gif::render_gif` commented out in main.rs — deferred from Phase 5
+
+Phase 9 artifacts (in progress):
+- `docs/sessions/phase-9/main-session.md` — session log
 
 Known open items from Phase 4:
 - Supersampled ray optimization considered but not implemented: march 1 reference ray, approximate 3 neighbor heights via `h ≈ h_center + grad_x * Δcol + grad_y * Δrow` (using Phase 2 normal map). Would reduce gather 4→1 per step. Breaks at sharp discrete peaks.

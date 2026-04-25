@@ -2,7 +2,7 @@ use crate::Heightmap;
 use crate::aligned::AlignedBuffer;
 
 pub struct TiledHeightmap {
-    tiles: AlignedBuffer, // tile-organised data (all tiles concatenated)
+    tiles: AlignedBuffer<f32>, // tile-organised data (all tiles concatenated)
     pub rows: usize,      // total rows (same as Heightmap)
     pub cols: usize,      // total cols
     pub tile_size: usize, // e.g. 128
@@ -17,7 +17,7 @@ pub struct TiledHeightmap {
 }
 
 impl TiledHeightmap {
-    pub fn tiles(&self) -> &[i16] {
+    pub fn tiles(&self) -> &[f32] {
         &self.tiles
     }
 
@@ -26,8 +26,7 @@ impl TiledHeightmap {
         let tile_cols = (hm.cols + tile_size - 1) / tile_size;
 
         let total_elements = tile_rows * tile_cols * tile_size * tile_size;
-        // let mut tiles = vec![0i16; total_elements];
-        let mut tiles = AlignedBuffer::new(total_elements, 4096);
+        let mut tiles = AlignedBuffer::<f32>::new(total_elements, 4096);
 
         for tr in 0..tile_rows {
             for tc in 0..tile_cols {
@@ -69,7 +68,7 @@ impl TiledHeightmap {
     }
 
     #[inline(always)]
-    pub fn get(&self, row: usize, col: usize) -> i16 {
+    pub fn get(&self, row: usize, col: usize) -> f32 {
         let tile_r = row / self.tile_size;
         let tile_c = col / self.tile_size;
         let local_r = row % self.tile_size;

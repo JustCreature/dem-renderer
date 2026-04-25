@@ -185,21 +185,21 @@ fn build_vertices(width: u32, height: u32) -> [f32; 36] {
         height as f32 - 4.0, // (x1, y1)
         0.0,
         height as f32 - 4.0, // (x0, y1)
-        //For the settings box (x0=width-296, y0=4, x1=width-4, y1=36):
+        //For the settings box (x0=width-296, y0=4, x1=width-4, y1=116):
         // triangle 1
         width as f32 - 296.0,
         4.0, // (x0, y0)
         width as f32 - 4.0,
         4.0, // (x1, y0)
         width as f32 - 4.0,
-        36.0, // (x1, y1)
+        116.0, // (x1, y1)
         // triangle 2
         width as f32 - 296.0,
         4.0,
         width as f32 - 4.0,
-        36.0,
+        116.0,
         width as f32 - 296.0,
-        36.0,
+        116.0,
     ]
 }
 
@@ -509,10 +509,10 @@ impl HudRenderer {
         );
         let mut settings_buffer: glyphon::Buffer =
             glyphon::Buffer::new(&mut font_system, glyphon::Metrics::new(18.0, 20.0));
-        settings_buffer.set_size(&mut font_system, Some(292.0), Some(40.0));
+        settings_buffer.set_size(&mut font_system, Some(292.0), Some(100.0));
         settings_buffer.set_text(
             &mut font_system,
-            "AO: Off             (Press / to change)",
+            "AO: Off          (Press / to change)\nShadows: On      (Press . to toggle)\nFog: On          (Press , to toggle)\nQuality: High    (Press ; to change)\nLOD: Mid         (Press ' to change)",
             &glyphon::Attrs::new(),
             glyphon::Shaping::Basic,
             Some(glyphon::cosmic_text::Align::Right),
@@ -584,6 +584,10 @@ impl HudRenderer {
         sim_day: i32,
         sim_hour: f32,
         ao_mode: u32,
+        shadows_enabled: bool,
+        fog_enabled: bool,
+        vat_mode: u32,
+        lod_mode: u32,
     ) {
         self.sim_day = sim_day;
         self.sim_hour = sim_hour;
@@ -619,15 +623,41 @@ impl HudRenderer {
         );
         let ao_label = match ao_mode {
             0 => "AO: Off          (Press / to change)",
-            1 => "AO: SSAO ×8      (Press / to change)",
-            2 => "AO: SSAO ×16     (Press / to change)",
-            3 => "AO: HBAO ×4      (Press / to change)",
-            4 => "AO: HBAO ×8      (Press / to change)",
+            1 => "AO: SSAO x8      (Press / to change)",
+            2 => "AO: SSAO x16     (Press / to change)",
+            3 => "AO: HBAO x4      (Press / to change)",
+            4 => "AO: HBAO x8      (Press / to change)",
             _ => "AO: True Hemi    (Press / to change)",
         };
+        let shadows_label = if shadows_enabled {
+            "Shadows: On      (Press . to toggle)"
+        } else {
+            "Shadows: Off     (Press . to toggle)"
+        };
+        let fog_label = if fog_enabled {
+            "Fog: On          (Press , to toggle)"
+        } else {
+            "Fog: Off         (Press , to toggle)"
+        };
+        let vat_label = match vat_mode {
+            0 => "Quality: Ultra   (Press ; to change)",
+            1 => "Quality: High    (Press ; to change)",
+            2 => "Quality: Mid     (Press ; to change)",
+            _ => "Quality: Low     (Press ; to change)",
+        };
+        let lod_label = match lod_mode {
+            0 => "LOD: Ultra       (Press ' to change)",
+            1 => "LOD: High        (Press ' to change)",
+            2 => "LOD: Mid         (Press ' to change)",
+            _ => "LOD: Low         (Press ' to change)",
+        };
+        let settings_text = format!(
+            "{}\n{}\n{}\n{}\n{}",
+            ao_label, shadows_label, fog_label, vat_label, lod_label
+        );
         self.settings_buffer.set_text(
             &mut self.font_system,
-            ao_label,
+            &settings_text,
             &glyphon::Attrs::new(),
             glyphon::Shaping::Basic,
             Some(glyphon::cosmic_text::Align::Right),
