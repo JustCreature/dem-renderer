@@ -2,6 +2,71 @@
 
 ---
 
+## 2026-04-25
+
+### What we worked on
+
+More DEM tile extraction and viewer quality-of-life improvements. Confirmed `hintertux_8km_1m.tif`
+renders correctly. Extracted additional 1m LiDAR tiles. Added camera-out-of-bounds behaviour
+(tried shader fix, reverted due to fps cost — kept original hard break).
+
+### Codebase changes this session
+
+#### `src/viewer/mod.rs`
+- `geotiff_is_projected` replaced by `geotiff_pixel_scale` — returns raw scale value so
+  dispatcher can distinguish EPSG:3035 (scale=1.0) from EPSG:31287 (scale≥5.0) from geographic
+- Auto-dispatch: `scale >= 5.0` → `parse_geotiff_epsg_31287`; `scale >= 1.0` → `parse_geotiff_epsg_3035`;
+  else → `parse_geotiff`
+- Camera named position updated: 47°04'34.36"N 11°41'15.33"E, 3258m
+
+#### `crates/render_gpu/src/shader_texture.wgsl`
+- Tried replacing bounds `break` with `in_bounds` guard + 5× step outside tile — terrain stays
+  visible when camera exits map. Reverted: every out-of-bounds ray now marches to `t_max`,
+  fps drop too large. Original hard break restored.
+
+### Tiles extracted this session
+
+| File | Source | CRS | Size | Resolution |
+|---|---|---|---|---|
+| `tiles/big_size/hintertux_8km_1m.tif` | BEV 1m LiDAR | EPSG:3035 | 8001×8001 | 1m |
+| `tiles/big_size/hintertux_shifted_8km_1m.tif` | BEV 1m LiDAR | EPSG:3035 | 8001×8001 | 1m (4km south) |
+| `tiles/big_size/salz_east_to_tux_base_8km_1m.tif` | BEV 1m LiDAR (east tile) | EPSG:3035 | 8001×8001 | 1m |
+
+GDAL commands:
+```sh
+# 8km patch, original position
+gdal_translate -projwin 4442000 2667978 4450000 2659978 -of GTiff \
+  tiles/big_size/1m_innsbruck_area/CRS3035RES50000mN2650000E4400000.tif \
+  tiles/big_size/hintertux_8km_1m.tif
+
+# 8km patch, shifted 4km south
+gdal_translate -projwin 4442000 2663978 4450000 2655978 -of GTiff \
+  tiles/big_size/1m_innsbruck_area/CRS3035RES50000mN2650000E4400000.tif \
+  tiles/big_size/hintertux_shifted_8km_1m.tif
+
+# 8km patch from eastern neighbour tile (Salzburg south)
+gdal_translate -projwin 4450000 2667978 4458000 2659978 -of GTiff \
+  tiles/big_size/1m_salzburg_south_area/CRS3035RES50000mN2650000E4450000.tif \
+  tiles/big_size/salz_east_to_tux_base_8km_1m.tif
+```
+
+### Key facts / lessons
+
+- wgpu texture dimension limit 8192: 10001×10001 fails, 8001×8001 passes
+- Out-of-bounds ray fix (skip bounds break, use `in_bounds` guard): visually correct but
+  fps-prohibitive — all out-of-bounds rays march to t_max with no early exit. Hard break
+  is the correct trade-off when camera stays near tile boundaries.
+- Camera named position (WGS84) → `latlon_to_tile_metres` dispatches on `crs_epsg` field,
+  works correctly for all three CRS types (4326, 31287, 3035)
+
+### Open items
+
+- Viewer feature items from roadmap still pending: shadow toggle (`.`), fog toggle (`,`),
+  VAT presets (`;`), LOD presets (`'`)
+- Measure normals/shadow/AO startup time for 8001×8001 vs 3601×3601
+
+---
+
 ## 2026-04-20
 
 ### What we worked on

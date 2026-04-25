@@ -257,8 +257,19 @@ Phase 8 key facts (2026-04-20):
 - BEV DGM 5m NoData sentinel = 0.0 (safe: min Austrian elevation >> 0)
 - Hintertux centre: WGS84 47.076211°N 11.687592°E → EPSG:31287 (273605, 356962) → EPSG:3035 (4449262, 2663978)
 
+Phase 8 key facts (2026-04-25):
+- `hintertux_8km_1m.tif` confirmed rendering correctly (8001×8001, EPSG:3035, 1m/px)
+- Out-of-bounds ray fix (remove bounds break, use `in_bounds` guard + 5× step): correct visually
+  but fps-prohibitive — reverted. Hard break is the right trade-off.
+- Tiles extracted: `hintertux_8km_1m.tif`, `hintertux_shifted_8km_1m.tif` (4km south),
+  `salz_east_to_tux_base_8km_1m.tif` (eastern neighbour tile, Salzburg south)
+
+Phase 8 Part 0 (higher-resolution DEM data sources): COMPLETE.
+All four data source tiers explored: GLO-30 (30m), BEV DGM 5m (EPSG:31287), BEV 1m LiDAR EPSG:3035.
+GeoTIFF pipeline supports three CRS types with correct forward/inverse projections.
+Ready to continue with viewer feature items.
+
 Phase 8 open items:
-- Confirm `hintertux_8km_1m.tif` renders correctly (session ended before verification)
 - Measure normals/shadow/AO startup time for 8001×8001 vs 3601×3601
 - Viewer feature items from roadmap: shadow toggle (`.`), fog toggle (`,`), VAT presets (`;`), LOD presets (`'`)
 
