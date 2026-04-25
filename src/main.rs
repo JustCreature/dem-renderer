@@ -1,11 +1,12 @@
 mod benchmarks;
-mod frame_render_cpu;
+mod frame_render_final;
+mod render_gif;
 mod utils;
 
 use std::path::Path;
 
 use crate::benchmarks::*;
-use frame_render_cpu::render_3d_pic_cpu;
+use frame_render_final::{render_3d_pic_cpu, render_3d_pic_gpu};
 use utils::*;
 
 use dem_io::{Heightmap, TiledHeightmap};
@@ -114,6 +115,20 @@ fn main() {
     let evict: Vec<i32> = (0..100 * 1024 * 1024).map(|i| i as i32).collect();
     std::hint::black_box(evict);
 
+    let gpu_ctx = render_gpu::GpuContext::new();
+
+    let (ticks, normal_map_gpu) = profiling::timed("compute_normals_gpu", || {
+        render_gpu::compute_normals_gpu(&gpu_ctx, &heightmap)
+    });
+    println!(
+        "compute_normals_gpu: {:.2}s",
+        ticks as f64 / counter_frequency()
+    );
+
+    // evict heightmap from cach
+    let evict: Vec<i32> = (0..100 * 1024 * 1024).map(|i| i as i32).collect();
+    std::hint::black_box(evict);
+
     // -- SHADOWS
     println!("---------- SHADOWS ----------");
 
@@ -181,6 +196,18 @@ fn main() {
     let evict: Vec<i32> = (0..100 * 1024 * 1024).map(|i| i as i32).collect();
     std::hint::black_box(evict);
 
+    let (ticks, _shadow_mask_gpu) = profiling::timed("compute_shadow_gpu", || {
+        render_gpu::compute_shadow_gpu(&gpu_ctx, &heightmap, sun_elevation_rad_const)
+    });
+    println!(
+        "compute_shadow_gpu: {:.2}s",
+        ticks as f64 / counter_frequency()
+    );
+
+    // evict heightmap from cach
+    let evict: Vec<i32> = (0..100 * 1024 * 1024).map(|i| i as i32).collect();
+    std::hint::black_box(evict);
+
     // -- Camera CPU Renderer
 
     println!("---------- Camera CPU Renderer ----------");
@@ -191,8 +218,8 @@ fn main() {
     let dx = heightmap.dx_meters as f32;
     let dy = heightmap.dy_meters as f32;
 
-    let pic_width = 2000;
-    let pic_height = 900;
+    let mut pic_width = 2000;
+    let mut pic_height = 900;
 
     // // look at tux
     // let cam = render_cpu::Camera::new(
@@ -237,7 +264,7 @@ fn main() {
     // let pic_width = 2000;
     // let pic_height = 900;
 
-    let cam = render_cpu::Camera::new(
+    let mut cam = render_cpu::Camera::new(
         [cam_col * dx, cam_row * dy, 3341.0],
         [cam_col * dx + 19_627.0, cam_row * dy - 1_718.0, -131.0],
         70.0,
@@ -268,30 +295,6 @@ fn main() {
     println!("neon hits: {:?}", hits);
 
     let sun_dir = [0.4f32, 0.5f32, 0.7f32]; // [east, south, up] — morning sun NE
-
-    let (ticks, fb) = profiling::timed("render_cpu", || {
-        render_cpu::render(
-            &cam,
-            &heightmap,
-            &normal_map,
-            &shadow_mask,
-            sun_dir,
-            pic_width,
-            pic_height,
-            heightmap.dx_meters as f32 / 0.8,
-            200_000.0,
-        )
-    });
-    println!(
-        "render_cpu {}x{}: {:.2}s",
-        pic_width,
-        pic_height,
-        ticks as f64 / counter_frequency()
-    );
-    image::RgbImage::from_raw(pic_width, pic_height, fb)
-        .unwrap()
-        .save("artifacts/render_cpu.png")
-        .unwrap();
 
     let (ticks, fb) = profiling::timed("render_cpu_parallel", || {
         render_cpu::render_par(
@@ -368,4 +371,139 @@ fn main() {
         .unwrap();
 
     render_3d_pic_cpu(tile_path);
+    render_3d_pic_gpu(tile_path);
+
+    pic_width = 8000;
+    pic_height = 2667;
+    cam = render_cpu::Camera::new(
+        [cam_col * dx, cam_row * dy, 3341.0],
+        [cam_col * dx + 19_627.0, cam_row * dy - 1_718.0, -131.0],
+        100.0,
+        pic_width as f32 / pic_height as f32,
+    );
+    let step_size: f32 = 1.0;
+
+    let (ticks, fb) = profiling::timed("render_cpu", || {
+        render_cpu::render_par(
+            &cam,
+            &heightmap,
+            &normal_map,
+            &shadow_mask,
+            sun_dir,
+            pic_width,
+            pic_height,
+            heightmap.dx_meters as f32 / step_size,
+            200_000.0,
+        )
+    });
+    println!(
+        "render_cpu BIG PARALLEL {}x{}: {:.2}s",
+        pic_width,
+        pic_height,
+        ticks as f64 / counter_frequency()
+    );
+    image::RgbImage::from_raw(pic_width, pic_height, fb)
+        .unwrap()
+        .save("artifacts/render_cpu.png")
+        .unwrap();
+
+    // -- Camera GPU Renderer
+
+    println!("---------- Camera GPU Renderer ----------");
+
+    let (ticks, fb) = profiling::timed("render_gpu", || {
+        render_gpu::render_gpu_buffer(
+            &gpu_ctx,
+            [cam_col * dx, cam_row * dy, 3341.0],
+            [cam_col * dx + 19_627.0, cam_row * dy - 1_718.0, -131.0],
+            100.0,
+            pic_width as f32 / pic_height as f32,
+            &heightmap,
+            &normal_map,
+            &shadow_mask,
+            sun_dir,
+            pic_width,
+            pic_height,
+            heightmap.dx_meters as f32 / step_size,
+            200_000.0,
+        )
+    });
+    println!(
+        "render_gpu BIG {}x{}: {:.2}s",
+        pic_width,
+        pic_height,
+        ticks as f64 / counter_frequency()
+    );
+
+    image::RgbaImage::from_raw(pic_width, pic_height, fb)
+        .unwrap()
+        .save("artifacts/render_gpu.png")
+        .unwrap();
+
+    let (ticks, fb) = profiling::timed("render_gpu[texture]", || {
+        render_gpu::render_gpu_texture(
+            &gpu_ctx,
+            [cam_col * dx, cam_row * dy, 3341.0],
+            [cam_col * dx + 19_627.0, cam_row * dy - 1_718.0, -131.0],
+            100.0,
+            pic_width as f32 / pic_height as f32,
+            &heightmap,
+            &normal_map,
+            &shadow_mask,
+            sun_dir,
+            pic_width,
+            pic_height,
+            heightmap.dx_meters as f32 / step_size,
+            200_000.0,
+        )
+    });
+    println!(
+        "render_gpu BIG [texture] {}x{}: {:.2}s",
+        pic_width,
+        pic_height,
+        ticks as f64 / counter_frequency()
+    );
+
+    image::RgbaImage::from_raw(pic_width, pic_height, fb)
+        .unwrap()
+        .save("artifacts/render_gpu[texture].png")
+        .unwrap();
+
+    let (ticks, fb) = profiling::timed("render_gpu[combined]", || {
+        render_gpu::render_gpu_combined(
+            &gpu_ctx,
+            &heightmap,
+            &shadow_mask,
+            [cam_col * dx, cam_row * dy, 3341.0],
+            [cam_col * dx + 19_627.0, cam_row * dy - 1_718.0, -131.0],
+            100.0,
+            pic_width as f32 / pic_height as f32,
+            sun_dir,
+            pic_width,
+            pic_height,
+            heightmap.dx_meters as f32 / step_size,
+            200_000.0,
+        )
+    });
+    println!(
+        "render_gpu BIG [combined] {}x{}: {:.2}s",
+        pic_width,
+        pic_height,
+        ticks as f64 / counter_frequency()
+    );
+    image::RgbaImage::from_raw(pic_width, pic_height, fb)
+        .unwrap()
+        .save("artifacts/render_gpu[combined].png")
+        .unwrap();
+
+    // -- Multi-frame benchmark
+    println!("---------- Multi-frame benchmark ----------");
+    // // commeted out since it takes about 17 seconds to run
+    // benchmark_multi_frame_cpu(&heightmap, &normal_map, &shadow_mask);
+    benchmark_multi_frame_gpu_separate(&gpu_ctx, &heightmap, &normal_map, &shadow_mask);
+    benchmark_multi_frame_gpu_combined(&gpu_ctx, &heightmap, &shadow_mask);
+    // GpuScene takes ctx by value (owns it) — create a dedicated one
+    benchmark_multi_frame_gpu_scene(render_gpu::GpuContext::new(), &heightmap, &shadow_mask);
+
+    // render_gif::render_gif(tile_path);
 }
