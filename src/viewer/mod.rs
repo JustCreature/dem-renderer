@@ -71,6 +71,12 @@ struct Viewer {
     tile_tx: mpsc::SyncSender<(i32, i32, f64, f64)>,
     tile_rx: mpsc::Receiver<TileBundle>,
     tile_loading: bool,
+    // drift-based AO recompute
+    ao_tx: mpsc::SyncSender<(f64, f64)>,
+    ao_rx: mpsc::Receiver<Vec<f32>>,
+    ao_computing: bool,
+    ao_last_lat: f64,
+    ao_last_lon: f64,
 }
 
 impl ApplicationHandler for Viewer {
@@ -270,6 +276,21 @@ impl ApplicationHandler for Viewer {
                         self.shadow_tx = new_stx;
                         self.shadow_rx = new_srx;
                         self.shadow_computing = false;
+                        // respawn AO worker with new heightmap
+                        let (new_atx, new_ao_wrx) = mpsc::sync_channel::<(f64, f64)>(1);
+                        let (new_ao_wtx, new_arx) = mpsc::channel::<Vec<f32>>();
+                        let hm_ao = Arc::clone(&self.hm);
+                        std::thread::spawn(move || {
+                            while let Ok((lat, lon)) = new_ao_wrx.recv() {
+                                let ao = compute_ao_cropped(&hm_ao, lat, lon);
+                                if new_ao_wtx.send(ao).is_err() {
+                                    break;
+                                }
+                            }
+                        });
+                        self.ao_tx = new_atx;
+                        self.ao_rx = new_arx;
+                        self.ao_computing = false;
                         // update stored centre from new cam position
                         let (lat2, lon2) = tile_meters_to_latlon_epsg_4326(
                             self.cam_pos[0],
@@ -278,6 +299,9 @@ impl ApplicationHandler for Viewer {
                         );
                         self.centre_lat = lat2.floor() as i32;
                         self.centre_lon = lon2.floor() as i32;
+                        // force AO recompute by placing last position far away
+                        self.ao_last_lat = lat2 - 1.0;
+                        self.ao_last_lon = lon2 - 1.0;
                         self.tile_loading = false;
                         println!(
                             "tile slide complete: N{}E{}",
@@ -341,6 +365,31 @@ impl ApplicationHandler for Viewer {
                         self.shadow_computing = true;
                         self.last_shadow_az = azimuth;
                         self.last_shadow_el = elevation;
+                    }
+                }
+
+                // drift-based AO recompute (EPSG:4326 tiles only — 5 km threshold)
+                if self.hm.crs_epsg == 4326 {
+                    if let Ok(new_ao) = self.ao_rx.try_recv() {
+                        self.scene.as_ref().unwrap().update_ao(&new_ao);
+                        self.ao_computing = false;
+                    }
+                    if !self.ao_computing {
+                        let (lat, lon) = tile_meters_to_latlon_epsg_4326(
+                            self.cam_pos[0],
+                            self.cam_pos[1],
+                            &self.hm,
+                        );
+                        if (lat - self.ao_last_lat).abs() > 0.045
+                            || (lon - self.ao_last_lon).abs() > 0.045
+                        {
+                            if self.ao_tx.try_send((lat, lon)).is_ok() {
+                                self.ao_computing = true;
+                                self.ao_last_lat = lat;
+                                self.ao_last_lon = lon;
+                                println!("AO recompute triggered at N{lat:.3} E{lon:.3}");
+                            }
+                        }
                     }
                 }
 
@@ -722,6 +771,19 @@ pub fn run(tile_path: &Path, width: u32, height: u32, vsync: bool) {
         }
     });
 
+    // AO worker: capacity-1 sync channel; recomputes on camera drift
+    let (ao_tx, ao_worker_rx) = mpsc::sync_channel::<(f64, f64)>(1);
+    let (ao_worker_tx, ao_rx) = mpsc::channel::<Vec<f32>>();
+    let hm_ao = Arc::clone(&hm);
+    std::thread::spawn(move || {
+        while let Ok((lat, lon)) = ao_worker_rx.recv() {
+            let ao = compute_ao_cropped(&hm_ao, lat, lon);
+            if ao_worker_tx.send(ao).is_err() {
+                break;
+            }
+        }
+    });
+
     let event_loop = EventLoop::new().expect("error creating winit event loop");
 
     let init_cam_pos = latlon_to_tile_metres(CAM_LAT, CAM_LON, &hm)
@@ -808,6 +870,11 @@ pub fn run(tile_path: &Path, width: u32, height: u32, vsync: bool) {
         tile_tx,
         tile_rx,
         tile_loading: false,
+        ao_tx,
+        ao_rx,
+        ao_computing: false,
+        ao_last_lat: CAM_LAT,
+        ao_last_lon: CAM_LON,
     };
     event_loop
         .run_app(&mut viewer)

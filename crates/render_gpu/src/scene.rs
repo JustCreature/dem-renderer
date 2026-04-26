@@ -690,6 +690,29 @@ impl GpuScene {
     }
 
     /// Re-upload shadow mask (call when sun direction changes).
+    pub fn update_ao(&self, ao_data_mask: &[f32]) {
+        let ao_data: Vec<u8> = ao_data_mask.iter().map(|&v| (v * 255.0) as u8).collect();
+        self.gpu_ctx.queue.write_texture(
+            wgpu::TexelCopyTextureInfo {
+                texture: &self._ao_texture,
+                mip_level: 0,
+                origin: wgpu::Origin3d::ZERO,
+                aspect: wgpu::TextureAspect::All,
+            },
+            bytemuck::cast_slice(&ao_data),
+            wgpu::TexelCopyBufferLayout {
+                offset: 0,
+                bytes_per_row: Some(self.hm_cols),
+                rows_per_image: None,
+            },
+            wgpu::Extent3d {
+                width: self.hm_cols,
+                height: self.hm_rows,
+                depth_or_array_layers: 1,
+            },
+        );
+    }
+
     pub fn update_shadow(&self, shadow_mask: &ShadowMask) {
         self.gpu_ctx.queue.write_buffer(
             &self.shadow_buf,
