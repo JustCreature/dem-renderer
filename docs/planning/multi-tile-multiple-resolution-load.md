@@ -164,6 +164,20 @@ re-extracts its window when the camera drifts beyond the reload threshold.
 --reload-fraction <0..1>  default: 0.4
 ```
 
+### AO radius optimisation (implement here)
+
+AO (`compute_ao_true_hemi`) on the full 10800×10800 assembled grid takes ~7.8s on Intel Mac
+(116M pixels × 16 DDA sweeps). Beyond ~10km AO is imperceptible at 30m resolution.
+
+When wiring up the background loader, limit AO to a cropped window around the camera:
+1. Add `crop(hm, row_start, col_start, rows, cols) -> Heightmap` to `dem_io::grid`
+2. Crop a ~10km radius (~667×667 px at 30m/px) centred on the camera position
+3. Run `compute_ao_true_hemi` on the cropped `Heightmap`
+4. Embed the result into a full-size AO buffer (rest filled with `1.0`)
+5. On each background reload, recompute AO for the new camera-centred crop
+
+Expected speedup: 116M → 0.4M pixels = ~290×, dropping AO from ~7.8s to ~27ms per reload.
+
 ### What to measure
 
 - Latency from camera crossing reload threshold to new tile visible on screen.
@@ -249,3 +263,6 @@ Each step produces a working, measurable result before the next begins.
   chunk-based LRU cache from the old Plan 5. Not needed until tile dimensions exceed 8192.
 - GPU-side tile cache (hardware sparse textures): wgpu does not expose VkSparseBinding or
   Metal sparse textures; deferred until wgpu adds support or we drop to raw Metal/Vulkan HAL.
+- Texture dimension fallback: if `max_texture_dimension_2d < 10800` (e.g. Asus Pentium N3700
+  with integrated GPU), downsample the assembled 10800×10800 buffer to 8192×8192 using a box
+  filter before upload. Loses ~25% linear resolution but renders correctly on all hardware.

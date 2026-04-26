@@ -2,7 +2,7 @@ mod hud_renderer;
 use std::sync::mpsc;
 use std::{path::Path, sync::Arc};
 
-use dem_io::Heightmap;
+use dem_io::{load_grid, Heightmap};
 use render_gpu::{GpuContext, GpuScene};
 use terrain::ShadowMask;
 
@@ -694,6 +694,18 @@ fn sun_position(lat_rad: f32, day: i32, hour: f32) -> (f32, f32) {
     (azimuth, elevation)
 }
 
+fn parse_copernicus_lat_lon(tile_path: &Path) -> Option<(i32, i32)> {
+    let dir_name = tile_path.parent()?.file_name()?.to_str()?;
+    // e.g. "Copernicus_DSM_COG_10_N47_00_E011_00_DEM"
+    let parts: Vec<&str> = dir_name.split('_').collect();
+    // parts[4] = "N47", parts[6] = "E011"
+    let lat_str = parts.get(4)?;
+    let lon_str = parts.get(6)?;
+    let lat: i32 = lat_str.strip_prefix('N')?.parse().ok()?;
+    let lon: i32 = lon_str.strip_prefix('E')?.parse().ok()?;
+    Some((lat, lon))
+}
+
 fn prepare_scene(tile_path: &Path, width: u32, height: u32) -> (GpuScene, Arc<Heightmap>, f32) {
     let dem_format = tile_path
         .extension()
@@ -714,7 +726,23 @@ fn prepare_scene(tile_path: &Path, width: u32, height: u32) -> (GpuScene, Arc<He
         } else if scale >= 1.0 {
             dem_io::parse_geotiff_epsg_3035(tile_path) // EPSG:3035 LAEA Europe (1m)
         } else {
-            dem_io::parse_geotiff(tile_path) // EPSG:4326 geographic (GLO-30 etc.)
+            {
+                let t = std::time::Instant::now();
+                let tiles_dir = tile_path
+                    .parent()
+                    .and_then(|p| p.parent())
+                    .unwrap_or(Path::new("tiles"));
+                let (centre_lat, centre_lon) =
+                    parse_copernicus_lat_lon(tile_path).unwrap_or((47, 11));
+                let hm = load_grid(
+                    tiles_dir,
+                    centre_lat,
+                    centre_lon,
+                    |p| dem_io::parse_geotiff(p).ok(),
+                );
+                println!("load_grid: {:.2?}", t.elapsed());
+                Ok(hm)
+            } // EPSG:4326 geographic (GLO-30 etc.)
         };
         match result {
             Ok(hm) => hm,
@@ -727,19 +755,25 @@ fn prepare_scene(tile_path: &Path, width: u32, height: u32) -> (GpuScene, Arc<He
         panic!("DEM format is not supported {:?}", dem_format)
     };
 
+    let t0 = std::time::Instant::now();
     let normal_map = terrain::compute_normals_vector_par(&hm);
+    println!("normals:  {:.2?}", t0.elapsed());
 
     // tile centre latitude — origin_lat is north edge of row 0
     let center_lat = hm.origin_lat - (hm.rows as f64 / 2.0) * hm.dy_deg.abs();
     let lat_rad = (center_lat as f32).to_radians();
 
     let (init_az, init_el) = sun_position(lat_rad, 172, 10.0);
+    let t1 = std::time::Instant::now();
     let shadow_mask: ShadowMask =
         terrain::compute_shadow_vector_par_with_azimuth(&hm, init_az, init_el, 200.0);
+    println!("shadows:  {:.2?}", t1.elapsed());
 
     // AO compute, the higher the ray_elevation_rad the less pronounced the effect (less darkening)
+    let t2 = std::time::Instant::now();
     let ao_data_mask: Vec<f32> =
         terrain::compute_ao_true_hemi(&hm, 16, 10.0f32.to_radians(), 200.0);
+    println!("ao:       {:.2?}", t2.elapsed());
 
     let gpu_ctx: GpuContext = GpuContext::new();
     let hm = Arc::new(hm);

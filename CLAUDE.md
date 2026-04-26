@@ -295,6 +295,18 @@ Known open items carried into Phase 9:
 
 Phase 9 artifacts (in progress):
 - `docs/sessions/phase-9/main-session.md` — session log
+- `crates/dem_io/src/grid.rs` — `assemble_grid`, `load_grid<F>`, `tile_path`; 3×3 Copernicus GLO-30 grid assembly
+- `src/viewer/mod.rs` — `parse_copernicus_lat_lon()`: derives centre lat/lon from tile directory name; `load_grid` wired into `prepare_scene`; startup timing instrumentation
+- `docs/planning/multi-tile-multiple-resolution-load.md` — AO radius optimisation note added to Step 3; texture dimension fallback added to Open Items
+
+Phase 9 key numbers so far (Intel Mac, 10800×10800 assembled grid, 2026-04-25):
+- load_grid (9 × DEFLATE COG from disk): 4.52s
+- normals (parallel): 185ms
+- shadows (parallel): 525ms
+- AO (16-azimuth DDA, full grid): 7.81s — dominates; deferred optimisation to Step 3
+- Tiles: 3600×3600 pixel-is-area, pixel centres at ±0.5/3600° from integer degree boundary
+- Adjacent tiles abut perfectly — 1/3600° spacing across boundary, simple concatenation
+- Rendering verified correct: no seam artifacts, corner cases work, shader UV already dynamic
 
 Known open items from Phase 4:
 - Supersampled ray optimization considered but not implemented: march 1 reference ray, approximate 3 neighbor heights via `h ≈ h_center + grad_x * Δcol + grad_y * Δrow` (using Phase 2 normal map). Would reduce gather 4→1 per step. Breaks at sharp discrete peaks.
