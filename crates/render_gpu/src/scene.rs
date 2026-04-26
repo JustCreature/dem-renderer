@@ -19,6 +19,7 @@ pub struct GpuScene {
     _ny_buf: wgpu::Buffer,
     _nz_buf: wgpu::Buffer,
     // AO
+    _ao_texture: wgpu::Texture,
     _ao_view: wgpu::TextureView,
     _ao_sampler: wgpu::Sampler,
 
@@ -42,6 +43,59 @@ pub struct GpuScene {
     hm_rows: u32,
     dx_meters: f32,
     dy_meters: f32,
+}
+
+/// Generate mip levels 1..7 for a heightmap texture using a max filter.
+fn write_hm_mips(
+    queue: &wgpu::Queue,
+    texture: &wgpu::Texture,
+    base_data: &[half::f16],
+    cols: usize,
+    rows: usize,
+) {
+    let mut prev_data: Vec<half::f16> = base_data.to_vec();
+    let mut prev_w = cols;
+    let mut prev_h = rows;
+    for mip in 1u32..8u32 {
+        let w = (prev_w / 2).max(1);
+        let h = (prev_h / 2).max(1);
+        let mut mip_data: Vec<half::f16> = Vec::with_capacity(w * h);
+        for row in 0..h {
+            for col in 0..w {
+                let r0 = (row * 2).min(prev_h - 1);
+                let r1 = (row * 2 + 1).min(prev_h - 1);
+                let c0 = (col * 2).min(prev_w - 1);
+                let c1 = (col * 2 + 1).min(prev_w - 1);
+                let a = prev_data[r0 * prev_w + c0].to_f32();
+                let b = prev_data[r0 * prev_w + c1].to_f32();
+                let c = prev_data[r1 * prev_w + c0].to_f32();
+                let d = prev_data[r1 * prev_w + c1].to_f32();
+                mip_data.push(half::f16::from_f32(a.max(b).max(c).max(d)));
+            }
+        }
+        queue.write_texture(
+            wgpu::TexelCopyTextureInfo {
+                texture,
+                mip_level: mip,
+                origin: wgpu::Origin3d::ZERO,
+                aspect: wgpu::TextureAspect::All,
+            },
+            bytemuck::cast_slice(&mip_data),
+            wgpu::TexelCopyBufferLayout {
+                offset: 0,
+                bytes_per_row: Some(w as u32 * 2),
+                rows_per_image: None,
+            },
+            wgpu::Extent3d {
+                width: w as u32,
+                height: h as u32,
+                depth_or_array_layers: 1,
+            },
+        );
+        prev_data = mip_data;
+        prev_w = w;
+        prev_h = h;
+    }
 }
 
 impl GpuScene {
@@ -84,50 +138,7 @@ impl GpuScene {
                 depth_or_array_layers: 1,
             },
         );
-        // generate mip levels 1..7 with max filter (conservative — preserves peaks)
-        let mut prev_data: Vec<half::f16> = hm_data.clone();
-        let mut prev_w = hm.cols;
-        let mut prev_h = hm.rows;
-        for mip in 1u32..8u32 {
-            let w = (prev_w / 2).max(1);
-            let h = (prev_h / 2).max(1);
-            let mut mip_data: Vec<half::f16> = Vec::with_capacity(w * h);
-            for row in 0..h {
-                for col in 0..w {
-                    let r0 = (row * 2).min(prev_h - 1);
-                    let r1 = (row * 2 + 1).min(prev_h - 1);
-                    let c0 = (col * 2).min(prev_w - 1);
-                    let c1 = (col * 2 + 1).min(prev_w - 1);
-                    let a = prev_data[r0 * prev_w + c0].to_f32();
-                    let b = prev_data[r0 * prev_w + c1].to_f32();
-                    let c = prev_data[r1 * prev_w + c0].to_f32();
-                    let d = prev_data[r1 * prev_w + c1].to_f32();
-                    mip_data.push(half::f16::from_f32(a.max(b).max(c).max(d)));
-                }
-            }
-            gpu_ctx.queue.write_texture(
-                wgpu::TexelCopyTextureInfo {
-                    texture: &hm_texture,
-                    mip_level: mip,
-                    origin: wgpu::Origin3d::ZERO,
-                    aspect: wgpu::TextureAspect::All,
-                },
-                bytemuck::cast_slice(&mip_data),
-                wgpu::TexelCopyBufferLayout {
-                    offset: 0,
-                    bytes_per_row: Some(w as u32 * 2),
-                    rows_per_image: None,
-                },
-                wgpu::Extent3d {
-                    width: w as u32,
-                    height: h as u32,
-                    depth_or_array_layers: 1,
-                },
-            );
-            prev_data = mip_data;
-            prev_w = w;
-            prev_h = h;
-        }
+        write_hm_mips(&gpu_ctx.queue, &hm_texture, &hm_data, hm.cols, hm.rows);
 
         let hm_view = hm_texture.create_view(&wgpu::TextureViewDescriptor::default());
         let hm_sampler = gpu_ctx.device.create_sampler(&wgpu::SamplerDescriptor {
@@ -177,27 +188,27 @@ impl GpuScene {
             ..Default::default()
         });
 
-        // normals buffers — uploaded from CPU-computed NormalMap
+        // normals buffers — COPY_DST so update_heightmap can write_buffer
         let nx_buf = gpu_ctx
             .device
             .create_buffer_init(&wgpu::util::BufferInitDescriptor {
                 label: Some("nx"),
                 contents: bytemuck::cast_slice(&normal_map.nx),
-                usage: wgpu::BufferUsages::STORAGE,
+                usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
             });
         let ny_buf = gpu_ctx
             .device
             .create_buffer_init(&wgpu::util::BufferInitDescriptor {
                 label: Some("ny"),
                 contents: bytemuck::cast_slice(&normal_map.ny),
-                usage: wgpu::BufferUsages::STORAGE,
+                usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
             });
         let nz_buf = gpu_ctx
             .device
             .create_buffer_init(&wgpu::util::BufferInitDescriptor {
                 label: Some("nz"),
                 contents: bytemuck::cast_slice(&normal_map.nz),
-                usage: wgpu::BufferUsages::STORAGE,
+                usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
             });
 
         // shadow buffer (COPY_DST so update_shadow can write_buffer)
@@ -417,6 +428,7 @@ impl GpuScene {
             _nx_buf: nx_buf,
             _ny_buf: ny_buf,
             _nz_buf: nz_buf,
+            _ao_texture: ao_texture,
             _ao_view: ao_view,
             _ao_sampler: ao_sampler,
             shadow_buf,
@@ -595,12 +607,6 @@ impl GpuScene {
             .queue
             .write_buffer(&self.cam_buf, 0, bytemuck::bytes_of(&cam));
 
-        // let mut encoder =
-        //     self.gpu_ctx
-        //         .device
-        //         .create_command_encoder(&wgpu::CommandEncoderDescriptor {
-        //             label: Some("render_enc"),
-        //         });
         {
             let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
                 label: Some("render_pass"),
@@ -610,7 +616,6 @@ impl GpuScene {
             pass.set_bind_group(0, &self.render_bg, &[]);
             pass.dispatch_workgroups((self.width + 7) / 8, (self.height + 7) / 8, 1);
         }
-        // self.gpu_ctx.queue.submit([encoder.finish()]);
     }
 
     pub fn resize(&mut self, width: u32, height: u32) {
@@ -691,6 +696,80 @@ impl GpuScene {
             0,
             bytemuck::cast_slice(&shadow_mask.data),
         );
+    }
+
+    /// Re-upload heightmap, normals, and AO after a tile slide.
+    /// Existing GPU textures/buffers are reused in-place; bind group is unchanged.
+    pub fn update_heightmap(
+        &mut self,
+        hm: &Heightmap,
+        normal_map: &NormalMap,
+        ao_data_mask: &[f32],
+    ) {
+        let hm_data: Vec<half::f16> =
+            hm.data.iter().map(|&v| half::f16::from_f32(v)).collect();
+        self.gpu_ctx.queue.write_texture(
+            wgpu::TexelCopyTextureInfo {
+                texture: &self._hm_texture,
+                mip_level: 0,
+                origin: wgpu::Origin3d::ZERO,
+                aspect: wgpu::TextureAspect::All,
+            },
+            bytemuck::cast_slice(&hm_data),
+            wgpu::TexelCopyBufferLayout {
+                offset: 0,
+                bytes_per_row: Some(hm.cols as u32 * 2),
+                rows_per_image: None,
+            },
+            wgpu::Extent3d {
+                width: hm.cols as u32,
+                height: hm.rows as u32,
+                depth_or_array_layers: 1,
+            },
+        );
+        write_hm_mips(
+            &self.gpu_ctx.queue,
+            &self._hm_texture,
+            &hm_data,
+            hm.cols,
+            hm.rows,
+        );
+
+        self.gpu_ctx
+            .queue
+            .write_buffer(&self._nx_buf, 0, bytemuck::cast_slice(&normal_map.nx));
+        self.gpu_ctx
+            .queue
+            .write_buffer(&self._ny_buf, 0, bytemuck::cast_slice(&normal_map.ny));
+        self.gpu_ctx
+            .queue
+            .write_buffer(&self._nz_buf, 0, bytemuck::cast_slice(&normal_map.nz));
+
+        let ao_data: Vec<u8> = ao_data_mask.iter().map(|&v| (v * 255.0) as u8).collect();
+        self.gpu_ctx.queue.write_texture(
+            wgpu::TexelCopyTextureInfo {
+                texture: &self._ao_texture,
+                mip_level: 0,
+                origin: wgpu::Origin3d::ZERO,
+                aspect: wgpu::TextureAspect::All,
+            },
+            bytemuck::cast_slice(&ao_data),
+            wgpu::TexelCopyBufferLayout {
+                offset: 0,
+                bytes_per_row: Some(hm.cols as u32),
+                rows_per_image: None,
+            },
+            wgpu::Extent3d {
+                width: hm.cols as u32,
+                height: hm.rows as u32,
+                depth_or_array_layers: 1,
+            },
+        );
+
+        self.hm_cols = hm.cols as u32;
+        self.hm_rows = hm.rows as u32;
+        self.dx_meters = hm.dx_meters as f32;
+        self.dy_meters = hm.dy_meters as f32;
     }
 
     pub fn get_output_buffer(&self) -> &wgpu::Buffer {

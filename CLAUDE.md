@@ -295,18 +295,28 @@ Known open items carried into Phase 9:
 
 Phase 9 artifacts (in progress):
 - `docs/sessions/phase-9/main-session.md` — session log
-- `crates/dem_io/src/grid.rs` — `assemble_grid`, `load_grid<F>`, `tile_path`; 3×3 Copernicus GLO-30 grid assembly
-- `src/viewer/mod.rs` — `parse_copernicus_lat_lon()`: derives centre lat/lon from tile directory name; `load_grid` wired into `prepare_scene`; startup timing instrumentation
+- `crates/dem_io/src/grid.rs` — `assemble_grid`, `load_grid<F>`, `tile_path`, `crop`; 3×3 Copernicus GLO-30 grid assembly + in-memory crop
+- `crates/dem_io/src/lib.rs` — `crop` re-exported alongside `assemble_grid`, `load_grid`
+- `crates/render_gpu/src/scene.rs` — `_ao_texture` stored; normal buffers gain `COPY_DST`; `write_hm_mips` free function; `update_heightmap(&mut self, hm, normals, ao)` implemented
+- `src/viewer/mod.rs` — `parse_copernicus_lat_lon()`; `tile_meters_to_latlon_epsg_4326()`; `TileBundle`; background tile loader thread; per-frame crossing detection + cam_pos re-projection; shadow worker respawn on tile slide; `last_shadow_az/el` throttle (recompute only on ≥0.1° sun movement); dt fix (true inter-frame time); `compute_ao_cropped(hm, cam_lat, cam_lon)` free function; `AO_RADIUS_M = 20_000.0`; tile loader channel upgraded to `(i32, i32, f64, f64)`; `prepare_scene` takes `cam_lat, cam_lon`
 - `docs/planning/multi-tile-multiple-resolution-load.md` — AO radius optimisation note added to Step 3; texture dimension fallback added to Open Items
+- `docs/planning/tmp/crop_extract.md` — Step 2 design doc: crop + extract_window; tiff crate API; window/tile math; algorithm
+- `download_copernicus_tiles_30m.sh` — updated to 5×5 grid (lat 45–49, lon 9–13); skip-if-present check; printf zero-padding
 
-Phase 9 key numbers so far (Intel Mac, 10800×10800 assembled grid, 2026-04-25):
+Phase 9 key numbers so far (Intel Mac, 10800×10800 assembled grid, 2026-04-25 to 2026-04-26):
 - load_grid (9 × DEFLATE COG from disk): 4.52s
 - normals (parallel): 185ms
 - shadows (parallel): 525ms
-- AO (16-azimuth DDA, full grid): 7.81s — dominates; deferred optimisation to Step 3
+- AO full grid (16-azimuth DDA, 10800×10800): 7.81s
+- AO cropped (20km radius, ~1334×1334 px): 290ms — **27× speedup**; pixel reduction 116M → ~1.78M
 - Tiles: 3600×3600 pixel-is-area, pixel centres at ±0.5/3600° from integer degree boundary
 - Adjacent tiles abut perfectly — 1/3600° spacing across boundary, simple concatenation
 - Rendering verified correct: no seam artifacts, corner cases work, shader UV already dynamic
+- Sliding window: background tile loader thread; crossing detected via floor(lon/lat) change;
+  seamless cam_pos re-projection on slide; old shadow worker exits when sender dropped
+- Shadow recompute bug: was uploading 466 MB every ~0.5s; fixed with 0.1° movement threshold
+- AO staleness after tile slide: known limitation — AO crop centred at crossing position; camera
+  exits 20km window as it moves inward → shows 1.0 fill; fix is Step 3 drift-based recompute
 
 Known open items from Phase 4:
 - Supersampled ray optimization considered but not implemented: march 1 reference ray, approximate 3 neighbor heights via `h ≈ h_center + grad_x * Δcol + grad_y * Δrow` (using Phase 2 normal map). Would reduce gather 4→1 per step. Breaks at sharp discrete peaks.

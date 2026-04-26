@@ -12,8 +12,8 @@ where
     F: Fn(&Path) -> Option<Heightmap>,
 {
     let offsets = [
-        [(1, -1),  (1, 0),  (1, 1)],
-        [(0, -1),  (0, 0),  (0, 1)],
+        [(1, -1), (1, 0), (1, 1)],
+        [(0, -1), (0, 0), (0, 1)],
         [(-1, -1), (-1, 0), (-1, 1)],
     ];
 
@@ -65,5 +65,41 @@ pub fn assemble_grid(grid: &[[Option<&Heightmap>; 3]; 3]) -> Heightmap {
         crs_origin_x: nw_tile.crs_origin_x,
         crs_origin_y: nw_tile.crs_origin_y,
         crs_epsg: nw_tile.crs_epsg,
+    }
+}
+
+pub fn crop(
+    hm: &Heightmap,
+    row_start: usize,
+    col_start: usize,
+    rows: usize,
+    cols: usize,
+) -> Heightmap {
+    let mut data: Vec<f32> = Vec::with_capacity(rows * cols);
+
+    for r in 0..rows {
+        let row_offset = (row_start + r) * hm.cols + col_start;
+        data.extend_from_slice(&hm.data[row_offset..row_offset + cols]);
+    }
+
+    let origin_lat = hm.origin_lat - row_start as f64 * hm.dy_deg.abs();
+    let origin_lon = hm.origin_lon + col_start as f64 * hm.dx_deg;
+    let crs_origin_x = hm.crs_origin_x + col_start as f64 * hm.dx_meters;
+    let crs_origin_y = hm.crs_origin_y - row_start as f64 * hm.dy_meters;
+
+    Heightmap {
+        data,
+        rows,
+        cols,
+        nodata: hm.nodata,
+        origin_lat,
+        origin_lon,
+        dx_deg: hm.dx_deg,
+        dy_deg: hm.dy_deg,
+        dx_meters: hm.dx_meters,
+        dy_meters: hm.dy_meters,
+        crs_origin_x,
+        crs_origin_y,
+        crs_epsg: hm.crs_epsg,
     }
 }

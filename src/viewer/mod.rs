@@ -2,9 +2,9 @@ mod hud_renderer;
 use std::sync::mpsc;
 use std::{path::Path, sync::Arc};
 
-use dem_io::{load_grid, Heightmap};
+use dem_io::{crop, load_grid, Heightmap};
 use render_gpu::{GpuContext, GpuScene};
-use terrain::ShadowMask;
+use terrain::{NormalMap, ShadowMask};
 
 use winit::{
     application::ApplicationHandler,
@@ -16,6 +16,12 @@ use winit::{
 };
 
 use crate::viewer::hud_renderer::HudRenderer;
+
+struct TileBundle {
+    hm: Heightmap,
+    normals: NormalMap,
+    ao: Vec<f32>,
+}
 
 struct Viewer {
     scene: Option<GpuScene>,
@@ -55,6 +61,16 @@ struct Viewer {
     shadow_tx: mpsc::SyncSender<(f32, f32)>,
     shadow_rx: mpsc::Receiver<ShadowMask>,
     shadow_computing: bool,
+    last_shadow_az: f32,
+    last_shadow_el: f32,
+    // tile settings + sliding window
+    centre_lat: i32,
+    centre_lon: i32,
+    tiles_dir: std::path::PathBuf,
+    hm: Arc<Heightmap>,
+    tile_tx: mpsc::SyncSender<(i32, i32, f64, f64)>,
+    tile_rx: mpsc::Receiver<TileBundle>,
+    tile_loading: bool,
 }
 
 impl ApplicationHandler for Viewer {
@@ -149,20 +165,11 @@ impl ApplicationHandler for Viewer {
         match event {
             WindowEvent::CloseRequested => event_loop.exit(),
             WindowEvent::RedrawRequested => {
+                // // delta time for frame-rate-independent camera movement
+                let dt = self.last_frame.elapsed().as_secs_f32();
                 self.last_frame = std::time::Instant::now();
-                let surface: &wgpu::Surface =
-                    self.surface.as_ref().expect("no surface for window event");
-                let scene: &GpuScene = self.scene.as_ref().expect("no scene for window event");
-                let ctx: &GpuContext = scene.get_gpu_ctx();
-                let surface_texture = match surface.get_current_texture() {
-                    wgpu::CurrentSurfaceTexture::Success(t) => t,
-                    wgpu::CurrentSurfaceTexture::Suboptimal(t) => t,
-                    _ => return, // Timeout or occluded — skip this frame
-                };
 
                 // cam movements
-                // delta time for frame-rate-independent movement
-                let dt = self.last_frame.elapsed().as_secs_f32();
                 let speed_boost_value = if self.speed_boost { 10.0 } else { 1.0 };
                 let speed = 500.0_f32 * speed_boost_value; // meters per second
 
@@ -226,6 +233,92 @@ impl ApplicationHandler for Viewer {
                     self.day_accum = self.day_accum.fract();
                 }
 
+                // tile sliding: detect crossing and receive finished bundles
+                if self.hm.crs_epsg == 4326 {
+                    if let Ok(bundle) = self.tile_rx.try_recv() {
+                        // re-project cam_pos into new grid before swapping hm
+                        let (lat, lon) = tile_meters_to_latlon_epsg_4326(
+                            self.cam_pos[0],
+                            self.cam_pos[1],
+                            &self.hm,
+                        );
+                        if let Some((nx, ny)) = latlon_to_tile_metres(lat, lon, &bundle.hm) {
+                            self.cam_pos[0] = nx;
+                            self.cam_pos[1] = ny;
+                        }
+                        self.scene.as_mut().unwrap().update_heightmap(
+                            &bundle.hm,
+                            &bundle.normals,
+                            &bundle.ao,
+                        );
+                        let new_hm = Arc::new(bundle.hm);
+                        self.hm = new_hm.clone();
+                        // respawn shadow worker with new heightmap
+                        let (new_stx, new_wrx) = mpsc::sync_channel::<(f32, f32)>(1);
+                        let (new_wtx, new_srx) = mpsc::channel::<ShadowMask>();
+                        let hm_shadow = new_hm;
+                        std::thread::spawn(move || {
+                            while let Ok((az, el)) = new_wrx.recv() {
+                                let mask = terrain::compute_shadow_vector_par_with_azimuth(
+                                    &hm_shadow, az, el, 200.0,
+                                );
+                                if new_wtx.send(mask).is_err() {
+                                    break;
+                                }
+                            }
+                        });
+                        self.shadow_tx = new_stx;
+                        self.shadow_rx = new_srx;
+                        self.shadow_computing = false;
+                        // update stored centre from new cam position
+                        let (lat2, lon2) = tile_meters_to_latlon_epsg_4326(
+                            self.cam_pos[0],
+                            self.cam_pos[1],
+                            &self.hm,
+                        );
+                        self.centre_lat = lat2.floor() as i32;
+                        self.centre_lon = lon2.floor() as i32;
+                        self.tile_loading = false;
+                        println!(
+                            "tile slide complete: N{}E{}",
+                            self.centre_lat, self.centre_lon
+                        );
+                    } else if !self.tile_loading {
+                        let (lat, lon) = tile_meters_to_latlon_epsg_4326(
+                            self.cam_pos[0],
+                            self.cam_pos[1],
+                            &self.hm,
+                        );
+                        let tile_lat = lat.floor() as i32;
+                        let tile_lon = lon.floor() as i32;
+                        if tile_lat != self.centre_lat || tile_lon != self.centre_lon {
+                            let (cam_lat, cam_lon) = tile_meters_to_latlon_epsg_4326(
+                                self.cam_pos[0],
+                                self.cam_pos[1],
+                                &self.hm,
+                            );
+                            if self
+                                .tile_tx
+                                .try_send((tile_lat, tile_lon, cam_lat, cam_lon))
+                                .is_ok()
+                            {
+                                self.tile_loading = true;
+                                println!("loading tile N{}E{}", tile_lat, tile_lon);
+                            }
+                        }
+                    }
+                }
+
+                let surface: &wgpu::Surface =
+                    self.surface.as_ref().expect("no surface for window event");
+                let scene: &GpuScene = self.scene.as_ref().expect("no scene for window event");
+                let ctx: &GpuContext = scene.get_gpu_ctx();
+                let surface_texture = match surface.get_current_texture() {
+                    wgpu::CurrentSurfaceTexture::Success(t) => t,
+                    wgpu::CurrentSurfaceTexture::Suboptimal(t) => t,
+                    _ => return, // Timeout or occluded — skip this frame
+                };
+
                 // derive sun direction from geographic solar position
                 let (azimuth, elevation) = sun_position(self.lat_rad, self.sim_day, self.sim_hour);
                 let r = elevation.cos();
@@ -240,10 +333,14 @@ impl ApplicationHandler for Viewer {
                     self.shadow_computing = false;
                 }
 
-                // kick off next shadow recompute if worker is free and sun is above horizon
-                if !self.shadow_computing && elevation > 0.0 {
+                // recompute shadow only when sun moves more than 0.1° (≈ 2 min real time at 0.4h/s)
+                let sun_moved = (azimuth - self.last_shadow_az).abs() > 0.00175
+                    || (elevation - self.last_shadow_el).abs() > 0.00175;
+                if !self.shadow_computing && elevation > 0.0 && sun_moved {
                     if self.shadow_tx.try_send((azimuth, elevation)).is_ok() {
                         self.shadow_computing = true;
+                        self.last_shadow_az = azimuth;
+                        self.last_shadow_el = elevation;
                     }
                 }
 
@@ -590,8 +687,23 @@ fn latlon_to_tile_metres(lat: f64, lon: f64, hm: &Heightmap) -> Option<(f32, f32
     }
 }
 
+fn tile_meters_to_latlon_epsg_4326(cam_x: f32, cam_y: f32, hm: &Heightmap) -> (f64, f64) {
+    let pixel_col = cam_x as f64 / hm.dx_meters;
+    let pixel_row = cam_y as f64 / hm.dy_meters;
+    let lon = hm.crs_origin_x + pixel_col * hm.dx_deg.abs() as f64;
+    let lat = hm.crs_origin_y - pixel_row * hm.dy_deg.abs() as f64;
+
+    (lat, lon)
+}
+
 pub fn run(tile_path: &Path, width: u32, height: u32, vsync: bool) {
-    let (scene, hm, lat_rad) = prepare_scene(tile_path, width, height);
+    // Named camera position: Hintertux glacier tongue, WGS84.
+    // Converted to tile-local metres at runtime — works for any tile that contains this point.
+    const CAM_LAT: f64 = 47.076211; // 47°04'34.36"N
+    const CAM_LON: f64 = 11.687592; // 11°41'15.33"E
+    const CAM_ELEV: f32 = 3258.0;
+
+    let (scene, hm, lat_rad) = prepare_scene(tile_path, width, height, CAM_LAT, CAM_LON);
     let dx: f32 = scene.get_dx_meters();
     let dy: f32 = scene.get_dy_meters();
 
@@ -612,17 +724,44 @@ pub fn run(tile_path: &Path, width: u32, height: u32, vsync: bool) {
 
     let event_loop = EventLoop::new().expect("error creating winit event loop");
 
-    // Named camera position: Hintertux glacier tongue, WGS84.
-    // Converted to tile-local metres at runtime — works for any tile that contains this point.
-    const CAM_LAT: f64 = 47.076211; // 47°04'34.36"N
-    const CAM_LON: f64 = 11.687592; // 11°41'15.33"E
-    const CAM_ELEV: f32 = 3258.0;
-
     let init_cam_pos = latlon_to_tile_metres(CAM_LAT, CAM_LON, &hm)
         .map(|(x, y)| [x, y, CAM_ELEV])
         .unwrap_or([2457.0 * dx, 3328.0 * dy, 3341.0]);
     let init_yaw = (19627.0_f32).atan2(1718.0_f32);
     let init_pitch = (-3472.0_f32).atan2(19702.0_f32);
+
+    let tiles_dir = tile_path
+        .parent()
+        .and_then(|p| p.parent())
+        .unwrap_or(Path::new("tiles"))
+        .to_path_buf();
+    let (centre_lat, centre_lon) = parse_copernicus_lat_lon(tile_path).unwrap_or((47, 11));
+
+    // tile loader: capacity-1 so stale requests are dropped
+    let (tile_tx, tile_worker_rx) = mpsc::sync_channel::<(i32, i32, f64, f64)>(1);
+    let (tile_worker_tx, tile_rx) = mpsc::channel::<TileBundle>();
+    let tiles_dir_worker = tiles_dir.clone();
+    std::thread::spawn(move || {
+        while let Ok((lat, lon, cam_lat, cam_lon)) = tile_worker_rx.recv() {
+            let t = std::time::Instant::now();
+            let hm = load_grid(&tiles_dir_worker, lat, lon, |p| {
+                dem_io::parse_geotiff(p).ok()
+            });
+            println!("tile reload load_grid: {:.2?}", t.elapsed());
+            let normals = terrain::compute_normals_vector_par(&hm);
+            let ao_data_mask = compute_ao_cropped(&hm, cam_lat, cam_lon);
+            if tile_worker_tx
+                .send(TileBundle {
+                    hm,
+                    normals,
+                    ao: ao_data_mask,
+                })
+                .is_err()
+            {
+                break;
+            }
+        }
+    });
 
     let mut viewer: Viewer = Viewer {
         scene: Some(scene),
@@ -660,6 +799,15 @@ pub fn run(tile_path: &Path, width: u32, height: u32, vsync: bool) {
         shadow_tx,
         shadow_rx,
         shadow_computing: false,
+        last_shadow_az: 0.0,
+        last_shadow_el: -1.0,
+        centre_lat,
+        centre_lon,
+        tiles_dir,
+        hm,
+        tile_tx,
+        tile_rx,
+        tile_loading: false,
     };
     event_loop
         .run_app(&mut viewer)
@@ -694,6 +842,28 @@ fn sun_position(lat_rad: f32, day: i32, hour: f32) -> (f32, f32) {
     (azimuth, elevation)
 }
 
+const AO_RADIUS_M: f64 = 20_000.0;
+
+fn compute_ao_cropped(hm: &Heightmap, cam_lat: f64, cam_lon: f64) -> Vec<f32> {
+    let cam_col = ((cam_lon - hm.crs_origin_x) / hm.dx_deg) as isize;
+    let cam_row = ((hm.crs_origin_y - cam_lat) / hm.dy_deg.abs()) as isize;
+    let radius_px = (AO_RADIUS_M / hm.dx_meters) as isize;
+    let row_start = (cam_row - radius_px).max(0) as usize;
+    let col_start = (cam_col - radius_px).max(0) as usize;
+    let crop_rows =
+        ((cam_row + radius_px).min(hm.rows as isize) - row_start as isize).max(0) as usize;
+    let crop_cols =
+        ((cam_col + radius_px).min(hm.cols as isize) - col_start as isize).max(0) as usize;
+    let cropped_hm = crop(hm, row_start, col_start, crop_rows, crop_cols);
+    let crop_ao = terrain::compute_ao_true_hemi(&cropped_hm, 16, 10.0f32.to_radians(), 200.0);
+    let mut ao = vec![1.0f32; hm.rows * hm.cols];
+    for r in 0..crop_rows {
+        let dst = (row_start + r) * hm.cols + col_start;
+        ao[dst..dst + crop_cols].copy_from_slice(&crop_ao[r * crop_cols..(r + 1) * crop_cols]);
+    }
+    ao
+}
+
 fn parse_copernicus_lat_lon(tile_path: &Path) -> Option<(i32, i32)> {
     let dir_name = tile_path.parent()?.file_name()?.to_str()?;
     // e.g. "Copernicus_DSM_COG_10_N47_00_E011_00_DEM"
@@ -706,7 +876,13 @@ fn parse_copernicus_lat_lon(tile_path: &Path) -> Option<(i32, i32)> {
     Some((lat, lon))
 }
 
-fn prepare_scene(tile_path: &Path, width: u32, height: u32) -> (GpuScene, Arc<Heightmap>, f32) {
+fn prepare_scene(
+    tile_path: &Path,
+    width: u32,
+    height: u32,
+    cam_lat: f64,
+    cam_lon: f64,
+) -> (GpuScene, Arc<Heightmap>, f32) {
     let dem_format = tile_path
         .extension()
         .expect("error getting extension of DEM data");
@@ -734,12 +910,9 @@ fn prepare_scene(tile_path: &Path, width: u32, height: u32) -> (GpuScene, Arc<He
                     .unwrap_or(Path::new("tiles"));
                 let (centre_lat, centre_lon) =
                     parse_copernicus_lat_lon(tile_path).unwrap_or((47, 11));
-                let hm = load_grid(
-                    tiles_dir,
-                    centre_lat,
-                    centre_lon,
-                    |p| dem_io::parse_geotiff(p).ok(),
-                );
+                let hm = load_grid(tiles_dir, centre_lat, centre_lon, |p| {
+                    dem_io::parse_geotiff(p).ok()
+                });
                 println!("load_grid: {:.2?}", t.elapsed());
                 Ok(hm)
             } // EPSG:4326 geographic (GLO-30 etc.)
@@ -769,10 +942,8 @@ fn prepare_scene(tile_path: &Path, width: u32, height: u32) -> (GpuScene, Arc<He
         terrain::compute_shadow_vector_par_with_azimuth(&hm, init_az, init_el, 200.0);
     println!("shadows:  {:.2?}", t1.elapsed());
 
-    // AO compute, the higher the ray_elevation_rad the less pronounced the effect (less darkening)
     let t2 = std::time::Instant::now();
-    let ao_data_mask: Vec<f32> =
-        terrain::compute_ao_true_hemi(&hm, 16, 10.0f32.to_radians(), 200.0);
+    let ao_data_mask = compute_ao_cropped(&hm, cam_lat, cam_lon);
     println!("ao:       {:.2?}", t2.elapsed());
 
     let gpu_ctx: GpuContext = GpuContext::new();
