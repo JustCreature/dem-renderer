@@ -302,6 +302,7 @@ Phase 9 artifacts (in progress):
 - `docs/planning/multi-tile-multiple-resolution-load.md` — AO radius optimisation note added to Step 3; texture dimension fallback added to Open Items
 - `docs/planning/tmp/crop_extract.md` — Step 2 design doc: crop + extract_window; tiff crate API; window/tile math; algorithm
 - `download_copernicus_tiles_30m.sh` — updated to 5×5 grid (lat 45–49, lon 9–13); skip-if-present check; printf zero-padding
+- `crates/dem_io/src/geotiff.rs` — `extract_window(path, centre_crs, radius_m, ifd_level, crs_epsg)`; `laea_epsg31287_inverse` extracted; `extract_window` exported from `dem_io::lib`
 
 Phase 9 key numbers so far (Intel Mac, 10800×10800 assembled grid, 2026-04-25 to 2026-04-26):
 - load_grid (9 × DEFLATE COG from disk): 4.52s
@@ -317,6 +318,8 @@ Phase 9 key numbers so far (Intel Mac, 10800×10800 assembled grid, 2026-04-25 t
 - Shadow recompute bug: was uploading 466 MB every ~0.5s; fixed with 0.1° movement threshold
 - AO staleness after tile slide: known limitation — AO crop centred at crossing position; camera
   exits 20km window as it moves inward → shows 1.0 fill; fix is Step 3 drift-based recompute
+- `extract_window` (5m BEV DGM, 5km radius, cold): **18.6ms**; 1707×1454 px output, elev 1398–3336m ✓
+- ~64 internal 256×256 tiles read out of ~128,000 total; selective read = ~0.05% of file
 
 Known open items from Phase 4:
 - Supersampled ray optimization considered but not implemented: march 1 reference ray, approximate 3 neighbor heights via `h ≈ h_center + grad_x * Δcol + grad_y * Δrow` (using Phase 2 normal map). Would reduce gather 4→1 per step. Breaks at sharp discrete peaks.

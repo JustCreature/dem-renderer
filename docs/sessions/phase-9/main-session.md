@@ -187,3 +187,45 @@ N46E010, N46E011, N46E012, N47E010, N47E012, N48E010, N48E011, N48E012
 - Step 3: per-tier background loader threads for 5m and 1m
 - Step 4: multi-source-tile stitching
 - Step 5: multi-tier shader
+
+---
+
+## 2026-04-26 (session 5)
+
+### What we worked on
+
+**Implemented `extract_window` in `crates/dem_io/src/geotiff.rs`:**
+- Signature: `extract_window(path, centre_crs: (f64,f64), radius_m, ifd_level, crs_epsg) -> Result<Heightmap, DemError>`
+- `seek_to_image(ifd_level)` before `dimensions()` — critical for correct IFD-level dimensions
+- Tags (ModelPixelScaleTag 33550, ModelTiepointTag 33922) read after seek; `dx_meters = scale[0]`, `dy_meters = scale[1]`, `crs_origin_x = tiepoint[3]`, `crs_origin_y = tiepoint[4]`
+- Affine inverse: `cx = (centre_crs.0 - crs_origin_x) / dx_meters`, `cy = (crs_origin_y - centre_crs.1) / dy_meters`
+- CRS dispatch via `crs_epsg` param: 3035 → `laea_epsg3035_inverse`, 31287 → `laea_epsg31287_inverse` (new helper extracted from hardcoded lines in `parse_geotiff_epsg_31287`)
+- Pixel bbox: `px0/px1/py0/py1` clamped to image bounds; `out_w = px1-px0`, `out_h = py1-py0`
+- Tile bbox: `tc0 = px0/tw`, `tc1 = (px1+tw-1)/tw` (exclusive, rounded up), same for rows
+- Tile loop: `read_chunk(tr * tiles_across + tc)` → row-by-row overlap copy into output buffer
+- Overlap copy: `src = (row - tile_row0) * tw + (col_start - tile_col0)`, `dst = (row - py0) * out_w + (col_start - px0)`, `len = col_end - col_start`
+- Output `Heightmap`: `crs_origin_x = file_origin_x + px0 * dx_meters`, `crs_origin_y = file_origin_y - py0 * dy_meters`
+- `laea_epsg31287_inverse` extracted as named private function (was inline in `parse_geotiff_epsg_31287`)
+- `extract_window` exported from `dem_io::lib`
+
+**Wired into `prepare_scene`:**
+- `centre_crs = lcc_epsg31287(cam_lat, cam_lon)` — absolute EPSG:31287 easting/northing (NOT tile-local metres)
+- Bug identified and fixed: `latlon_to_tile_metres` returns tile-local offsets, not absolute CRS coords; `extract_window` needs absolute coords → call forward projection directly
+- `extract_window` called at startup for diagnostic output; result not yet used for rendering
+
+**Known limitation noted:**
+- GeoTIFF tags (ModelPixelScaleTag, ModelTiepointTag) stored in IFD 0 only; `seek_to_image(ifd_level > 0)` + `get_tag` may fail — safe for now since `ifd_level = 0` always passed
+
+### Measured numbers
+
+- `extract_window` (5m BEV DGM, 5km radius, cold): **18.6ms**
+- Output: 1707×1454 px (asymmetric — one side clamped by file boundary), elevation 1398–3336m ✓
+- ~64 internal 256×256 tiles read out of ~128,000 total (~0.05% of file)
+
+### Open items remaining
+
+- Step 3: drift-based AO recompute (`ao_tx: SyncSender<(f64,f64)>`, `ao_rx: Receiver<Vec<f32>>`,
+  `last_ao_center: (f64,f64)` on Viewer, threshold = AO_RADIUS_M * 0.5)
+- Step 3: per-tier background loader threads — 5m and 1m tiers using `extract_window`
+- Step 4: multi-source-tile stitching
+- Step 5: multi-tier shader

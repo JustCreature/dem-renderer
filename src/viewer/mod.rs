@@ -2,7 +2,7 @@ mod hud_renderer;
 use std::sync::mpsc;
 use std::{path::Path, sync::Arc};
 
-use dem_io::{crop, load_grid, Heightmap};
+use dem_io::{crop, extract_window, load_grid, Heightmap};
 use render_gpu::{GpuContext, GpuScene};
 use terrain::{NormalMap, ShadowMask};
 
@@ -927,6 +927,31 @@ fn prepare_scene(
     } else {
         panic!("DEM format is not supported {:?}", dem_format)
     };
+
+    let t_5m = std::time::Instant::now();
+    let centre_crs = lcc_epsg31287(cam_lat, cam_lon); // absolute EPSG:31287 easting/northing
+    let tile_path_5m = Path::new("tiles/big_size/hintertux_5m.tif");
+    let hm_5m_part = extract_window(tile_path_5m, centre_crs, 5000.0, 0, 31287)
+        .expect("error building 5m res hm_part");
+
+    println!(
+        "5m window: {}×{}, elev range: {:.0}–{:.0}m",
+        hm_5m_part.cols,
+        hm_5m_part.rows,
+        hm_5m_part
+            .data
+            .iter()
+            .cloned()
+            .filter(|&v| v > -9000.0)
+            .fold(f32::INFINITY, f32::min),
+        hm_5m_part
+            .data
+            .iter()
+            .cloned()
+            .filter(|&v| v > -9000.0)
+            .fold(f32::NEG_INFINITY, f32::max),
+    );
+    println!("5m elapsed: {:.2?}", t_5m.elapsed());
 
     let t0 = std::time::Instant::now();
     let normal_map = terrain::compute_normals_vector_par(&hm);

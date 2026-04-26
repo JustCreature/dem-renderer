@@ -114,11 +114,7 @@ pub fn parse_geotiff_epsg_31287(path: &Path) -> Result<Heightmap, DemError> {
     let dy_meters = scale[1];
 
     // tiepoint[3/4] are easting/northing in EPSG:31287 metres, not lon/lat degrees.
-    // Approximate WGS84 from Austria Lambert false origin:
-    //   false_easting=400000, false_northing=400000, central_meridian=13.333°, lat_origin=47.5°
-    let origin_lat = 47.5 + (tiepoint[4] - 400_000.0) / 111_320.0;
-    let origin_lon =
-        13.333_333 + (tiepoint[3] - 400_000.0) / (111_320.0 * origin_lat.to_radians().cos());
+    let (origin_lat, origin_lon) = laea_epsg31287_inverse(tiepoint[3], tiepoint[4]);
 
     let img = decoder.read_image()?;
     let raw: Vec<f32> = match img {
@@ -270,4 +266,121 @@ fn laea_epsg3035_inverse(easting: f64, northing: f64) -> (f64, f64) {
     let lon = lon0 + (x * c.sin()).atan2(rho * lat0.cos() * c.cos() - y * lat0.sin() * c.sin());
 
     (lat * to_deg, lon * to_deg)
+}
+
+// Approximate WGS84 from Austria Lambert false origin:
+// false_easting=400000, false_northing=400000, central_meridian=13.333°, lat_origin=47.5°
+fn laea_epsg31287_inverse(easting: f64, northing: f64) -> (f64, f64) {
+    let origin_lat = 47.5 + (northing - 400_000.0) / 111_320.0;
+    let origin_lon =
+        13.333_333 + (easting - 400_000.0) / (111_320.0 * origin_lat.to_radians().cos());
+
+    (origin_lat, origin_lon)
+}
+
+pub fn extract_window(
+    path: &Path,
+    centre_crs: (f64, f64),
+    radius_m: f64,
+    ifd_level: usize,
+    crs_epsg: u32,
+) -> Result<Heightmap, DemError> {
+    let file: File = File::open(path)?;
+    // set no limits here to load big 1m resolution
+    let mut decoder: Decoder<std::io::BufReader<File>> =
+        Decoder::new(std::io::BufReader::new(file))?.with_limits(Limits::unlimited());
+
+    decoder.seek_to_image(ifd_level)?;
+
+    let (cols, rows): (u32, u32) = decoder.dimensions()?;
+
+    let scale = decoder.get_tag(Tag::Unknown(33550))?.into_f64_vec()?; // ModelPixelScaleTag
+    // → Value::Double([sx, sy, sz])  — sx = metres/pixel in X, sy = metres/pixel in Y
+
+    let tiepoint = decoder.get_tag(Tag::Unknown(33922))?.into_f64_vec()?; // ModelTiepointTag
+    // → Value::Double([i, j, k, x, y, z])  — x = easting, y = northing (metres, EPSG:31287)
+
+    let crs_origin_x = tiepoint[3]; // easting of top-left corner in EPSG:31287 metres
+    let crs_origin_y = tiepoint[4];
+
+    // Scale is already in metres — no degree→metre conversion needed.
+    let dx_meters = scale[0];
+    let dy_meters = scale[1];
+
+    let cx = (centre_crs.0 - crs_origin_x) / dx_meters;
+    let cy = (crs_origin_y - centre_crs.1) / dy_meters;
+
+    let (lat, lon) = match crs_epsg {
+        3035 => laea_epsg3035_inverse(centre_crs.0, centre_crs.1),
+        31287 => laea_epsg31287_inverse(centre_crs.0, centre_crs.1),
+        v => panic!("not supporger geo format received: {:?}", v),
+    };
+
+    let radius_px_x = (radius_m / dx_meters) as isize;
+    let radius_px_y = (radius_m / dy_meters) as isize;
+    let px0 = (cx as isize - radius_px_x).max(0) as usize;
+    let px1 = (cx as isize + radius_px_x).min(cols as isize) as usize;
+    let py0 = (cy as isize - radius_px_y).max(0) as usize;
+    let py1 = (cy as isize + radius_px_y).min(rows as isize) as usize;
+
+    let out_w = px1 - px0;
+    let out_h = py1 - py0;
+
+    const NODATA: f32 = -9999.0;
+    let mut data = vec![NODATA; out_w * out_h];
+
+    let (tw, th) = decoder.chunk_dimensions(); // returns (u32, u32)                                                                                              
+    let tiles_across = (cols as usize + tw as usize - 1) / tw as usize;
+
+    let tc0 = px0 / tw as usize;
+    let tc1 = (px1 + tw as usize - 1) / tw as usize; // exclusive, rounded up
+    let tr0 = py0 / th as usize;
+    let tr1 = (py1 + th as usize - 1) / th as usize;
+
+    for tr in tr0..tr1 {
+        for tc in tc0..tc1 {
+            let index = (tr * tiles_across + tc) as u32;
+            let chunk = decoder.read_chunk(index)?;
+            let tile_data: Vec<f32> = match chunk {
+                DecodingResult::F32(v) => v,
+                _ => return Err("expected F32 tile".into()),
+            };
+            // overlap copy goes here
+            let tile_col0 = tc * tw as usize; // inclusive                                                                                                                
+            let tile_row0 = tr * th as usize;
+            let tile_col1 = tile_col0 + tw as usize; // exclusive                                                                                                         
+            let tile_row1 = tile_row0 + th as usize;
+
+            let col_start = tile_col0.max(px0);
+            let col_end = tile_col1.min(px1);
+            let row_start = tile_row0.max(py0);
+            let row_end = tile_row1.min(py1);
+
+            for row in row_start..row_end {
+                let src = (row - tile_row0) * tw as usize + (col_start - tile_col0);
+                let dst = (row - py0) * out_w + (col_start - px0);
+                let len = col_end - col_start;
+                data[dst..dst + len].copy_from_slice(&tile_data[src..src + len]);
+            }
+        }
+    }
+
+    let win_crs_origin_x = crs_origin_x + px0 as f64 * dx_meters;
+    let win_crs_origin_y = crs_origin_y - py0 as f64 * dy_meters;
+
+    Ok(Heightmap {
+        data,
+        rows: out_h,
+        cols: out_w,
+        nodata: NODATA,
+        origin_lat: lat,
+        origin_lon: lon,
+        dx_deg: 0.0,
+        dy_deg: 0.0,
+        dx_meters,
+        dy_meters,
+        crs_origin_x: win_crs_origin_x,
+        crs_origin_y: win_crs_origin_y,
+        crs_epsg,
+    })
 }
