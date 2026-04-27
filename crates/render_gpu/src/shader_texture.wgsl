@@ -38,7 +38,7 @@ struct CameraUniforms {
 
 // camera uniforms struct
 @group(0) @binding(0) var<uniform> cam: CameraUniforms;
-// heightmap texture + sampler                                                                                                                                 
+// heightmap texture + sampler
 @group(0) @binding(1) var hm_tex: texture_2d<f32>;
 @group(0) @binding(2) var hm_sampler: sampler;
 // output
@@ -60,9 +60,13 @@ struct CameraUniforms {
 @group(0) @binding(14) var<storage, read> hm5m_nz: array<f32>;
 @group(0) @binding(15) var<storage, read> hm5m_shadow: array<f32>;
 
+// Width of the blend zone at the edge of any tier boundary, in metres.
+// smoothstep from 0 (edge, fully base tier) to BLEND_MARGIN (inner, fully close tier).
+const BLEND_MARGIN: f32 = 500.0;
+
 var<private> ssao_16x_kernel: array<vec3<f32>, 16> = array<vec3<f32>, 16>(
     // x = cos(el) * cos(az)
-    // y = cos(el) * sin(az)                                                                                                                                          
+    // y = cos(el) * sin(az)
     // z = sin(el)
     //   Ring │ Elevation │ Azimuth │
     // ├──────┼───────────┼─────────┼
@@ -151,27 +155,38 @@ var<private> hbao_8x_kernel: array<vec2<f32>, 8> = array<vec2<f32>, 8>(
     vec2<f32>(0.707, -0.707),
 );
 
+// Distance from pos_xy to the nearest edge of the 5m close tier, in metres.
+// Returns a negative value (or very small positive) when outside the extent.
+// Used as the smoothstep input for tier blending.
+fn close_tier_edge_dist(lx: f32, ly: f32) -> f32 {
+    return min(min(lx, cam.hm5m_extent_x - lx), min(ly, cam.hm5m_extent_y - ly));
+}
+
+// Height sample for the binary-search refinement pass.
+// Blends base and close-tier heights in the BLEND_MARGIN zone at the tier boundary.
 fn sample_h_exact(pos_xy: vec2<f32>) -> f32 {
+    let uv_base = vec2<f32>(
+        (pos_xy.x / cam.dx_meters + 0.5) / f32(cam.hm_cols),
+        (pos_xy.y / cam.dy_meters + 0.5) / f32(cam.hm_rows),
+    );
+    let h_base = textureSampleLevel(hm_tex, hm_sampler, uv_base, 0.0).r;
     if cam.hm5m_extent_x > 0.0 {
         let lx = pos_xy.x - cam.hm5m_origin_x;
         let ly = pos_xy.y - cam.hm5m_origin_y;
         if lx >= 0.0 && lx < cam.hm5m_extent_x && ly >= 0.0 && ly < cam.hm5m_extent_y {
             let uv5 = vec2<f32>(lx / cam.hm5m_extent_x, ly / cam.hm5m_extent_y);
-            return textureSampleLevel(hm5m_tex, hm5m_samp, uv5, 0.0).r;
+            let h5 = textureSampleLevel(hm5m_tex, hm5m_samp, uv5, 0.0).r;
+            return mix(h_base, h5, smoothstep(0.0, BLEND_MARGIN, close_tier_edge_dist(lx, ly)));
         }
     }
-    let uv = vec2<f32>(
-        (pos_xy.x / cam.dx_meters + 0.5) / f32(cam.hm_cols),
-        (pos_xy.y / cam.dy_meters + 0.5) / f32(cam.hm_rows),
-    );
-    return textureSampleLevel(hm_tex, hm_sampler, uv, 0.0).r;
+    return h_base;
 }
 
 fn binary_search_hit(t_lo_in: f32, t_hi_in: f32, dir: vec3<f32>, iterations: i32) -> vec3<f32> {
     // binary search to refine hit position between t_prev (above) and t (below)
     // without it there will be the arc pattern and the picture will look a bit broken (glitching)
-    // The arc patterns are the step-size error: 
-    // all rays with the same number of steps have the same overshot distance, creating concentric iso-step contours that 
+    // The arc patterns are the step-size error:
+    // all rays with the same number of steps have the same overshot distance, creating concentric iso-step contours that
     // look like arcs in the foreground where the terrain is close and the step size is relatively large compared to surface detail.
     var t_lo = t_lo_in;
     var t_hi = t_hi_in;
@@ -232,13 +247,17 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
         let lod_step_div = select(select(select(4000.0, 8000.0, cam.lod_mode < 3u), 20000.0, cam.lod_mode < 2u), 1000000000.0, cam.lod_mode == 0u);
         let lod_mip_div = select(select(select(8000.0, 15000.0, cam.lod_mode < 3u), 30000.0, cam.lod_mode < 2u), 1000000000.0, cam.lod_mode == 0u);
         let mip_lod = log2(1.0 + t / lod_mip_div);  // mipmap downsampling start at distance CONFIG_PERFORMANCE
-        var h: f32;
+
+        // ── height sample with blend zone ──
         let lx_loop = pos.x - cam.hm5m_origin_x;
         let ly_loop = pos.y - cam.hm5m_origin_y;
-        let use5m = cam.hm5m_extent_x > 0.0 && lx_loop >= 0.0 && lx_loop < cam.hm5m_extent_x && ly_loop >= 0.0 && ly_loop < cam.hm5m_extent_y;
-        if use5m {
+        let in_close_l = cam.hm5m_extent_x > 0.0 && lx_loop >= 0.0 && lx_loop < cam.hm5m_extent_x && ly_loop >= 0.0 && ly_loop < cam.hm5m_extent_y;
+        var h: f32;
+        if in_close_l {
             let uv5 = vec2<f32>(lx_loop / cam.hm5m_extent_x, ly_loop / cam.hm5m_extent_y);
-            h = textureSampleLevel(hm5m_tex, hm5m_samp, uv5, 0.0).r;
+            let h5 = textureSampleLevel(hm5m_tex, hm5m_samp, uv5, 0.0).r;
+            let h_b = textureSampleLevel(hm_tex, hm_sampler, uv, mip_lod).r;
+            h = mix(h_b, h5, smoothstep(0.0, BLEND_MARGIN, close_tier_edge_dist(lx_loop, ly_loop)));
         } else {
             h = textureSampleLevel(hm_tex, hm_sampler, uv, mip_lod).r;
         }
@@ -265,56 +284,70 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
     }
 
     if hit {
-        // Determine if the hit point is in the 5m close tier or the base tier
+        // ── blend factor for the hit point ──
         let lx_hit = pos.x - cam.hm5m_origin_x;
         let ly_hit = pos.y - cam.hm5m_origin_y;
-        let in5m = cam.hm5m_extent_x > 0.0 && lx_hit >= 0.0 && lx_hit < cam.hm5m_extent_x && ly_hit >= 0.0 && ly_hit < cam.hm5m_extent_y;
+        let in_close_hit = cam.hm5m_extent_x > 0.0 && lx_hit >= 0.0 && lx_hit < cam.hm5m_extent_x && ly_hit >= 0.0 && ly_hit < cam.hm5m_extent_y;
+        // t5 = 0: fully base tier, t5 = 1: fully close tier
+        let t5 = select(
+            0.0,
+            smoothstep(0.0, BLEND_MARGIN, close_tier_edge_dist(lx_hit, ly_hit)),
+            in_close_hit
+        );
+
+        // ── base tier normals and shadow (always computed) ──
+        let col_f = pos.x / cam.dx_meters;
+        let row_f = pos.y / cam.dy_meters;
+        let col0 = i32(col_f);
+        let row0 = i32(row_f);
+        let fx = col_f - f32(col0);
+        let fy = row_f - f32(row0);
+        let base_uv = vec2<f32>(col_f / f32(cam.hm_cols), row_f / f32(cam.hm_rows));
+        let i00 = u32(row0) * cam.hm_cols + u32(col0);
+        let i10 = u32(row0) * cam.hm_cols + u32(col0 + 1);
+        let i01 = u32(row0 + 1) * cam.hm_cols + u32(col0);
+        let i11 = u32(row0 + 1) * cam.hm_cols + u32(col0 + 1);
+        let n_base = normalize(mix(
+            mix(vec3<f32>(nx[i00], ny[i00], nz[i00]), vec3<f32>(nx[i10], ny[i10], nz[i10]), fx),
+            mix(vec3<f32>(nx[i01], ny[i01], nz[i01]), vec3<f32>(nx[i11], ny[i11], nz[i11]), fx), fy
+        ));
+        let sh_base = mix(mix(shadow[i00], shadow[i10], fx), mix(shadow[i01], shadow[i11], fx), fy);
 
         var normal: vec3<f32>;
         var in_shadow: f32;
         var hit_uv: vec2<f32>;
 
-        if in5m {
+        if t5 > 0.0 {
+            // ── close tier normals and shadow ──
             let dx5 = cam.hm5m_extent_x / f32(cam.hm5m_cols);
             let dy5 = cam.hm5m_extent_y / f32(cam.hm5m_rows);
-            let col5_f = lx_hit / dx5;
-            let row5_f = ly_hit / dy5;
-            let c5 = clamp(i32(col5_f), 0, i32(cam.hm5m_cols) - 2);
-            let r5 = clamp(i32(row5_f), 0, i32(cam.hm5m_rows) - 2);
-            let fx5 = col5_f - f32(c5);
-            let fy5 = row5_f - f32(r5);
+            let c5_f = lx_hit / dx5;
+            let r5_f = ly_hit / dy5;
+            let c5 = clamp(i32(c5_f), 0, i32(cam.hm5m_cols) - 2);
+            let r5 = clamp(i32(r5_f), 0, i32(cam.hm5m_rows) - 2);
+            let fx5 = c5_f - f32(c5);
+            let fy5 = r5_f - f32(r5);
             let i5_00 = u32(r5) * cam.hm5m_cols + u32(c5);
             let i5_10 = u32(r5) * cam.hm5m_cols + u32(c5 + 1);
             let i5_01 = u32(r5 + 1) * cam.hm5m_cols + u32(c5);
             let i5_11 = u32(r5 + 1) * cam.hm5m_cols + u32(c5 + 1);
-            let n5_00 = vec3<f32>(hm5m_nx[i5_00], hm5m_ny[i5_00], hm5m_nz[i5_00]);
-            let n5_10 = vec3<f32>(hm5m_nx[i5_10], hm5m_ny[i5_10], hm5m_nz[i5_10]);
-            let n5_01 = vec3<f32>(hm5m_nx[i5_01], hm5m_ny[i5_01], hm5m_nz[i5_01]);
-            let n5_11 = vec3<f32>(hm5m_nx[i5_11], hm5m_ny[i5_11], hm5m_nz[i5_11]);
-            normal = normalize(mix(mix(n5_00, n5_10, fx5), mix(n5_01, n5_11, fx5), fy5));
-            in_shadow = mix(mix(hm5m_shadow[i5_00], hm5m_shadow[i5_10], fx5),
+            let n5 = normalize(mix(
+                mix(vec3<f32>(hm5m_nx[i5_00], hm5m_ny[i5_00], hm5m_nz[i5_00]),
+                    vec3<f32>(hm5m_nx[i5_10], hm5m_ny[i5_10], hm5m_nz[i5_10]), fx5),
+                mix(vec3<f32>(hm5m_nx[i5_01], hm5m_ny[i5_01], hm5m_nz[i5_01]),
+                    vec3<f32>(hm5m_nx[i5_11], hm5m_ny[i5_11], hm5m_nz[i5_11]), fx5), fy5
+            ));
+            let sh5 = mix(mix(hm5m_shadow[i5_00], hm5m_shadow[i5_10], fx5),
                 mix(hm5m_shadow[i5_01], hm5m_shadow[i5_11], fx5), fy5);
-            hit_uv = vec2<f32>(lx_hit / cam.hm5m_extent_x, ly_hit / cam.hm5m_extent_y);
+            let close_uv = vec2<f32>(lx_hit / cam.hm5m_extent_x, ly_hit / cam.hm5m_extent_y);
+
+            normal = normalize(mix(n_base, n5, t5));
+            in_shadow = mix(sh_base, sh5, t5);
+            hit_uv = mix(base_uv, close_uv, t5);
         } else {
-            // bilinear interpolation in base tier
-            let col_f = pos.x / cam.dx_meters;
-            let row_f = pos.y / cam.dy_meters;
-            let col0 = i32(col_f);
-            let row0 = i32(row_f);
-            let fx = col_f - f32(col0);
-            let fy = row_f - f32(row0);
-            hit_uv = vec2<f32>(col_f / f32(cam.hm_cols), row_f / f32(cam.hm_rows));
-            let i00 = u32(row0) * cam.hm_cols + u32(col0);
-            let i10 = u32(row0) * cam.hm_cols + u32(col0 + 1);
-            let i01 = u32(row0 + 1) * cam.hm_cols + u32(col0);
-            let i11 = u32(row0 + 1) * cam.hm_cols + u32(col0 + 1);
-            let n00 = vec3<f32>(nx[i00], ny[i00], nz[i00]);
-            let n10 = vec3<f32>(nx[i10], ny[i10], nz[i10]);
-            let n01 = vec3<f32>(nx[i01], ny[i01], nz[i01]);
-            let n11 = vec3<f32>(nx[i11], ny[i11], nz[i11]);
-            normal = normalize(mix(mix(n00, n10, fx), mix(n01, n11, fx), fy));
-            in_shadow = mix(mix(shadow[i00], shadow[i10], fx),
-                mix(shadow[i01], shadow[i11], fx), fy);
+            normal = n_base;
+            in_shadow = sh_base;
+            hit_uv = base_uv;
         }
 
         var ao_factor: f32 = 1.0;
@@ -393,9 +426,9 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
         let rock = vec3<f32>(200.0, 200.0, 195.0);
         let snow = vec3<f32>(240.0, 245.0, 250.0);
 
-        let t1 = smoothstep(1800.0, 2000.0, pos.z);  // green → light_green                                                                                            
-        let t2 = smoothstep(2000.0, 2200.0, pos.z);  // light_green → rock                                                                                             
-        let t3 = smoothstep(2600.0, 2800.0, pos.z);  // rock → snow                                                                                                    
+        let t1 = smoothstep(1800.0, 2000.0, pos.z);  // green → light_green
+        let t2 = smoothstep(2000.0, 2200.0, pos.z);  // light_green → rock
+        let t3 = smoothstep(2600.0, 2800.0, pos.z);  // rock → snow
 
         let base = mix(mix(mix(green, light_green, t1), rock, t2), snow, t3);
         let base_r = base.x;
@@ -407,9 +440,9 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
         let b = u32(clamp(base_b * brightness, 0.0, 255.0));
 
         // add fog/haze in the distance
-        let sky = vec3<f32>(135.0, 206.0, 235.0);  // same blue as your sky pixels                                                                                     
-        let fog_near = 15000.0;   // fog starts at 15km                                                                                                                
-        let fog_far = 60000.0;   // fully haze at 60km                                                                                                                
+        let sky = vec3<f32>(135.0, 206.0, 235.0);  // same blue as your sky pixels
+        let fog_near = 15000.0;   // fog starts at 15km
+        let fog_far = 60000.0;   // fully haze at 60km
         let fog_t = select(0.0, smoothstep(fog_near, fog_far, t), cam.fog_enabled == 1u);
 
         let fr = mix(f32(r), sky.x, fog_t);
@@ -419,7 +452,6 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
         output[gid.y * cam.img_width + gid.x] = u32(fb) | (u32(fg) << 8u) | (u32(fr) << 16u) | (255u << 24u);  // bgra format
     } else {
         // sky blue
-        // output[gid.y * cam.img_width + gid.x] = 135u | (206u << 8u) | (235u << 16u) | (255u << 24u);
         output[gid.y * cam.img_width + gid.x] = 235u | (206u << 8u) | (135u << 16u) | (255u << 24u);  // bgra format
     }
 }
