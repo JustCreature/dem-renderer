@@ -26,7 +26,7 @@ use self::scene_init::{compute_ao_cropped, prepare_scene, INIT_SIM_DAY, INIT_SIM
 use self::tiers::{
     AO_DRIFT_THRESHOLD_M, BEV_5M_DRIFT_THRESHOLD_M, BEV_5M_RADIUS_M,
     BEV_BASE_DRIFT_THRESHOLD_M, BEV_BASE_IFD, BEV_BASE_RADIUS_M,
-    BevBaseBundle, BevBaseState, Glo30State, Hm5mBundle, TileBundle,
+    BevBaseState, Glo30State, StreamingTier, TierData, TileBundle,
 };
 
 struct Viewer {
@@ -356,36 +356,23 @@ impl ApplicationHandler for Viewer {
                     }
                 }
 
-                // BEV base drift reload (20 km threshold in EPSG:31287 metres from window centre)
+                // BEV two-tier drift reload
                 if let Some(ref mut bev_base) = self.bev_base {
-                    if let Ok(bundle) = bev_base.base_rx.try_recv() {
+                    // ── base tier ──
+                    if let Some(data) = bev_base.base.try_recv() {
                         // re-project camera to new heightmap coords using absolute EPSG:31287 position
-                        let easting = self.cam_pos[0] as f64 + self.hm.crs_origin_x;
-                        let northing = self.hm.crs_origin_y - self.cam_pos[1] as f64;
-                        self.cam_pos[0] = (easting - bundle.hm.crs_origin_x) as f32;
-                        self.cam_pos[1] = (bundle.hm.crs_origin_y - northing) as f32;
+                        let (easting, northing) = bev_epsg_pos(self.cam_pos, &self.hm);
+                        self.cam_pos[0] = (easting - data.hm.crs_origin_x) as f32;
+                        self.cam_pos[1] = (data.hm.crs_origin_y - northing) as f32;
                         {
                             let scene = self.scene.as_mut().unwrap();
-                            scene.update_heightmap(&bundle.hm, &bundle.normals, &bundle.ao);
-                            scene.update_shadow(&bundle.shadow);
-                        }
-                        bev_base.loading = false;
-                        bev_base.last_cx = bundle.cam_e;
-                        bev_base.last_cy = bundle.cam_n;
-                        self.hm = bundle.hm;
-                        // The 5m window's tile-local origin offsets were computed relative to the
-                        // OLD base heightmap's crs_origin. After the swap they point to the wrong
-                        // location in the new tile, so disable the 5m layer entirely until a fresh
-                        // window load calculates correct offsets for the new base.
-                        // Setting last_5m_cx/cy to 0.0 guarantees the drift check fires immediately
-                        // (Austrian coordinates are at ~4.4M easting, far from zero).
-                        {
-                            let scene = self.scene.as_mut().unwrap();
+                            scene.update_heightmap(&data.hm, &data.normals, &data.ao);
+                            scene.update_shadow(&data.shadow);
                             scene.set_hm5m_inactive();
                         }
-                        bev_base.hm5m_computing = false;
-                        bev_base.last_5m_cx = 0.0;
-                        bev_base.last_5m_cy = 0.0;
+                        self.hm = data.hm;
+                        // close tier offsets were relative to the old base origin — must reload
+                        bev_base.close.invalidate();
                         // respawn shadow worker with updated heightmap
                         let (new_tx, new_worker_rx) = mpsc::sync_channel::<(f32, f32)>(1);
                         let (new_worker_tx, new_rx) = mpsc::channel::<ShadowMask>();
@@ -409,57 +396,33 @@ impl ApplicationHandler for Viewer {
                             self.hm.cols, self.hm.rows, self.hm.dx_meters
                         );
                     }
-                    if !bev_base.loading {
-                        let easting = self.cam_pos[0] as f64 + self.hm.crs_origin_x;
-                        let northing = self.hm.crs_origin_y - self.cam_pos[1] as f64;
-                        // reload a new BEV_BASE_RADIUS_M window centred on the current position
-                        if (easting - bev_base.last_cx).abs() > BEV_BASE_DRIFT_THRESHOLD_M
-                            || (northing - bev_base.last_cy).abs() > BEV_BASE_DRIFT_THRESHOLD_M
-                        {
-                            if bev_base.base_tx.try_send((easting, northing)).is_ok() {
-                                bev_base.loading = true;
-                                println!(
-                                    "BEV base reload triggered at ({easting:.0}, {northing:.0})"
-                                );
-                            }
+                    if !bev_base.base.computing {
+                        let (e, n) = bev_epsg_pos(self.cam_pos, &self.hm);
+                        if bev_base.base.needs_reload(e, n) && bev_base.base.try_trigger(e, n) {
+                            println!("BEV base reload triggered at ({e:.0}, {n:.0})");
                         }
                     }
-                    // 5m close-tier polling
-                    if let Ok(bundle) = bev_base.hm5m_rx.try_recv() {
-                        let origin_x = (bundle.hm5m.crs_origin_x - self.hm.crs_origin_x) as f32;
-                        let origin_y = (self.hm.crs_origin_y - bundle.hm5m.crs_origin_y) as f32;
+
+                    // ── 5 m close tier ──
+                    if let Some(data) = bev_base.close.try_recv() {
+                        let origin_x = (data.hm.crs_origin_x - self.hm.crs_origin_x) as f32;
+                        let origin_y = (self.hm.crs_origin_y - data.hm.crs_origin_y) as f32;
                         self.scene.as_mut().unwrap().upload_hm5m(
                             origin_x,
                             origin_y,
-                            &bundle.hm5m,
-                            &bundle.normals,
-                            &bundle.shadow,
+                            &data.hm,
+                            &data.normals,
+                            &data.shadow,
                         );
-                        // compute the absolute EPSG:31287 centre of the loaded window:
-                        // left-edge easting + half-width, top-edge northing - half-height
-                        let cx5 = bundle.hm5m.crs_origin_x
-                            + bundle.hm5m.cols as f64 * bundle.hm5m.dx_meters * 0.5;
-                        let cy5 = bundle.hm5m.crs_origin_y
-                            - bundle.hm5m.rows as f64 * bundle.hm5m.dy_meters * 0.5;
-                        bev_base.hm5m_computing = false;
-                        bev_base.last_5m_cx = cx5; // centre easting
-                        bev_base.last_5m_cy = cy5; // centre northing
                         println!(
                             "5m tier updated: {}×{} at {:.1}m/px",
-                            bundle.hm5m.cols, bundle.hm5m.rows, bundle.hm5m.dx_meters
+                            data.hm.cols, data.hm.rows, data.hm.dx_meters
                         );
                     }
-                    if !bev_base.hm5m_computing {
-                        let easting = self.cam_pos[0] as f64 + self.hm.crs_origin_x;
-                        let northing = self.hm.crs_origin_y - self.cam_pos[1] as f64;
-                        // reload 5m close-tier window centred on current position
-                        if (easting - bev_base.last_5m_cx).abs() > BEV_5M_DRIFT_THRESHOLD_M
-                            || (northing - bev_base.last_5m_cy).abs() > BEV_5M_DRIFT_THRESHOLD_M
-                        {
-                            if bev_base.hm5m_tx.try_send((easting, northing)).is_ok() {
-                                bev_base.hm5m_computing = true;
-                                println!("5m reload triggered at ({easting:.0}, {northing:.0})");
-                            }
+                    if !bev_base.close.computing {
+                        let (e, n) = bev_epsg_pos(self.cam_pos, &self.hm);
+                        if bev_base.close.needs_reload(e, n) && bev_base.close.try_trigger(e, n) {
+                            println!("5m reload triggered at ({e:.0}, {n:.0})");
                         }
                     }
                 }
@@ -719,6 +682,14 @@ impl ApplicationHandler for Viewer {
     }
 }
 
+/// Convert tile-local camera position to absolute EPSG:31287 (easting, northing).
+/// Used for BEV drift detection; extracted to avoid repeating the same two lines.
+fn bev_epsg_pos(cam_pos: [f32; 3], hm: &Heightmap) -> (f64, f64) {
+    let easting = cam_pos[0] as f64 + hm.crs_origin_x;
+    let northing = hm.crs_origin_y - cam_pos[1] as f64;
+    (easting, northing)
+}
+
 pub fn run(tile_path: &Path, width: u32, height: u32, vsync: bool) {
     // Named camera position: Hintertux glacier tongue, WGS84.
     // Converted to tile-local metres at runtime — works for any tile that contains this point.
@@ -785,7 +756,7 @@ pub fn run(tile_path: &Path, width: u32, height: u32, vsync: bool) {
         // the camera drifts BEV_BASE_DRIFT_THRESHOLD_M from the last window centre
         let tile_path_base = tile_path.to_path_buf();
         let (base_tx, base_worker_rx) = mpsc::sync_channel::<(f64, f64)>(1);
-        let (base_worker_tx, base_rx) = mpsc::channel::<BevBaseBundle>();
+        let (base_worker_tx, base_rx) = mpsc::channel::<TierData>();
         let lat_rad_w = lat_rad;
         std::thread::spawn(move || {
             while let Ok((easting, northing)) = base_worker_rx.recv() {
@@ -817,13 +788,13 @@ pub fn run(tile_path: &Path, width: u32, height: u32, vsync: bool) {
                 let cam_y = hm.crs_origin_y - northing;
                 let ao = compute_ao_cropped(&hm, cam_x, cam_y);
                 if base_worker_tx
-                    .send(BevBaseBundle {
+                    .send(TierData {
                         hm,
                         normals,
                         shadow,
                         ao,
-                        cam_e: easting,
-                        cam_n: northing,
+                        centre_e: easting,
+                        centre_n: northing,
                     })
                     .is_err()
                 {
@@ -837,7 +808,7 @@ pub fn run(tile_path: &Path, width: u32, height: u32, vsync: bool) {
         // IFD-0 is always present so no fallback is needed here.
         let tile_path_5m = tile_path.to_path_buf();
         let (hm5m_tx, hm5m_worker_rx) = mpsc::sync_channel::<(f64, f64)>(1);
-        let (hm5m_worker_tx, hm5m_rx) = mpsc::channel::<Hm5mBundle>();
+        let (hm5m_worker_tx, hm5m_rx) = mpsc::channel::<TierData>();
         let lat_rad_5m = lat_rad;
         std::thread::spawn(move || {
             while let Ok((easting, northing)) = hm5m_worker_rx.recv() {
@@ -854,11 +825,17 @@ pub fn run(tile_path: &Path, width: u32, height: u32, vsync: bool) {
                 let normals = terrain::compute_normals_vector_par(&hm5m);
                 let (az, el) = sun_position(lat_rad_5m, INIT_SIM_DAY, INIT_SIM_HOUR);
                 let shadow = terrain::compute_shadow_vector_par_with_azimuth(&hm5m, az, el, 200.0);
+                // worker computes the window centre so try_recv() can update last_cx/cy generically
+                let centre_e = hm5m.crs_origin_x + hm5m.cols as f64 * hm5m.dx_meters * 0.5;
+                let centre_n = hm5m.crs_origin_y - hm5m.rows as f64 * hm5m.dy_meters * 0.5;
                 if hm5m_worker_tx
-                    .send(Hm5mBundle {
-                        hm5m,
+                    .send(TierData {
+                        hm: hm5m,
                         normals,
                         shadow,
+                        ao: vec![],
+                        centre_e,
+                        centre_n,
                     })
                     .is_err()
                 {
@@ -897,16 +874,8 @@ pub fn run(tile_path: &Path, width: u32, height: u32, vsync: bool) {
         }
 
         bev_base = Some(BevBaseState {
-            base_tx,
-            base_rx,
-            loading: false,
-            last_cx: init_e,
-            last_cy: init_n,
-            hm5m_tx,
-            hm5m_rx,
-            hm5m_computing: false,
-            last_5m_cx,
-            last_5m_cy,
+            base: StreamingTier::new(base_tx, base_rx, init_e, init_n, BEV_BASE_DRIFT_THRESHOLD_M),
+            close: StreamingTier::new(hm5m_tx, hm5m_rx, last_5m_cx, last_5m_cy, BEV_5M_DRIFT_THRESHOLD_M),
         });
     } else if hm.crs_epsg == 4326 {
         // GLO-30 mode: set up tile sliding worker
