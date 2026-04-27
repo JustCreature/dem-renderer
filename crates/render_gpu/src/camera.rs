@@ -33,6 +33,15 @@ pub struct CameraUniforms {
     pub fog_enabled: u32,
     pub vat_mode: u32,
     pub lod_mode: u32,
+    // 5m close tier (extent_x == 0.0 means inactive)
+    pub hm5m_origin_x: f32,
+    pub hm5m_origin_y: f32,
+    pub hm5m_extent_x: f32,
+    pub hm5m_extent_y: f32,
+    pub hm5m_cols: u32,
+    pub hm5m_rows: u32,
+    pub _pad6: u32,
+    pub _pad7: u32,
 }
 
 impl CameraUniforms {
@@ -87,6 +96,14 @@ impl CameraUniforms {
             fog_enabled,
             vat_mode,
             lod_mode,
+            hm5m_origin_x: 0.0,
+            hm5m_origin_y: 0.0,
+            hm5m_extent_x: 0.0,
+            hm5m_extent_y: 0.0,
+            hm5m_cols: 0,
+            hm5m_rows: 0,
+            _pad6: 0,
+            _pad7: 0,
         }
     }
 }

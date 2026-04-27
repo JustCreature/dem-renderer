@@ -290,9 +290,11 @@ pub fn extract_window(
     let mut decoder: Decoder<std::io::BufReader<File>> =
         Decoder::new(std::io::BufReader::new(file))?.with_limits(Limits::unlimited());
 
-    decoder.seek_to_image(ifd_level)?;
+    // Geo-tags (ModelPixelScaleTag 33550, ModelTiepointTag 33922) are stored only in
+    // IFD 0 for COG files; overview sub-IFDs do not repeat them.  Always read from IFD 0.
+    decoder.seek_to_image(0)?;
 
-    let (cols, rows): (u32, u32) = decoder.dimensions()?;
+    let (full_cols, full_rows): (u32, u32) = decoder.dimensions()?;
 
     let scale = decoder.get_tag(Tag::Unknown(33550))?.into_f64_vec()?; // ModelPixelScaleTag
     // → Value::Double([sx, sy, sz])  — sx = metres/pixel in X, sy = metres/pixel in Y
@@ -303,9 +305,14 @@ pub fn extract_window(
     let crs_origin_x = tiepoint[3]; // easting of top-left corner in EPSG:31287 metres
     let crs_origin_y = tiepoint[4];
 
-    // Scale is already in metres — no degree→metre conversion needed.
-    let dx_meters = scale[0];
-    let dy_meters = scale[1];
+    // Seek to the requested IFD level for pixel data and actual dimensions.
+    decoder.seek_to_image(ifd_level)?;
+    let (cols, rows): (u32, u32) = decoder.dimensions()?;
+
+    // Scale for this overview level: IFD-0 scale × (full_dim / ifd_dim).
+    // Integer overview sizes may be ceil(full/2^n), so use the actual ratio instead of 2^n.
+    let dx_meters = scale[0] * (full_cols as f64 / cols as f64);
+    let dy_meters = scale[1] * (full_rows as f64 / rows as f64);
 
     let cx = (centre_crs.0 - crs_origin_x) / dx_meters;
     let cy = (crs_origin_y - centre_crs.1) / dy_meters;
@@ -360,7 +367,21 @@ pub fn extract_window(
                 let src = (row - tile_row0) * tw as usize + (col_start - tile_col0);
                 let dst = (row - py0) * out_w + (col_start - px0);
                 let len = col_end - col_start;
-                data[dst..dst + len].copy_from_slice(&tile_data[src..src + len]);
+                for i in 0..len {
+                    let v = tile_data[src + i];
+                    // BEV DGM uses 0.0 as NoData sentinel instead of the SRTM convention
+                    // (-32 768) or IEEE NaN.  This is safe because the minimum valid elevation
+                    // in Austria is ~115 m (Hungarian border lowlands) — no real terrain pixel
+                    // can be zero.  The three conditions cover:
+                    //   v == 0.0    — BEV DGM NoData sentinel
+                    //   v.is_nan()  — IEEE NaN from corrupt or partial tiles
+                    //   v < -1000.0 — large-negative sentinel (SRTM-style, defensive guard)
+                    data[dst + i] = if v == 0.0 || v.is_nan() || v < -1000.0 {
+                        NODATA
+                    } else {
+                        v
+                    };
+                }
             }
         }
     }
