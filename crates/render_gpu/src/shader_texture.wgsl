@@ -34,6 +34,15 @@ struct CameraUniforms {
     hm5m_rows: u32,
     _pad6: u32,
     _pad7: u32,
+    // 1m fine tier (extent_x == 0.0 means inactive)
+    hm1m_origin_x: f32,
+    hm1m_origin_y: f32,
+    hm1m_extent_x: f32,
+    hm1m_extent_y: f32,
+    hm1m_cols: u32,
+    hm1m_rows: u32,
+    _pad8: u32,
+    _pad9: u32,
 }
 
 // camera uniforms struct
@@ -59,6 +68,13 @@ struct CameraUniforms {
 @group(0) @binding(13) var<storage, read> hm5m_ny: array<f32>;
 @group(0) @binding(14) var<storage, read> hm5m_nz: array<f32>;
 @group(0) @binding(15) var<storage, read> hm5m_shadow: array<f32>;
+// hm1m fine tier
+@group(0) @binding(16) var hm1m_tex: texture_2d<f32>;
+@group(0) @binding(17) var hm1m_samp: sampler;
+@group(0) @binding(18) var<storage, read> hm1m_nx: array<f32>;
+@group(0) @binding(19) var<storage, read> hm1m_ny: array<f32>;
+@group(0) @binding(20) var<storage, read> hm1m_nz: array<f32>;
+@group(0) @binding(21) var<storage, read> hm1m_shadow: array<f32>;
 
 // Width of the blend zone at the edge of any tier boundary, in metres.
 // smoothstep from 0 (edge, fully base tier) to BLEND_MARGIN (inner, fully close tier).
@@ -155,31 +171,42 @@ var<private> hbao_8x_kernel: array<vec2<f32>, 8> = array<vec2<f32>, 8>(
     vec2<f32>(0.707, -0.707),
 );
 
-// Distance from pos_xy to the nearest edge of the 5m close tier, in metres.
-// Returns a negative value (or very small positive) when outside the extent.
-// Used as the smoothstep input for tier blending.
+// Distance from (lx, ly) to the nearest edge of the 5m close tier rectangle.
 fn close_tier_edge_dist(lx: f32, ly: f32) -> f32 {
     return min(min(lx, cam.hm5m_extent_x - lx), min(ly, cam.hm5m_extent_y - ly));
 }
 
-// Height sample for the binary-search refinement pass.
-// Blends base and close-tier heights in the BLEND_MARGIN zone at the tier boundary.
+// Distance from (lx, ly) to the nearest edge of the 1m fine tier rectangle.
+fn fine_tier_edge_dist(lx: f32, ly: f32) -> f32 {
+    return min(min(lx, cam.hm1m_extent_x - lx), min(ly, cam.hm1m_extent_y - ly));
+}
+
+// Height sample for the binary-search refinement pass (base → 5m → 1m).
 fn sample_h_exact(pos_xy: vec2<f32>) -> f32 {
     let uv_base = vec2<f32>(
         (pos_xy.x / cam.dx_meters + 0.5) / f32(cam.hm_cols),
         (pos_xy.y / cam.dy_meters + 0.5) / f32(cam.hm_rows),
     );
-    let h_base = textureSampleLevel(hm_tex, hm_sampler, uv_base, 0.0).r;
+    var h = textureSampleLevel(hm_tex, hm_sampler, uv_base, 0.0).r;
     if cam.hm5m_extent_x > 0.0 {
-        let lx = pos_xy.x - cam.hm5m_origin_x;
-        let ly = pos_xy.y - cam.hm5m_origin_y;
-        if lx >= 0.0 && lx < cam.hm5m_extent_x && ly >= 0.0 && ly < cam.hm5m_extent_y {
-            let uv5 = vec2<f32>(lx / cam.hm5m_extent_x, ly / cam.hm5m_extent_y);
+        let lx5 = pos_xy.x - cam.hm5m_origin_x;
+        let ly5 = pos_xy.y - cam.hm5m_origin_y;
+        if lx5 >= 0.0 && lx5 < cam.hm5m_extent_x && ly5 >= 0.0 && ly5 < cam.hm5m_extent_y {
+            let uv5 = vec2<f32>(lx5 / cam.hm5m_extent_x, ly5 / cam.hm5m_extent_y);
             let h5 = textureSampleLevel(hm5m_tex, hm5m_samp, uv5, 0.0).r;
-            return mix(h_base, h5, smoothstep(0.0, BLEND_MARGIN, close_tier_edge_dist(lx, ly)));
+            h = mix(h, h5, smoothstep(0.0, BLEND_MARGIN, close_tier_edge_dist(lx5, ly5)));
         }
     }
-    return h_base;
+    if cam.hm1m_extent_x > 0.0 {
+        let lx1 = pos_xy.x - cam.hm1m_origin_x;
+        let ly1 = pos_xy.y - cam.hm1m_origin_y;
+        if lx1 >= 0.0 && lx1 < cam.hm1m_extent_x && ly1 >= 0.0 && ly1 < cam.hm1m_extent_y {
+            let uv1 = vec2<f32>(lx1 / cam.hm1m_extent_x, ly1 / cam.hm1m_extent_y);
+            let h1 = textureSampleLevel(hm1m_tex, hm1m_samp, uv1, 0.0).r;
+            h = mix(h, h1, smoothstep(0.0, BLEND_MARGIN, fine_tier_edge_dist(lx1, ly1)));
+        }
+    }
+    return h;
 }
 
 fn binary_search_hit(t_lo_in: f32, t_hi_in: f32, dir: vec3<f32>, iterations: i32) -> vec3<f32> {
@@ -248,18 +275,24 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
         let lod_mip_div = select(select(select(8000.0, 15000.0, cam.lod_mode < 3u), 30000.0, cam.lod_mode < 2u), 1000000000.0, cam.lod_mode == 0u);
         let mip_lod = log2(1.0 + t / lod_mip_div);  // mipmap downsampling start at distance CONFIG_PERFORMANCE
 
-        // ── height sample with blend zone ──
+        // ── height sample: base → 5m → 1m blend ──
+        var h: f32 = textureSampleLevel(hm_tex, hm_sampler, uv, mip_lod).r;
         let lx_loop = pos.x - cam.hm5m_origin_x;
         let ly_loop = pos.y - cam.hm5m_origin_y;
         let in_close_l = cam.hm5m_extent_x > 0.0 && lx_loop >= 0.0 && lx_loop < cam.hm5m_extent_x && ly_loop >= 0.0 && ly_loop < cam.hm5m_extent_y;
-        var h: f32;
         if in_close_l {
             let uv5 = vec2<f32>(lx_loop / cam.hm5m_extent_x, ly_loop / cam.hm5m_extent_y);
             let h5 = textureSampleLevel(hm5m_tex, hm5m_samp, uv5, 0.0).r;
-            let h_b = textureSampleLevel(hm_tex, hm_sampler, uv, mip_lod).r;
-            h = mix(h_b, h5, smoothstep(0.0, BLEND_MARGIN, close_tier_edge_dist(lx_loop, ly_loop)));
-        } else {
-            h = textureSampleLevel(hm_tex, hm_sampler, uv, mip_lod).r;
+            h = mix(h, h5, smoothstep(0.0, BLEND_MARGIN, close_tier_edge_dist(lx_loop, ly_loop)));
+        }
+        if cam.hm1m_extent_x > 0.0 {
+            let lx1 = pos.x - cam.hm1m_origin_x;
+            let ly1 = pos.y - cam.hm1m_origin_y;
+            if lx1 >= 0.0 && lx1 < cam.hm1m_extent_x && ly1 >= 0.0 && ly1 < cam.hm1m_extent_y {
+                let uv1 = vec2<f32>(lx1 / cam.hm1m_extent_x, ly1 / cam.hm1m_extent_y);
+                let h1 = textureSampleLevel(hm1m_tex, hm1m_samp, uv1, 0.0).r;
+                h = mix(h, h1, smoothstep(0.0, BLEND_MARGIN, fine_tier_edge_dist(lx1, ly1)));
+            }
         }
 
         if pos.z <= h {
@@ -348,6 +381,41 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
             normal = n_base;
             in_shadow = sh_base;
             hit_uv = base_uv;
+        }
+
+        // ── 1m fine tier normals and shadow (nested inside 5m zone) ──
+        if cam.hm1m_extent_x > 0.0 {
+            let lx1 = pos.x - cam.hm1m_origin_x;
+            let ly1 = pos.y - cam.hm1m_origin_y;
+            let in_1m = lx1 >= 0.0 && lx1 < cam.hm1m_extent_x && ly1 >= 0.0 && ly1 < cam.hm1m_extent_y;
+            let t1 = select(0.0, smoothstep(0.0, BLEND_MARGIN, fine_tier_edge_dist(lx1, ly1)), in_1m);
+            if t1 > 0.0 {
+                let dx1 = cam.hm1m_extent_x / f32(cam.hm1m_cols);
+                let dy1 = cam.hm1m_extent_y / f32(cam.hm1m_rows);
+                let c1_f = lx1 / dx1;
+                let r1_f = ly1 / dy1;
+                let c1 = clamp(i32(c1_f), 0, i32(cam.hm1m_cols) - 2);
+                let r1 = clamp(i32(r1_f), 0, i32(cam.hm1m_rows) - 2);
+                let fx1 = c1_f - f32(c1);
+                let fy1 = r1_f - f32(r1);
+                let i1_00 = u32(r1) * cam.hm1m_cols + u32(c1);
+                let i1_10 = u32(r1) * cam.hm1m_cols + u32(c1 + 1);
+                let i1_01 = u32(r1 + 1) * cam.hm1m_cols + u32(c1);
+                let i1_11 = u32(r1 + 1) * cam.hm1m_cols + u32(c1 + 1);
+                let n1 = normalize(mix(
+                    mix(vec3<f32>(hm1m_nx[i1_00], hm1m_ny[i1_00], hm1m_nz[i1_00]),
+                        vec3<f32>(hm1m_nx[i1_10], hm1m_ny[i1_10], hm1m_nz[i1_10]), fx1),
+                    mix(vec3<f32>(hm1m_nx[i1_01], hm1m_ny[i1_01], hm1m_nz[i1_01]),
+                        vec3<f32>(hm1m_nx[i1_11], hm1m_ny[i1_11], hm1m_nz[i1_11]), fx1), fy1
+                ));
+                let sh1 = mix(mix(hm1m_shadow[i1_00], hm1m_shadow[i1_10], fx1),
+                    mix(hm1m_shadow[i1_01], hm1m_shadow[i1_11], fx1), fy1);
+                let fine_uv = vec2<f32>(lx1 / cam.hm1m_extent_x, ly1 / cam.hm1m_extent_y);
+
+                normal = normalize(mix(normal, n1, t1));
+                in_shadow = mix(in_shadow, sh1, t1);
+                hit_uv = mix(hit_uv, fine_uv, t1);
+            }
         }
 
         var ao_factor: f32 = 1.0;

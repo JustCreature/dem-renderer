@@ -1,3 +1,4 @@
+use std::path::Path;
 use std::sync::{mpsc, Arc};
 
 use dem_io::Heightmap;
@@ -14,6 +15,41 @@ pub(super) const BEV_BASE_RADIUS_M: f64 = 90_000.0;
 pub(super) const BEV_BASE_DRIFT_THRESHOLD_M: f64 = 30_000.0;
 pub(super) const BEV_5M_RADIUS_M: f64 = 20_000.0;
 pub(super) const BEV_5M_DRIFT_THRESHOLD_M: f64 = 3_000.0;
+pub(super) const BEV_1M_RADIUS_M: f64 = 3_500.0;
+pub(super) const BEV_1M_DRIFT_THRESHOLD_M: f64 = 1_000.0;
+// BEV tiles are named CRS3035RES50000m… — each covers exactly 50 km × 50 km in EPSG:3035.
+pub(super) const BEV_TILE_SIZE_M: f64 = 50_000.0;
+
+/// Scan `dir` recursively for `CRS3035RES50000mN{N}E{E}.tif` files and return all tiles
+/// whose 50 km bounds overlap the window [e3035±radius_m) × [n3035±radius_m).
+pub(super) fn find_1m_tiles(dir: &Path, e3035: f64, n3035: f64, radius_m: f64) -> Vec<std::path::PathBuf> {
+    let mut found = Vec::new();
+    let Ok(walker) = std::fs::read_dir(dir) else { return found };
+    for entry in walker.flatten() {
+        let path = entry.path();
+        if path.is_dir() {
+            found.extend(find_1m_tiles(&path, e3035, n3035, radius_m));
+            continue;
+        }
+        let Some(name) = path.file_name().and_then(|n| n.to_str()) else { continue };
+        if !name.starts_with("CRS3035RES50000m") || !name.ends_with(".tif") {
+            continue;
+        }
+        let Some(rest) = name.strip_prefix("CRS3035RES50000m").and_then(|r| r.strip_suffix(".tif")) else { continue };
+        let Some(n_pos) = rest.find('N') else { continue };
+        let Some(e_pos) = rest.find('E') else { continue };
+        if n_pos >= e_pos { continue; }
+        let Ok(tile_n): Result<f64, _> = rest[n_pos + 1..e_pos].parse() else { continue };
+        let Ok(tile_e): Result<f64, _> = rest[e_pos + 1..].parse() else { continue };
+        // tile covers [tile_e, tile_e+BEV_TILE_SIZE_M) × [tile_n, tile_n+BEV_TILE_SIZE_M)
+        if tile_e < e3035 + radius_m && tile_e + BEV_TILE_SIZE_M > e3035 - radius_m
+            && tile_n < n3035 + radius_m && tile_n + BEV_TILE_SIZE_M > n3035 - radius_m
+        {
+            found.push(path);
+        }
+    }
+    found
+}
 
 pub(super) const AO_RADIUS_M: f64 = 20_000.0;
 // AO_RADIUS_M − AO_DRIFT_THRESHOLD_M = minimum margin of valid AO data behind the camera
@@ -131,9 +167,8 @@ pub(super) struct Glo30State {
 }
 
 /// Persistent state for BEV two-tier mode.
-/// Replaces the nine flat channel/drift fields that were previously in BevBaseState.
-/// Adding a 1 m tier = add `fine: StreamingTier` here.
 pub(super) struct BevBaseState {
-    pub(super) base: StreamingTier,  // wide window, low resolution (IFD-2/1)
-    pub(super) close: StreamingTier, // close window, 5 m/px (IFD-0)
+    pub(super) base: StreamingTier,          // wide window, low resolution (IFD-2/1)
+    pub(super) close: StreamingTier,         // close window, 5 m/px (IFD-0)
+    pub(super) fine: Option<StreamingTier>,  // fine window, 1 m/px (1m tile IFD-0); None if no 1m tiles available
 }

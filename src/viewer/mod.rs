@@ -6,7 +6,7 @@ mod tiers;
 use std::sync::{mpsc, Arc};
 use std::path::Path;
 
-use dem_io::{extract_window, load_grid, Heightmap};
+use dem_io::{extract_window, load_grid, stitch_windows, Heightmap};
 use render_gpu::{GpuContext, GpuScene};
 use terrain::ShadowMask;
 
@@ -21,11 +21,13 @@ use winit::{
 
 use crate::viewer::hud_renderer::HudRenderer;
 
-use self::geo::{lcc_epsg31287, latlon_to_tile_metres, sun_position};
+use self::geo::{lcc_epsg31287, laea_epsg3035, laea_epsg3035_inverse, lcc_epsg31287_inverse, latlon_to_tile_metres, sun_position};
 use self::scene_init::{compute_ao_cropped, prepare_scene, INIT_SIM_DAY, INIT_SIM_HOUR};
 use self::tiers::{
     AO_DRIFT_THRESHOLD_M, BEV_5M_DRIFT_THRESHOLD_M, BEV_5M_RADIUS_M,
     BEV_BASE_DRIFT_THRESHOLD_M, BEV_BASE_IFD, BEV_BASE_RADIUS_M,
+    BEV_1M_RADIUS_M, BEV_1M_DRIFT_THRESHOLD_M,
+    find_1m_tiles,
     BevBaseState, Glo30State, StreamingTier, TierData, TileBundle,
 };
 
@@ -368,11 +370,16 @@ impl ApplicationHandler for Viewer {
                             let scene = self.scene.as_mut().unwrap();
                             scene.update_heightmap(&data.hm, &data.normals, &data.ao);
                             scene.update_shadow(&data.shadow);
+                            // The fine-tier origins are offsets relative to the base heightmap origin.
+                            // After a base reload the origin shifts, so the old offsets are wrong —
+                            // hide both fine tiers until their workers deliver fresh windows.
                             scene.set_hm5m_inactive();
+                            scene.set_hm1m_inactive();
                         }
                         self.hm = data.hm;
-                        // close tier offsets were relative to the old base origin — must reload
+                        // close and fine tier offsets were relative to the old base origin — must reload
                         bev_base.close.invalidate();
+                        if let Some(ref mut fine) = bev_base.fine { fine.invalidate(); }
                         // respawn shadow worker with updated heightmap
                         let (new_tx, new_worker_rx) = mpsc::sync_channel::<(f32, f32)>(1);
                         let (new_worker_tx, new_rx) = mpsc::channel::<ShadowMask>();
@@ -423,6 +430,32 @@ impl ApplicationHandler for Viewer {
                         let (e, n) = bev_epsg_pos(self.cam_pos, &self.hm);
                         if bev_base.close.needs_reload(e, n) && bev_base.close.try_trigger(e, n) {
                             println!("5m reload triggered at ({e:.0}, {n:.0})");
+                        }
+                    }
+
+                    // ── 1 m fine tier ──
+                    if let Some(ref mut fine) = bev_base.fine {
+                        if let Some(data) = fine.try_recv() {
+                            // data.hm.crs_origin_x/y is in EPSG:3035; convert to EPSG:31287 tile-local
+                            let (lat, lon) = laea_epsg3035_inverse(
+                                data.hm.crs_origin_x, data.hm.crs_origin_y,
+                            );
+                            let (e31287, n31287) = lcc_epsg31287(lat, lon);
+                            let origin_x = (e31287 - self.hm.crs_origin_x) as f32;
+                            let origin_y = (self.hm.crs_origin_y - n31287) as f32;
+                            self.scene.as_mut().unwrap().upload_hm1m(
+                                origin_x, origin_y, &data.hm, &data.normals, &data.shadow,
+                            );
+                            println!(
+                                "1m tier updated: {}×{} at {:.1}m/px",
+                                data.hm.cols, data.hm.rows, data.hm.dx_meters
+                            );
+                        }
+                        if !fine.computing {
+                            let (e, n) = bev_epsg_pos(self.cam_pos, &self.hm);
+                            if fine.needs_reload(e, n) && fine.try_trigger(e, n) {
+                                println!("1m reload triggered at ({e:.0}, {n:.0})");
+                            }
                         }
                     }
                 }
@@ -690,7 +723,8 @@ fn bev_epsg_pos(cam_pos: [f32; 3], hm: &Heightmap) -> (f64, f64) {
     (easting, northing)
 }
 
-pub fn run(tile_path: &Path, width: u32, height: u32, vsync: bool) {
+
+pub fn run(tile_path: &Path, width: u32, height: u32, vsync: bool, tiles_1m_dir: Option<&Path>) {
     // Named camera position: Hintertux glacier tongue, WGS84.
     // Converted to tile-local metres at runtime — works for any tile that contains this point.
     const CAM_LAT: f64 = 47.076211; // 47°04'34.36"N
@@ -873,9 +907,56 @@ pub fn run(tile_path: &Path, width: u32, height: u32, vsync: bool) {
             println!("warning: could not load initial 5m IFD-0 window");
         }
 
+        // 1m fine-tier worker: loads a BEV_1M_RADIUS_M window from 1m tiles (EPSG:3035)
+        // each time the camera drifts BEV_1M_DRIFT_THRESHOLD_M from the last window centre.
+        // Tiles are discovered dynamically on each reload; multiple tiles are stitched together
+        // when the window straddles a tile boundary.
+        let fine_tier: Option<StreamingTier> = tiles_1m_dir.map(|dir| {
+            let (hm1m_tx, hm1m_worker_rx) = mpsc::sync_channel::<(f64, f64)>(1);
+            let (hm1m_worker_tx, hm1m_rx) = mpsc::channel::<TierData>();
+            let lat_rad_1m = lat_rad;
+            let dir_1m = dir.to_path_buf();
+            std::thread::spawn(move || {
+                while let Ok((easting, northing)) = hm1m_worker_rx.recv() {
+                    let (lat, lon) = lcc_epsg31287_inverse(easting, northing);
+                    let (e3035, n3035) = laea_epsg3035(lat, lon);
+                    let tile_paths = find_1m_tiles(&dir_1m, e3035, n3035, BEV_1M_RADIUS_M);
+                    if tile_paths.is_empty() { continue; }
+                    let windows: Vec<_> = tile_paths.iter()
+                        .filter_map(|p| dem_io::extract_window(p, (e3035, n3035), BEV_1M_RADIUS_M, 0, 3035).ok())
+                        .collect();
+                    if windows.is_empty() { continue; }
+                    let hm1m = Arc::new(if windows.len() == 1 {
+                        windows.into_iter().next().unwrap()
+                    } else {
+                        stitch_windows(windows, e3035, n3035, BEV_1M_RADIUS_M)
+                    });
+                    let normals = terrain::compute_normals_vector_par(&hm1m);
+                    let (az, el) = sun_position(lat_rad_1m, INIT_SIM_DAY, INIT_SIM_HOUR);
+                    let shadow =
+                        terrain::compute_shadow_vector_par_with_azimuth(&hm1m, az, el, 200.0);
+                    if hm1m_worker_tx
+                        .send(TierData {
+                            hm: hm1m,
+                            normals,
+                            shadow,
+                            ao: vec![],
+                            centre_e: easting,
+                            centre_n: northing,
+                        })
+                        .is_err()
+                    {
+                        break;
+                    }
+                }
+            });
+            StreamingTier::new(hm1m_tx, hm1m_rx, 0.0, 0.0, BEV_1M_DRIFT_THRESHOLD_M)
+        });
+
         bev_base = Some(BevBaseState {
             base: StreamingTier::new(base_tx, base_rx, init_e, init_n, BEV_BASE_DRIFT_THRESHOLD_M),
             close: StreamingTier::new(hm5m_tx, hm5m_rx, last_5m_cx, last_5m_cy, BEV_5M_DRIFT_THRESHOLD_M),
+            fine: fine_tier,
         });
     } else if hm.crs_epsg == 4326 {
         // GLO-30 mode: set up tile sliding worker

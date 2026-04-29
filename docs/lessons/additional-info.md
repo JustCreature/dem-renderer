@@ -70,3 +70,190 @@ The GPU draws rectangles as two triangles. Each triangle needs 3 vertices (x, y)
   The rule is always the same: top-left → top-right → bottom-right for T1, then top-left → bottom-right → bottom-left for T2. The diagonal goes from top-left to
   bottom-right.
 
+The base heightmap is a large window extracted from the BEV GeoTIFF. Its top-left corner has an absolute EPSG:31287 coordinate — let's call it the base origin 
+  (ox, oy).                                                                                                                                                      
+                                                                                                                                                                 
+  The fine tiers (5m and 1m) are smaller windows nested inside that base. The GPU shader doesn't know absolute CRS coordinates — it only knows tile-local pixel  
+  offsets: how many metres from the base origin to the fine tier's top-left corner.                                                                              
+                                                                                                                                                                 
+  Base heightmap (90km × 90km)                                                                                                                                 
+  ┌─────────────────────────────────────────┐                                                                                                                    
+  │ origin = (ox=273000, oy=447000)         │
+  │                                         │                                                                                                                    
+  │         ┌───────────┐                   │                                                                                                                  
+  │         │  5m tier  │ origin_x = 19000  │                                                                                                                    
+  │         │           │ origin_y = 23000  │                                                                                                                    
+  │         │   ┌─────┐ │                   │                                                                                                                    
+  │         │   │ 1m  │ │                   │                                                                                                                    
+  │         │   └─────┘ │                   │                                                                                                                  
+  │         └───────────┘                   │                                                                                                                    
+  └─────────────────────────────────────────┘                                                                                                                  
+                                                                                                                                                                 
+  Those offsets (19000, 23000) are computed as:                                                                                                                  
+                                                                                                                                                               
+  origin_x = fine_tile.crs_origin_x  -  base.crs_origin_x                                                                                                        
+  origin_y = base.crs_origin_y       -  fine_tile.crs_origin_y                                                                                                   
+                                                                                                                                                                 
+  Now the camera drifts far enough that the base reloads — a new 90km window is extracted, shifted say 30km east. The base origin changes:                       
+                                                                                                                                                                 
+  Before: base origin = (273000, 447000)                                                                                                                         
+  After:  base origin = (303000, 447000)   ← shifted 30km east                                                                                                   
+                                                                                                                                                               
+  The fine tiers still hold their old offset numbers (19000, 23000) in GPU memory. But those numbers were computed relative to the old origin. Relative to the   
+  new origin they point somewhere completely wrong — potentially off the terrain entirely.                                                                     
+                                                                                                                                                                 
+  Old offsets pointed here (correct):                                                                                                                          
+    absolute = (273000 + 19000) = 292000  ✓                                                                                                                      
+                                                                                                                                                                 
+  Same offsets after base shift (stale):                                                                                                                         
+    absolute = (303000 + 19000) = 322000  ✗  (wrong location, 30km off)                                                                                          
+                                                                                                                                                                 
+  So set_hm5m_inactive() and set_hm1m_inactive() flip a flag in the GPU uniform that tells the shader "ignore these tiers entirely" — the shader falls back to   
+  the base resolution only. The fine-tier workers then independently detect the drift (via invalidate() → needs_reload() → try_trigger()) and deliver new windows
+   computed relative to the new base origin. When those arrive, the correct offsets are uploaded and the tiers become active again.                              
+                                                                                                                                                               
+  The alternative — not hiding them — would show fine-tier terrain detail floating 30km from where the camera actually is, which is visually broken.
+
+
+  ---                                                                                                                                                            
+  What this code does: bilinear sampling of the 1m tier                                                                                                          
+                                                                                                                                                                 
+  The ray has already hit the terrain at pos (a world-space XY position). The shader must decide: which normal and shadow value should this pixel use? There are 
+  up to 3 data sources — base 30m, 5m close tier, 1m fine tier. The 1m block (L386–419) is the final override layer.                                             
+                                                                                                                                                               
+  ---                                                                                                                                                            
+  Step 1 — Is the 1m tier even active? (L387)                                
+                                                                                                                                                                 
+  if cam.hm1m_extent_x > 0.0
+                                                                                                                                                                 
+  When set_hm1m_inactive() is called on the CPU side, it zeros out extent_x. This single float is the "is this tier live?" flag. If it's zero, the whole block is
+   skipped with zero GPU cost.                                                                                                                                 
+                                                                                                                                                                 
+  ---                                                                        
+  Step 2 — Convert world position to tile-local coordinates (L388–390)                                                                                         
+                                                                                                                                                                 
+  World space (metres, absolute)
+  ────────────────────────────────────────────────────────────                                                                                                   
+         cam.hm1m_origin_x                                                   
+         │                                                                                                                                                       
+         ▼                                                                   
+         ┌───────────────────────────────┐                                                                                                                       
+         │  1m heightmap buffer          │                                                                                                                       
+         │                               │                                                                                                                     
+         │  (0,0) ──────────────────►   │  extent_x                                                                                                              
+         │    │                          │                                                                                                                       
+         │    │                          │                                                                                                                       
+         │    ▼  extent_y                │                                                                                                                       
+         └───────────────────────────────┘                                                                                                                       
+                                                                                                                                                                 
+  lx1 = pos.x - cam.hm1m_origin_x   ← how far RIGHT of the tile's left edge                                                                                      
+  ly1 = pos.y - cam.hm1m_origin_y   ← how far DOWN  of the tile's top edge                                                                                       
+                                                                                                                                                                 
+  pos is in world metres. The origin is the top-left corner of the 1m window in those same metres. Subtracting gives a tile-local offset (lx1, ly1) where (0,0) =
+   top-left, (extent_x, extent_y) = bottom-right.                                                                                                                
+                                                                                                                                                                 
+  ---                                                                                                                                                          
+  Step 3 — Compute blend weight t1 (L390–391)                                                                                                                  
+                                                                                                                                                                 
+  in_1m = lx1 and ly1 are both inside [0, extent]   → true/false
+                                                                                                                                                                 
+  fine_tier_edge_dist(lx1, ly1) = distance to the nearest edge                                                                                                   
+                                   of the 1m tile rectangle                                                                                                      
+                                                                                                                                                                 
+  smoothstep(0.0, BLEND_MARGIN, that_distance)                                                                                                                   
+                                                                                                                                                               
+  t1 = 0.0 ──── blend ──── 1.0                                                                                                                                   
+       │       margin │        │                                                                                                                                 
+       edge           │      centre                                                                                                                              
+       │←─BLEND_MARGIN─►│                                                                                                                                        
+                                                                                                                                                                 
+  At the very edge of the 1m tile t1 = 0 (use whatever 5m computed). At BLEND_MARGIN metres inward t1 = 1 (use 1m fully). In between it's a smooth cubic ramp —  
+  no visible seam.                                                                                                                                             
+                                                                                                                                                                 
+  ---                                                                        
+  Step 4 — Convert tile-local position to a pixel address (L393–404)                                                                                           
+                                                                                                                                                                 
+  This is the core of bilinear interpolation. Picture a 4-pixel patch in the data buffer:
+                                                                                                                                                                 
+  pixel space (floating-point)                                               
+  ─────────────────────────────                                                                                                                                  
+    c1       c1+1                                                            
+    │         │                                                                                                                                                  
+  r1 ── [00] ── [10] ──                                                      
+    │         │                                                                                                                                                  
+  r1+1── [01] ── [11] ──                                                     
+    │         │                                                                                                                                                  
+   fx1 = fractional column  (0..1)                                                                                                                               
+   fy1 = fractional row     (0..1)                                                                                                                               
+                                                                                                                                                                 
+  dx1 = extent_x / cols    ← metres per pixel (≈1.0 for 1m tier)                                                                                                 
+  c1_f = lx1 / dx1         ← floating-point column index                                                                                                         
+  c1   = floor(c1_f)       ← integer column of left pixel                                                                                                        
+  fx1  = c1_f - c1         ← how far right within that pixel (0..1)                                                                                              
+                                                                                                                                                                 
+  same for rows → r1, fy1                                                                                                                                        
+                                                                                                                                                                 
+  The four flat buffer indices:                                                                                                                                  
+                                                                                                                                                               
+  i1_00 = r1   * cols + c1       (top-left)                                                                                                                    
+  i1_10 = r1   * cols + (c1+1)   (top-right)                                                                                                                     
+  i1_01 = (r1+1) * cols + c1     (bottom-left)
+  i1_11 = (r1+1) * cols + (c1+1) (bottom-right)                                                                                                                  
+                                                                             
+  ---                                                                                                                                                            
+  Step 5 — Bilinear interpolation of the normal (L405–410)                   
+                                                                                                                                                                 
+  n1 = bilinear(hm1m_nx/ny/nz at the 4 corners)                              
+                                                                                                                                                                 
+                fx1
+           ←────────►                                                                                                                                            
+      [00]────────────[10]     ▲                                             
+        │    mix(H, H, fx1)    │ fy1                                                                                                                             
+      [01]────────────[11]     ▼                                                                                                                                 
+                │                                                                                                                                                
+                mix(top_row, bot_row, fy1)                                                                                                                       
+                                                                                                                                                                 
+  Two horizontal lerps (across fx1), then one vertical lerp (across fy1). Result: a smooth normal that slides continuously across pixel boundaries — no 1m grid  
+  lines visible in lighting.                                                                                                                                     
+                                                                                                                                                                 
+  hm1m_nx/ny/nz are separate flat arrays (SoA layout) — the same pattern used for the base and 5m tiers.                                                         
+                                                                                                                                                               
+  ---                                                                                                                                                            
+  Step 6 — Same bilinear for shadow (L411–412)                                                                                                                 
+                                                                                                                                                                 
+  Shadow is a single f32 per pixel (0 = lit, 1 = in shadow). Same 4-corner bilinear gives a smooth shadow boundary.
+                                                                                                                                                                 
+  ---                                                                                                                                                          
+  Step 7 — Blend the 1m result over whatever 5m computed (L415–417)                                                                                              
+                                                                                                                                                                 
+  normal    = mix(normal_from_5m_block,    n1,  t1)                                                                                                            
+  in_shadow = mix(shadow_from_5m_block,   sh1,  t1)                                                                                                              
+  hit_uv    = mix(uv_from_5m_block, fine_uv,  t1)                                                                                                              
+                                                                                                                                                                 
+  t1 = 1.0 at the centre → 1m wins completely.                                                                                                                   
+  t1 = 0.0 at the edge → 5m value passes through unchanged.                                                                                                      
+  The edge blend zone means the 1m patch fades in smoothly rather than snapping.                                                                                 
+                                                                                                                                                                 
+  ---                                                                                                                                                          
+  The full tier stack at one pixel                                                                                                                               
+                                                                                                                                                                 
+                      BASE 30m  (always)                                                                                                                       
+                          │                                                                                                                                      
+              ┌───────────┴───────────┐                                                                                                                          
+              │  inside 5m window?    │                                                                                                                        
+              │  t5 = smoothstep(…)   │                                                                                                                          
+              │  mix(base, 5m, t5)    │                                                                                                                          
+              └───────────┬───────────┘                                                                                                                          
+                          │                                                                                                                                      
+              ┌───────────┴───────────┐                                                                                                                        
+              │  inside 1m window?    │                                                                                                                          
+              │  t1 = smoothstep(…)   │
+              │  mix(prev, 1m, t1)    │   ← L386–419 is this box                                                                                                 
+              └───────────┬───────────┘                                                                                                                          
+                          │                                                                                                                                    
+                     final normal,                                                                                                                               
+                     shadow, uv                                                                                                                                  
+                                                                                                                                                               
+  Each tier overrides the previous one with a smooth smoothstep blend at its boundary — so all three data sources contribute without hard seams.
+
+  

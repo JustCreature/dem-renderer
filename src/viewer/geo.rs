@@ -69,6 +69,77 @@ pub(super) fn laea_epsg3035(lat_deg: f64, lon_deg: f64) -> (f64, f64) {
     (easting, northing)
 }
 
+/// Spherical LAEA inverse for EPSG:3035. Returns (lat_deg, lon_deg). Accuracy ~100m.
+pub(super) fn laea_epsg3035_inverse(easting: f64, northing: f64) -> (f64, f64) {
+    let r = 6_371_000.0_f64;
+    let lat0 = 52.0_f64.to_radians();
+    let lon0 = 10.0_f64.to_radians();
+    let fe = 4_321_000.0_f64;
+    let fn_ = 3_210_000.0_f64;
+    let x = easting - fe;
+    let y = northing - fn_;
+    let rho = (x * x + y * y).sqrt();
+    if rho < 1e-10 {
+        return (52.0, 10.0);
+    }
+    let c = 2.0 * (rho / (2.0 * r)).asin();
+    let lat = (c.cos() * lat0.sin() + y * c.sin() * lat0.cos() / rho).asin();
+    let lon = lon0 + (x * c.sin()).atan2(rho * lat0.cos() * c.cos() - y * lat0.sin() * c.sin());
+    (lat.to_degrees(), lon.to_degrees())
+}
+
+/// LCC inverse for EPSG:31287 (MGI / Austria Lambert). Returns (lat_deg, lon_deg).
+/// Iterates to convergence (typically 4–5 iterations).
+pub(super) fn lcc_epsg31287_inverse(easting: f64, northing: f64) -> (f64, f64) {
+    let a = 6_377_397.155_f64;
+    let f = 1.0 / 299.152_812_8_f64;
+    let e2 = 2.0 * f - f * f;
+    let e = e2.sqrt();
+    let to_rad = std::f64::consts::PI / 180.0;
+
+    let lat0 = 47.5 * to_rad;
+    let lon0 = 13.333_333 * to_rad;
+    let lat1 = 49.0 * to_rad;
+    let lat2 = 46.0 * to_rad;
+    let fe = 400_000.0_f64;
+    let fn_ = 400_000.0_f64;
+
+    let m = |phi: f64| {
+        let s = phi.sin();
+        phi.cos() / (1.0 - e2 * s * s).sqrt()
+    };
+    let t = |phi: f64| {
+        let s = phi.sin();
+        let es = e * s;
+        ((1.0 - s) / (1.0 + s) * ((1.0 + es) / (1.0 - es)).powf(e)).sqrt()
+    };
+
+    let m1 = m(lat1);
+    let m2 = m(lat2);
+    let t1 = t(lat1);
+    let t2 = t(lat2);
+    let t0 = t(lat0);
+    let n = (m1.ln() - m2.ln()) / (t1.ln() - t2.ln());
+    let big_f = m1 / (n * t1.powf(n));
+    let rho0 = a * big_f * t0.powf(n);
+
+    let x = easting - fe;
+    let y = northing - fn_;
+    let rho_inv = (x * x + (rho0 - y) * (rho0 - y)).sqrt() * n.signum();
+    let theta_inv = (x).atan2(rho0 - y);
+    let t_inv = (rho_inv / (a * big_f)).powf(1.0 / n);
+
+    // Iterative latitude solution (Snyder p. 45)
+    let mut phi = std::f64::consts::FRAC_PI_2 - 2.0 * t_inv.atan();
+    for _ in 0..10 {
+        let es = e * phi.sin();
+        phi = std::f64::consts::FRAC_PI_2
+            - 2.0 * (t_inv * ((1.0 - es) / (1.0 + es)).powf(e / 2.0)).atan();
+    }
+    let lon = theta_inv / n + lon0;
+    (phi.to_degrees(), lon.to_degrees())
+}
+
 /// Convert WGS84 lat/lon to tile-local metres (cam_pos.x, cam_pos.y).
 /// Returns None if the position falls outside the tile bounds.
 pub(super) fn latlon_to_tile_metres(lat: f64, lon: f64, hm: &Heightmap) -> Option<(f32, f32)> {

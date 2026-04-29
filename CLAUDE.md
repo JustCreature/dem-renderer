@@ -234,8 +234,6 @@ Phase 7 lessons:
 - C1 discontinuity (slope jumps at 20m DEM grid lines) is a data floor; Gaussian smoothing fixes the symptom but destroys real ridgelines
 
 Known open items carried into Phase 8:
-- GPU timestamp queries — explicitly deferred (low priority)
-- Mipmap LOD fps measurement on GTX 1650 — predicted meaningful gain (unmeasured)
 - GPU shadow via parallel prefix scan — deferred from Phase 5
 - `render_gif::render_gif` commented out in main.rs — deferred from Phase 5
 - Occupancy analysis via Instruments/Metal GPU trace — requires full Xcode.app (deferred from Phase 5)
@@ -288,8 +286,6 @@ Known open items carried into Phase 9:
   - Step 3: per-tier background loader threads with coarse fallback
   - Step 4: multi-source-tile stitching
   - Step 5: multi-tier shader with lerp blend zones
-- GPU timestamp queries — deferred (low priority, carried from Phase 7)
-- Mipmap LOD fps measurement on GTX 1650 — carried from Phase 7
 - GPU shadow via parallel prefix scan — deferred from Phase 5
 - `render_gif::render_gif` commented out in main.rs — deferred from Phase 5
 
@@ -297,14 +293,19 @@ Phase 9 artifacts (in progress):
 - `docs/sessions/phase-9/main-session.md` — session log
 - `crates/dem_io/src/grid.rs` — `assemble_grid`, `load_grid<F>`, `tile_path`, `crop`; 3×3 Copernicus GLO-30 grid assembly + in-memory crop
 - `crates/dem_io/src/lib.rs` — `crop` re-exported alongside `assemble_grid`, `load_grid`
-- `crates/render_gpu/src/scene.rs` — `_ao_texture` stored; normal buffers gain `COPY_DST`; `write_hm_mips` free function; `update_heightmap(&mut self, hm, normals, ao)` implemented
-- `src/viewer/mod.rs` — `parse_copernicus_lat_lon()`; `tile_meters_to_latlon_epsg_4326()`; `TileBundle`; background tile loader thread; per-frame crossing detection + cam_pos re-projection; shadow worker respawn on tile slide; `last_shadow_az/el` throttle (recompute only on ≥0.1° sun movement); dt fix (true inter-frame time); `compute_ao_cropped(hm, cam_lat, cam_lon)` free function; `AO_RADIUS_M = 20_000.0`; tile loader channel upgraded to `(i32, i32, f64, f64)`; `prepare_scene` takes `cam_lat, cam_lon`
+- `crates/render_gpu/src/scene.rs` — `_ao_texture` stored; normal buffers gain `COPY_DST`; `write_hm_mips` free function; `update_heightmap(&mut self, hm, normals, ao)` implemented; `_hm1m_*` fields + bindings 16–21 + `upload_hm1m()` + `set_hm1m_inactive()` for 1m fine tier
+- `src/viewer/mod.rs` — `parse_copernicus_lat_lon()`; `tile_meters_to_latlon_epsg_4326()`; `TileBundle`; background tile loader thread; per-frame crossing detection + cam_pos re-projection; shadow worker respawn on tile slide; `last_shadow_az/el` throttle (recompute only on ≥0.1° sun movement); dt fix (true inter-frame time); `compute_ao_cropped(hm, cam_lat, cam_lon)` free function; `AO_RADIUS_M = 20_000.0`; tile loader channel upgraded to `(i32, i32, f64, f64)`; `prepare_scene` takes `cam_lat, cam_lon`; 1m fine tier: `find_1m_tiles` (multi-tile overlap scan), `stitch_1m_windows`, worker with dynamic tile discovery + stitching, poll block, `--1m-tiles-dir` CLI arg
+- `src/viewer/tiers.rs` — `BEV_1M_RADIUS_M = 3500.0`, `BEV_1M_DRIFT_THRESHOLD_M = 1000.0`; `fine: Option<StreamingTier>` on `BevBaseState`
+- `src/viewer/geo.rs` — `laea_epsg3035_inverse` (spherical LAEA inverse); `lcc_epsg31287_inverse` (iterative LCC inverse, Bessel 1841, <10 iterations)
+- `crates/render_gpu/src/camera.rs` — `CameraUniforms` extended with 8 hm1m fields (256 bytes total); initialized to 0/inactive in `new()`
+- `crates/render_gpu/src/shader_texture.wgsl` — bindings 16–21 (hm1m tex/sampler/nx/ny/nz/shadow); `fine_tier_edge_dist` helper; three-tier height blend in raymarcher; three-tier normals/shadow blend in shading
+- `src/main.rs` — `--1m-tiles-dir <path>` CLI arg; `viewer::run` signature updated
 - `docs/planning/multi-tile-multiple-resolution-load.md` — AO radius optimisation note added to Step 3; texture dimension fallback added to Open Items
 - `docs/planning/tmp/crop_extract.md` — Step 2 design doc: crop + extract_window; tiff crate API; window/tile math; algorithm
 - `download_copernicus_tiles_30m.sh` — updated to 5×5 grid (lat 45–49, lon 9–13); skip-if-present check; printf zero-padding
-- `crates/dem_io/src/geotiff.rs` — `extract_window(path, centre_crs, radius_m, ifd_level, crs_epsg)`; `laea_epsg31287_inverse` extracted; `extract_window` exported from `dem_io::lib`
+- `crates/dem_io/src/geotiff.rs` — `extract_window(path, centre_crs, radius_m, ifd_level, crs_epsg)`; `laea_epsg31287_inverse` extracted; `extract_window` exported from `dem_io::lib`; edge-tile stride bug fixed (`actual_tw = tile_col1.min(cols) - tile_col0`)
 
-Phase 9 key numbers so far (Intel Mac, 10800×10800 assembled grid, 2026-04-25 to 2026-04-26):
+Phase 9 key numbers so far (Intel Mac, 10800×10800 assembled grid, 2026-04-25 to 2026-04-28):
 - load_grid (9 × DEFLATE COG from disk): 4.52s
 - normals (parallel): 185ms
 - shadows (parallel): 525ms
@@ -316,10 +317,16 @@ Phase 9 key numbers so far (Intel Mac, 10800×10800 assembled grid, 2026-04-25 t
 - Sliding window: background tile loader thread; crossing detected via floor(lon/lat) change;
   seamless cam_pos re-projection on slide; old shadow worker exits when sender dropped
 - Shadow recompute bug: was uploading 466 MB every ~0.5s; fixed with 0.1° movement threshold
-- AO staleness after tile slide: known limitation — AO crop centred at crossing position; camera
-  exits 20km window as it moves inward → shows 1.0 fill; fix is Step 3 drift-based recompute
+- AO staleness after tile slide: fixed via drift-based recompute — `ao_tx/ao_rx` worker thread,
+  `AO_DRIFT_THRESHOLD_M` threshold, `update_ao()` on scene
 - `extract_window` (5m BEV DGM, 5km radius, cold): **18.6ms**; 1707×1454 px output, elev 1398–3336m ✓
 - ~64 internal 256×256 tiles read out of ~128,000 total; selective read = ~0.05% of file
+- 1m tier: two 50km×50km tiles (Innsbruck E4400000, Salzburg E4450000); boundary at easting 4450000
+- Edge-tile bug: 50001 mod 256 = 81 → last-column tiles are 81px wide; old stride=256 caused OOB panic
+- 1m window: ±3500m = 7000×7000px; stitch combines both tiles when window straddles boundary
+- `BEV_1M_RADIUS_M = 3500.0`, `BEV_1M_DRIFT_THRESHOLD_M = 1000.0`; GPU bindings 16–21
+- Coordinate chain: EPSG:31287 → lcc_epsg31287_inverse → WGS84 → laea_epsg3035 → EPSG:3035 (worker);
+  EPSG:3035 origin → laea_epsg3035_inverse → WGS84 → lcc_epsg31287 → tile-local offset (event loop)
 
 Known open items from Phase 4:
 - Supersampled ray optimization considered but not implemented: march 1 reference ray, approximate 3 neighbor heights via `h ≈ h_center + grad_x * Δcol + grad_y * Δrow` (using Phase 2 normal map). Would reduce gather 4→1 per step. Breaks at sharp discrete peaks.

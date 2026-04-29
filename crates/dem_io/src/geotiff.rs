@@ -353,10 +353,12 @@ pub fn extract_window(
                 _ => return Err("expected F32 tile".into()),
             };
             // overlap copy goes here
-            let tile_col0 = tc * tw as usize; // inclusive                                                                                                                
+            let tile_col0 = tc * tw as usize;
             let tile_row0 = tr * th as usize;
-            let tile_col1 = tile_col0 + tw as usize; // exclusive                                                                                                         
-            let tile_row1 = tile_row0 + th as usize;
+            let tile_col1 = (tile_col0 + tw as usize).min(cols as usize);
+            let tile_row1 = (tile_row0 + th as usize).min(rows as usize);
+            // actual dims for edge tiles (last col/row may be narrower than tw/th)
+            let actual_tw = tile_col1 - tile_col0;
 
             let col_start = tile_col0.max(px0);
             let col_end = tile_col1.min(px1);
@@ -364,7 +366,7 @@ pub fn extract_window(
             let row_end = tile_row1.min(py1);
 
             for row in row_start..row_end {
-                let src = (row - tile_row0) * tw as usize + (col_start - tile_col0);
+                let src = (row - tile_row0) * actual_tw + (col_start - tile_col0);
                 let dst = (row - py0) * out_w + (col_start - px0);
                 let len = col_end - col_start;
                 for i in 0..len {

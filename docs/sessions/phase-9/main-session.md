@@ -229,3 +229,53 @@ N46E010, N46E011, N46E012, N47E010, N47E012, N48E010, N48E011, N48E012
 - Step 3: per-tier background loader threads — 5m and 1m tiers using `extract_window`
 - Step 4: multi-source-tile stitching
 - Step 5: multi-tier shader
+
+---
+
+## 2026-04-28 (session 6)
+
+### What we worked on
+
+**Completed Step 3 (5m + 1m background loader threads) and Step 4 (1m tile stitching).**
+
+**1m streaming tier — full implementation (Steps 3+4+5 for 1m):**
+
+Architecture: three-tier streaming stack — base (~20m, 90km), close (5m, 20km), fine (1m, 3.5km).
+All three tiers use the `StreamingTier` abstraction (tx/rx channels, `needs_reload`, `try_trigger`, `try_recv`, `invalidate`).
+
+Files modified:
+
+- `src/viewer/tiers.rs` — added `BEV_1M_RADIUS_M = 3500.0`, `BEV_1M_DRIFT_THRESHOLD_M = 1000.0`; added `fine: Option<StreamingTier>` to `BevBaseState`
+- `src/viewer/geo.rs` — added `laea_epsg3035_inverse` (spherical LAEA inverse, for event loop: EPSG:3035 origin → WGS84); added `lcc_epsg31287_inverse` (iterative LCC inverse, Bessel 1841, converges <10 iters, for worker: EPSG:31287 → WGS84)
+- `crates/render_gpu/src/camera.rs` — added 8 new fields to `CameraUniforms` (hm1m_origin_x/y, hm1m_extent_x/y, hm1m_cols/rows, _pad8/9); struct is now 256 bytes
+- `crates/render_gpu/src/scene.rs` — added `_hm1m_*` fields (texture R16Float, sampler, 4 storage buffers nx/ny/nz/shadow, 6 metadata scalars); added bindings 16–21 to `render_bgl`, all bind groups, `new()` init (1×1 placeholder), `upload_hm1m()`, `set_hm1m_inactive()`; updated both CameraUniforms construction sites
+- `crates/render_gpu/src/shader_texture.wgsl` — added hm1m fields to WGSL CameraUniforms; added binding declarations 16–21; added `fine_tier_edge_dist` helper; updated `sample_h_exact` to three-tier blend; added 1m normals/shadow blend block in shading
+- `src/viewer/mod.rs` — added `find_1m_tile`, worker thread (EPSG:31287→WGS84→EPSG:3035 conversion, `extract_window`, normals+shadow), fine tier poll block, `--1m-tiles-dir` plumbing; on base reload: `set_hm1m_inactive()` + `fine.invalidate()`
+- `src/main.rs` — `--1m-tiles-dir <path>` CLI arg parsed; `viewer::run` signature updated
+
+**Coordinate conversion chain for 1m tier:**
+- Worker receives EPSG:31287 → `lcc_epsg31287_inverse` → WGS84 → `laea_epsg3035` → (e3035, n3035) → `extract_window`
+- Event loop receives hm with EPSG:3035 origin → `laea_epsg3035_inverse` → WGS84 → `lcc_epsg31287` → EPSG:31287 → subtract base tile CRS origin → tile-local offset for shader
+
+**Edge-tile stride bug fixed in `extract_window`:**
+- 1m tiles are 50001×50001 with 256×256 internal tiles; last column of tiles is only 81px wide (50001 mod 256 = 81)
+- `tiff` crate returns 81×256=20736 elements for edge tiles; old code used `tw=256` as stride → index out of bounds
+- Fix: `actual_tw = tile_col1.min(cols) - tile_col0`; use as stride instead of declared `tw`
+
+**1m tile stitching (two adjacent tiles at EPSG:3035 easting 4450000):**
+- `find_1m_tile(dir, e3035, n3035) -> Option<PathBuf>` replaced by `find_1m_tiles(dir, e3035, n3035, radius_m) -> Vec<PathBuf>` — returns all tiles whose 50km bounds overlap the ±3500m window
+- Worker now captures `tiles_1m_dir` (not a fixed tile path); calls `find_1m_tiles` dynamically on every reload; spawns unconditionally when `--1m-tiles-dir` provided
+- `stitch_1m_windows(windows, centre_e, centre_n, radius_m) -> Heightmap` — aligns each window using `crs_origin_x/y` and 1m pixel arithmetic, fills NODATA gaps, returns a complete 7000×7000 output; single-tile case passes through without stitching
+
+**Available 1m tiles (EPSG:3035):**
+- `tiles/big_size/1m_innsbruck_area/CRS3035RES50000mN2650000E4400000.tif` — easting [4400000, 4450000)
+- `tiles/big_size/1m_salzburg_south_area/CRS3035RES50000mN2650000E4450000.tif` — easting [4450000, 4500000)
+- Shared boundary at easting 4450000; both tiles same northing band [2650000, 2700000)
+
+### Open items remaining
+
+- Step 3 (5m background loader): already implemented in same session as 1m (both use `StreamingTier`)
+- Step 5 (shader three-tier blend): complete — `fine_tier_edge_dist`, smoothstep blend in raymarcher + shading
+- Remaining: drift-based AO recompute for GLO-30 mode (camera exits 20km window → 1.0 fill)
+- Remaining: 1m tier has no AO (ao: vec![] in TierData) — acceptable for now
+- Deferred: tile stitching at north/south boundaries (current tiles share same northing band)

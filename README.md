@@ -154,3 +154,6 @@ Add to `~/.cargo/config.toml`:
 [net]
 git-fetch-with-cli = true
 ```
+
+
+cargo run --release -- --view --1m-tiles-dir tiles/big_size/
