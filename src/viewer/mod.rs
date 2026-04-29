@@ -3,10 +3,10 @@ mod hud_renderer;
 mod scene_init;
 mod tiers;
 
-use std::sync::{mpsc, Arc};
 use std::path::Path;
+use std::sync::{mpsc, Arc};
 
-use dem_io::{extract_window, load_grid, stitch_windows, Heightmap};
+use dem_io::Heightmap;
 use render_gpu::{GpuContext, GpuScene};
 use terrain::ShadowMask;
 
@@ -21,15 +21,12 @@ use winit::{
 
 use crate::viewer::hud_renderer::HudRenderer;
 
-use self::geo::{lcc_epsg31287, laea_epsg3035, laea_epsg3035_inverse, lcc_epsg31287_inverse, latlon_to_tile_metres, sun_position};
-use self::scene_init::{compute_ao_cropped, prepare_scene, INIT_SIM_DAY, INIT_SIM_HOUR};
-use self::tiers::{
-    AO_DRIFT_THRESHOLD_M, BEV_5M_DRIFT_THRESHOLD_M, BEV_5M_RADIUS_M,
-    BEV_BASE_DRIFT_THRESHOLD_M, BEV_BASE_IFD, BEV_BASE_RADIUS_M,
-    BEV_1M_RADIUS_M, BEV_1M_DRIFT_THRESHOLD_M,
-    find_1m_tiles,
-    BevBaseState, Glo30State, StreamingTier, TierData, TileBundle,
+use self::geo::{
+    laea_epsg3035, laea_epsg3035_inverse, latlon_to_tile_metres, lcc_epsg31287,
+    lcc_epsg31287_inverse, sun_position,
 };
+use self::scene_init::{compute_ao_cropped, prepare_scene, INIT_SIM_DAY, INIT_SIM_HOUR};
+use self::tiers::{BevBaseState, Glo30State, AO_DRIFT_THRESHOLD_M};
 
 struct Viewer {
     scene: Option<GpuScene>,
@@ -379,7 +376,9 @@ impl ApplicationHandler for Viewer {
                         self.hm = data.hm;
                         // close and fine tier offsets were relative to the old base origin — must reload
                         bev_base.close.invalidate();
-                        if let Some(ref mut fine) = bev_base.fine { fine.invalidate(); }
+                        if let Some(ref mut fine) = bev_base.fine {
+                            fine.invalidate();
+                        }
                         // respawn shadow worker with updated heightmap
                         let (new_tx, new_worker_rx) = mpsc::sync_channel::<(f32, f32)>(1);
                         let (new_worker_tx, new_rx) = mpsc::channel::<ShadowMask>();
@@ -437,14 +436,17 @@ impl ApplicationHandler for Viewer {
                     if let Some(ref mut fine) = bev_base.fine {
                         if let Some(data) = fine.try_recv() {
                             // data.hm.crs_origin_x/y is in EPSG:3035; convert to EPSG:31287 tile-local
-                            let (lat, lon) = laea_epsg3035_inverse(
-                                data.hm.crs_origin_x, data.hm.crs_origin_y,
-                            );
+                            let (lat, lon) =
+                                laea_epsg3035_inverse(data.hm.crs_origin_x, data.hm.crs_origin_y);
                             let (e31287, n31287) = lcc_epsg31287(lat, lon);
                             let origin_x = (e31287 - self.hm.crs_origin_x) as f32;
                             let origin_y = (self.hm.crs_origin_y - n31287) as f32;
                             self.scene.as_mut().unwrap().upload_hm1m(
-                                origin_x, origin_y, &data.hm, &data.normals, &data.shadow,
+                                origin_x,
+                                origin_y,
+                                &data.hm,
+                                &data.normals,
+                                &data.shadow,
                             );
                             println!(
                                 "1m tier updated: {}×{} at {:.1}m/px",
@@ -723,7 +725,6 @@ fn bev_epsg_pos(cam_pos: [f32; 3], hm: &Heightmap) -> (f64, f64) {
     (easting, northing)
 }
 
-
 pub fn run(tile_path: &Path, width: u32, height: u32, vsync: bool, tiles_1m_dir: Option<&Path>) {
     // Named camera position: Hintertux glacier tongue, WGS84.
     // Converted to tile-local metres at runtime — works for any tile that contains this point.
@@ -776,7 +777,7 @@ pub fn run(tile_path: &Path, width: u32, height: u32, vsync: bool, tiles_1m_dir:
     let bev_base: Option<BevBaseState>;
 
     if hm.crs_epsg == 31287 {
-        // BEV COG mode (DGM_R5.tif).
+        // BEV COG mode: three resolution tiers (base IFD-2/1, close 5m IFD-0, fine 1m tiles).
         // IFD levels for this file:
         //   IFD-0 = 5 m/px  — full resolution, always present by TIFF spec
         //   IFD-1 ≈ 10 m/px — first overview (optional)
@@ -785,226 +786,25 @@ pub fn run(tile_path: &Path, width: u32, height: u32, vsync: bool, tiles_1m_dir:
         // and a close 5 m window at IFD-0.  IFD-0 is NOT viable for the 60 km base window
         // (~12 000×12 000 px at 5 m/px, exceeds the wgpu 8 192-pixel texture limit).
         glo30 = None;
-
-        // base drift worker: loads a BEV_BASE_RADIUS_M window at BEV_BASE_IFD each time
-        // the camera drifts BEV_BASE_DRIFT_THRESHOLD_M from the last window centre
-        let tile_path_base = tile_path.to_path_buf();
-        let (base_tx, base_worker_rx) = mpsc::sync_channel::<(f64, f64)>(1);
-        let (base_worker_tx, base_rx) = mpsc::channel::<TierData>();
-        let lat_rad_w = lat_rad;
-        std::thread::spawn(move || {
-            while let Ok((easting, northing)) = base_worker_rx.recv() {
-                // try BEV_BASE_IFD first; fall back to IFD-1 if that overview is absent
-                let hm_result = extract_window(
-                    &tile_path_base,
-                    (easting, northing),
-                    BEV_BASE_RADIUS_M,
-                    BEV_BASE_IFD,
-                    31287,
-                )
-                .or_else(|_| {
-                    extract_window(
-                        &tile_path_base,
-                        (easting, northing),
-                        BEV_BASE_RADIUS_M,
-                        1,
-                        31287,
-                    )
-                });
-                let Ok(hm) = hm_result else {
-                    continue;
-                };
-                let hm = Arc::new(hm);
-                let normals = terrain::compute_normals_vector_par(&hm);
-                let (az, el) = sun_position(lat_rad_w, INIT_SIM_DAY, INIT_SIM_HOUR);
-                let shadow = terrain::compute_shadow_vector_par_with_azimuth(&hm, az, el, 200.0);
-                let cam_x = easting - hm.crs_origin_x;
-                let cam_y = hm.crs_origin_y - northing;
-                let ao = compute_ao_cropped(&hm, cam_x, cam_y);
-                if base_worker_tx
-                    .send(TierData {
-                        hm,
-                        normals,
-                        shadow,
-                        ao,
-                        centre_e: easting,
-                        centre_n: northing,
-                    })
-                    .is_err()
-                {
-                    break;
-                }
-            }
-        });
-
-        // 5m close-tier drift worker: loads a BEV_5M_RADIUS_M window at IFD-0 (5 m/px)
-        // each time the camera drifts BEV_5M_DRIFT_THRESHOLD_M from the last window centre.
-        // IFD-0 is always present so no fallback is needed here.
-        let tile_path_5m = tile_path.to_path_buf();
-        let (hm5m_tx, hm5m_worker_rx) = mpsc::sync_channel::<(f64, f64)>(1);
-        let (hm5m_worker_tx, hm5m_rx) = mpsc::channel::<TierData>();
-        let lat_rad_5m = lat_rad;
-        std::thread::spawn(move || {
-            while let Ok((easting, northing)) = hm5m_worker_rx.recv() {
-                let Ok(hm5m) = extract_window(
-                    &tile_path_5m,
-                    (easting, northing),
-                    BEV_5M_RADIUS_M,
-                    0,
-                    31287,
-                ) else {
-                    continue;
-                };
-                let hm5m = Arc::new(hm5m);
-                let normals = terrain::compute_normals_vector_par(&hm5m);
-                let (az, el) = sun_position(lat_rad_5m, INIT_SIM_DAY, INIT_SIM_HOUR);
-                let shadow = terrain::compute_shadow_vector_par_with_azimuth(&hm5m, az, el, 200.0);
-                // worker computes the window centre so try_recv() can update last_cx/cy generically
-                let centre_e = hm5m.crs_origin_x + hm5m.cols as f64 * hm5m.dx_meters * 0.5;
-                let centre_n = hm5m.crs_origin_y - hm5m.rows as f64 * hm5m.dy_meters * 0.5;
-                if hm5m_worker_tx
-                    .send(TierData {
-                        hm: hm5m,
-                        normals,
-                        shadow,
-                        ao: vec![],
-                        centre_e,
-                        centre_n,
-                    })
-                    .is_err()
-                {
-                    break;
-                }
-            }
-        });
-
         let (init_e, init_n) = lcc_epsg31287(CAM_LAT, CAM_LON);
-
-        // initial 5m window: blocking load so viewer starts with full-res close detail
-        let mut last_5m_cx = 0.0_f64;
-        let mut last_5m_cy = 0.0_f64;
-        if let Ok(hm5m_init) =
-            extract_window(tile_path, (init_e, init_n), BEV_5M_RADIUS_M, 0, 31287)
-        {
-            let hm5m_init = Arc::new(hm5m_init);
-            // tile-local offset of the 5m window's top-left corner within the base heightmap:
-            // X = difference in left-edge eastings (both in same CRS, so direct subtraction)
-            // Y = base top-northing minus 5m top-northing (flips axis: CRS Y↑ → tile Y↓)
-            let origin_x = (hm5m_init.crs_origin_x - hm.crs_origin_x) as f32;
-            let origin_y = (hm.crs_origin_y - hm5m_init.crs_origin_y) as f32;
-            let normals5 = terrain::compute_normals_vector_par(&hm5m_init);
-            let (az, el) = sun_position(lat_rad, INIT_SIM_DAY, INIT_SIM_HOUR);
-            let shadow5 =
-                terrain::compute_shadow_vector_par_with_azimuth(&hm5m_init, az, el, 200.0);
-            last_5m_cx = hm5m_init.crs_origin_x + hm5m_init.cols as f64 * hm5m_init.dx_meters * 0.5;
-            last_5m_cy = hm5m_init.crs_origin_y - hm5m_init.rows as f64 * hm5m_init.dy_meters * 0.5;
-            println!(
-                "5m IFD-0 initial: {}×{} at {:.1}m/px",
-                hm5m_init.cols, hm5m_init.rows, hm5m_init.dx_meters
-            );
-            scene.upload_hm5m(origin_x, origin_y, &hm5m_init, &normals5, &shadow5);
-        } else {
-            println!("warning: could not load initial 5m IFD-0 window");
-        }
-
-        // 1m fine-tier worker: loads a BEV_1M_RADIUS_M window from 1m tiles (EPSG:3035)
-        // each time the camera drifts BEV_1M_DRIFT_THRESHOLD_M from the last window centre.
-        // Tiles are discovered dynamically on each reload; multiple tiles are stitched together
-        // when the window straddles a tile boundary.
-        let fine_tier: Option<StreamingTier> = tiles_1m_dir.map(|dir| {
-            let (hm1m_tx, hm1m_worker_rx) = mpsc::sync_channel::<(f64, f64)>(1);
-            let (hm1m_worker_tx, hm1m_rx) = mpsc::channel::<TierData>();
-            let lat_rad_1m = lat_rad;
-            let dir_1m = dir.to_path_buf();
-            std::thread::spawn(move || {
-                while let Ok((easting, northing)) = hm1m_worker_rx.recv() {
-                    let (lat, lon) = lcc_epsg31287_inverse(easting, northing);
-                    let (e3035, n3035) = laea_epsg3035(lat, lon);
-                    let tile_paths = find_1m_tiles(&dir_1m, e3035, n3035, BEV_1M_RADIUS_M);
-                    if tile_paths.is_empty() { continue; }
-                    let windows: Vec<_> = tile_paths.iter()
-                        .filter_map(|p| dem_io::extract_window(p, (e3035, n3035), BEV_1M_RADIUS_M, 0, 3035).ok())
-                        .collect();
-                    if windows.is_empty() { continue; }
-                    let hm1m = Arc::new(if windows.len() == 1 {
-                        windows.into_iter().next().unwrap()
-                    } else {
-                        stitch_windows(windows, e3035, n3035, BEV_1M_RADIUS_M)
-                    });
-                    let normals = terrain::compute_normals_vector_par(&hm1m);
-                    let (az, el) = sun_position(lat_rad_1m, INIT_SIM_DAY, INIT_SIM_HOUR);
-                    let shadow =
-                        terrain::compute_shadow_vector_par_with_azimuth(&hm1m, az, el, 200.0);
-                    if hm1m_worker_tx
-                        .send(TierData {
-                            hm: hm1m,
-                            normals,
-                            shadow,
-                            ao: vec![],
-                            centre_e: easting,
-                            centre_n: northing,
-                        })
-                        .is_err()
-                    {
-                        break;
-                    }
-                }
-            });
-            StreamingTier::new(hm1m_tx, hm1m_rx, 0.0, 0.0, BEV_1M_DRIFT_THRESHOLD_M)
-        });
-
-        bev_base = Some(BevBaseState {
-            base: StreamingTier::new(base_tx, base_rx, init_e, init_n, BEV_BASE_DRIFT_THRESHOLD_M),
-            close: StreamingTier::new(hm5m_tx, hm5m_rx, last_5m_cx, last_5m_cy, BEV_5M_DRIFT_THRESHOLD_M),
-            fine: fine_tier,
-        });
+        bev_base = Some(BevBaseState::new(
+            tile_path,
+            lat_rad,
+            init_e,
+            init_n,
+            &hm,
+            tiles_1m_dir,
+            &mut scene,
+        ));
     } else if hm.crs_epsg == 4326 {
-        // GLO-30 mode: set up tile sliding worker
+        // GLO-30 mode: sliding 3×3 Copernicus tile grid.
         bev_base = None;
         let tiles_dir = tile_path
             .parent()
             .and_then(|p| p.parent())
             .unwrap_or(Path::new("tiles"))
             .to_path_buf();
-        let (tile_tx, tile_worker_rx) = mpsc::sync_channel::<(i32, i32, f64, f64)>(1);
-        let (tile_worker_tx, tile_rx) = mpsc::channel::<TileBundle>();
-        let tiles_dir_w = tiles_dir.clone();
-        let lat_rad_w = lat_rad;
-        std::thread::spawn(move || {
-            while let Ok((new_lat, new_lon, cam_lat_w, cam_lon_w)) = tile_worker_rx.recv() {
-                let hm = Arc::new(load_grid(&tiles_dir_w, new_lat, new_lon, |p| {
-                    dem_io::parse_geotiff(p).ok()
-                }));
-                let normals = terrain::compute_normals_vector_par(&hm);
-                let (az, el) = sun_position(lat_rad_w, INIT_SIM_DAY, INIT_SIM_HOUR);
-                let shadow = terrain::compute_shadow_vector_par_with_azimuth(&hm, az, el, 200.0);
-                let cam_x = (cam_lon_w - hm.crs_origin_x) / hm.dx_deg * hm.dx_meters;
-                let cam_y = (hm.crs_origin_y - cam_lat_w) / hm.dy_deg.abs() * hm.dy_meters;
-                let ao = compute_ao_cropped(&hm, cam_x, cam_y);
-                let bundle = TileBundle {
-                    hm,
-                    normals,
-                    shadow,
-                    ao,
-                    centre_lat: new_lat,
-                    centre_lon: new_lon,
-                    cam_lat: cam_lat_w,
-                    cam_lon: cam_lon_w,
-                };
-                if tile_worker_tx.send(bundle).is_err() {
-                    break;
-                }
-            }
-        });
-        let centre_lat = CAM_LAT.floor() as i32;
-        let centre_lon = CAM_LON.floor() as i32;
-        glo30 = Some(Glo30State {
-            centre_lat,
-            centre_lon,
-            tile_tx,
-            tile_rx,
-            tile_loading: false,
-        });
+        glo30 = Some(Glo30State::new(&tiles_dir, lat_rad, CAM_LAT, CAM_LON));
     } else {
         // EPSG:3035 single tile (Hintertux-style) — static, no sliding
         glo30 = None;
