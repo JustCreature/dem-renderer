@@ -36,7 +36,7 @@ A learning-first, cache-optimized terrain + sunlight renderer in Rust using real
 
 ## Status
 
-**Current phase: Phase 9** (Phases 0, 1, 2, 3, 4, 5, 6, 7, 8 complete)
+**Current phase: Phase 10** (Phases 0, 1, 2, 3, 4, 5, 6, 7, 8, 9 complete)
 
 Phase 0 artifacts:
 - `crates/profiling/src/lib.rs` — `now()` (cntvct_el0 via inline asm), `timed()`, tests
@@ -278,22 +278,17 @@ Phase 8 lessons:
 - Software page tables are the correct abstraction when hardware sparse textures are unavailable;
   the indirection cost is negligible compared to texture sample latency
 
-Known open items carried into Phase 9:
-- Multi-tile multi-resolution streaming — full plan in `docs/planning/multi-tile-multiple-resolution-load.md`
-  - Step 1: 30m 3×3 sliding window (download 8 surrounding Copernicus tiles first:
-    N46E010, N46E011, N46E012, N47E010, N47E012, N48E010, N48E011, N48E012)
-  - Step 2: windowed GeoTIFF extraction (in-process `-projwin`)
-  - Step 3: per-tier background loader threads with coarse fallback
-  - Step 4: multi-source-tile stitching
-  - Step 5: multi-tier shader with lerp blend zones
+Known open items carried into Phase 10:
 - GPU shadow via parallel prefix scan — deferred from Phase 5
 - `render_gif::render_gif` commented out in main.rs — deferred from Phase 5
 
-Phase 9 artifacts (in progress):
+Phase 9 artifacts:
 - `docs/sessions/phase-9/main-session.md` — session log
 - `crates/dem_io/src/grid.rs` — `assemble_grid`, `load_grid<F>`, `tile_path`, `crop`; 3×3 Copernicus GLO-30 grid assembly + in-memory crop
 - `crates/dem_io/src/lib.rs` — `crop` re-exported alongside `assemble_grid`, `load_grid`
-- `crates/render_gpu/src/scene.rs` — `_ao_texture` stored; normal buffers gain `COPY_DST`; `write_hm_mips` free function; `update_heightmap(&mut self, hm, normals, ao)` implemented; `_hm1m_*` fields + bindings 16–21 + `upload_hm1m()` + `set_hm1m_inactive()` for 1m fine tier
+- `crates/render_gpu/src/scene/mod.rs` — replaces `scene.rs` (module split); `_ao_texture` stored; normal buffers gain `COPY_DST`; `write_hm_mips` free function (now `pub(super)`); `create_tier_placeholder(device, queue, label)` free function (7-tuple return, deduplicates hm5m/hm1m init in `new()`); `update_heightmap(&mut self, hm, normals, ao)` implemented; `_hm1m_*` fields + bindings 16–21; all struct fields `pub(super)` for submodule access; `include_str!("../shader_texture.wgsl")` path updated for subdirectory
+- `crates/render_gpu/src/scene/bind_group.rs` — `pub(super) fn rebuild_bind_group(&mut self)`: single canonical 22-entry bind group rebuild; replaces 4 duplicate ~90-line blocks previously scattered across `new`, `upload_hm5m`, `upload_hm1m`, `resize`
+- `crates/render_gpu/src/scene/tiers.rs` — `upload_hm5m`, `set_hm5m_inactive`, `upload_hm1m`, `set_hm1m_inactive`; each upload ends with `self.rebuild_bind_group()`
 - `src/viewer/mod.rs` — `parse_copernicus_lat_lon()`; `tile_meters_to_latlon_epsg_4326()`; `TileBundle`; background tile loader thread; per-frame crossing detection + cam_pos re-projection; shadow worker respawn on tile slide; `last_shadow_az/el` throttle (recompute only on ≥0.1° sun movement); dt fix (true inter-frame time); `compute_ao_cropped(hm, cam_lat, cam_lon)` free function; `AO_RADIUS_M = 20_000.0`; tile loader channel upgraded to `(i32, i32, f64, f64)`; `prepare_scene` takes `cam_lat, cam_lon`; 1m fine tier: `find_1m_tiles` (multi-tile overlap scan), `stitch_1m_windows`, worker with dynamic tile discovery + stitching, poll block, `--1m-tiles-dir` CLI arg
 - `src/viewer/tiers.rs` — `BEV_1M_RADIUS_M = 3500.0`, `BEV_1M_DRIFT_THRESHOLD_M = 1000.0`; `fine: Option<StreamingTier>` on `BevBaseState`
 - `src/viewer/geo.rs` — `laea_epsg3035_inverse` (spherical LAEA inverse); `lcc_epsg31287_inverse` (iterative LCC inverse, Bessel 1841, <10 iterations)

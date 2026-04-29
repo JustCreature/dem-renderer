@@ -276,6 +276,54 @@ Files modified:
 
 - Step 3 (5m background loader): already implemented in same session as 1m (both use `StreamingTier`)
 - Step 5 (shader three-tier blend): complete — `fine_tier_edge_dist`, smoothstep blend in raymarcher + shading
-- Remaining: drift-based AO recompute for GLO-30 mode (camera exits 20km window → 1.0 fill)
-- Remaining: 1m tier has no AO (ao: vec![] in TierData) — acceptable for now
-- Deferred: tile stitching at north/south boundaries (current tiles share same northing band)
+
+---
+
+## 2026-04-29 (session 7)
+
+### What we worked on
+
+**Refactored `crates/render_gpu/src/scene.rs` → `scene/` module (3 steps).**
+
+`scene.rs` had grown to 1527 lines with two structural problems:
+1. The 22-entry bind group rebuild block copy-pasted in 4 places (`new`, `upload_hm5m`, `upload_hm1m`, `resize`) — ~90 lines × 4 = ~360 lines of duplication.
+2. The 1×1 placeholder tier creation (texture + view + sampler + 4 buffers) copy-pasted identically for `hm5m` and `hm1m` in `new` — ~45 lines × 2 = ~90 lines of duplication.
+
+**Step 1 — `rebuild_bind_group` method:**
+- Extracted a `pub(super) fn rebuild_bind_group(&mut self)` consolidating all 22 bind group entries.
+- Replaced the 3 duplicate sites in `upload_hm5m`, `upload_hm1m`, and `resize` with `self.rebuild_bind_group()`.
+- Initial bind group in `new()` kept inline (uses local variables before struct construction).
+
+**Step 2 — `create_tier_placeholder` free function:**
+- Extracted `fn create_tier_placeholder(device: &wgpu::Device, queue: &wgpu::Queue, label: &str) -> (Texture, TextureView, Sampler, Buffer, Buffer, Buffer, Buffer)`.
+- Returns 7-tuple: 1×1 R16Float texture + view + Linear sampler + 4 × 1-element f32 storage buffers.
+- Replaced 2 identical placeholder blocks in `new()` for `hm5m` and `hm1m`.
+
+**Step 3 — Module split:**
+- Deleted `scene.rs`; created `scene/mod.rs`, `scene/bind_group.rs`, `scene/tiers.rs`.
+- All `GpuScene` struct fields changed to `pub(super)` so submodules can access them.
+- `include_str!` path updated: `"shader_texture.wgsl"` → `"../shader_texture.wgsl"` (file is now one directory deeper).
+- `scene/bind_group.rs`: single `rebuild_bind_group` impl block.
+- `scene/tiers.rs`: `upload_hm5m`, `set_hm5m_inactive`, `upload_hm1m`, `set_hm1m_inactive`.
+- `lib.rs` export `pub use scene::GpuScene` unchanged.
+
+**Bug found during extraction:**
+- `create_tier_placeholder` initially only took `device`; function calls `queue.write_texture(...)` for the placeholder data → needed `queue: &wgpu::Queue` as second parameter.
+
+**Result:** 3 files totalling 1297 lines (mod.rs 1062 + bind_group.rs 34 + tiers.rs 201), down from 1527. `cargo build --release` clean.
+
+### Phase 9 complete
+
+All planned items done:
+- Step 1: 30m 3×3 sliding window ✓
+- Step 2: windowed GeoTIFF extraction (`extract_window`) ✓
+- Step 3: per-tier background loader threads + AO crop ✓
+- Step 4: 1m multi-tile stitching (`stitch_1m_windows`) ✓
+- Step 5: three-tier shader blend ✓
+- scene.rs refactor ✓
+
+Carried into Phase 10:
+- GPU shadow via parallel prefix scan (from Phase 5)
+- `render_gif` commented out (from Phase 5)
+
+Phase 10 begins next session.
