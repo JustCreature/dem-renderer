@@ -40,6 +40,7 @@ pub struct GpuScene {
     pub(super) hm5m_extent_y: f32,
     pub(super) hm5m_cols: u32,
     pub(super) hm5m_rows: u32,
+    pub(super) hm5m_buf_elems: u64,
 
     // hm1m fine tier (placeholder until upload_hm1m; extent_x==0 means inactive)
     pub(super) _hm1m_texture: wgpu::Texture,
@@ -55,6 +56,7 @@ pub struct GpuScene {
     pub(super) hm1m_extent_y: f32,
     pub(super) hm1m_cols: u32,
     pub(super) hm1m_rows: u32,
+    pub(super) hm1m_buf_elems: u64,
 
     // Mutable per-frame / per-sun-update
     pub(super) shadow_buf: wgpu::Buffer,
@@ -84,11 +86,23 @@ pub(super) fn create_tier_placeholder(
     device: &wgpu::Device,
     queue: &wgpu::Queue,
     label: &str,
-) -> (wgpu::Texture, wgpu::TextureView, wgpu::Sampler, wgpu::Buffer, wgpu::Buffer, wgpu::Buffer, wgpu::Buffer) {
+) -> (
+    wgpu::Texture,
+    wgpu::TextureView,
+    wgpu::Sampler,
+    wgpu::Buffer,
+    wgpu::Buffer,
+    wgpu::Buffer,
+    wgpu::Buffer,
+) {
     let ph_tex_data: [half::f16; 1] = [half::f16::from_f32(0.0)];
     let texture = device.create_texture(&wgpu::TextureDescriptor {
         label: Some(&format!("{}_tex", label)),
-        size: wgpu::Extent3d { width: 1, height: 1, depth_or_array_layers: 1 },
+        size: wgpu::Extent3d {
+            width: 1,
+            height: 1,
+            depth_or_array_layers: 1,
+        },
         mip_level_count: 1,
         sample_count: 1,
         dimension: wgpu::TextureDimension::D2,
@@ -99,8 +113,16 @@ pub(super) fn create_tier_placeholder(
     queue.write_texture(
         texture.as_image_copy(),
         bytemuck::cast_slice(&ph_tex_data),
-        wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(2), rows_per_image: None },
-        wgpu::Extent3d { width: 1, height: 1, depth_or_array_layers: 1 },
+        wgpu::TexelCopyBufferLayout {
+            offset: 0,
+            bytes_per_row: Some(2),
+            rows_per_image: None,
+        },
+        wgpu::Extent3d {
+            width: 1,
+            height: 1,
+            depth_or_array_layers: 1,
+        },
     );
     let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
     let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
@@ -116,7 +138,15 @@ pub(super) fn create_tier_placeholder(
             usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
         })
     };
-    (texture, view, sampler, make_buf("nx"), make_buf("ny"), make_buf("nz"), make_buf("shadow"))
+    (
+        texture,
+        view,
+        sampler,
+        make_buf("nx"),
+        make_buf("ny"),
+        make_buf("nz"),
+        make_buf("shadow"),
+    )
 }
 
 /// Generate mip levels 1..7 for a heightmap texture using a max filter.
@@ -263,10 +293,24 @@ impl GpuScene {
         });
 
         // hm5m + hm1m placeholders (1×1 R16Float, 1-element buffers) — inactive until upload
-        let (hm5m_texture, hm5m_view, hm5m_sampler, hm5m_nx_buf, hm5m_ny_buf, hm5m_nz_buf, hm5m_shadow_buf)
-            = create_tier_placeholder(&gpu_ctx.device, &gpu_ctx.queue, "hm5m");
-        let (hm1m_texture, hm1m_view, hm1m_sampler, hm1m_nx_buf, hm1m_ny_buf, hm1m_nz_buf, hm1m_shadow_buf)
-            = create_tier_placeholder(&gpu_ctx.device, &gpu_ctx.queue, "hm1m");
+        let (
+            hm5m_texture,
+            hm5m_view,
+            hm5m_sampler,
+            hm5m_nx_buf,
+            hm5m_ny_buf,
+            hm5m_nz_buf,
+            hm5m_shadow_buf,
+        ) = create_tier_placeholder(&gpu_ctx.device, &gpu_ctx.queue, "hm5m");
+        let (
+            hm1m_texture,
+            hm1m_view,
+            hm1m_sampler,
+            hm1m_nx_buf,
+            hm1m_ny_buf,
+            hm1m_nz_buf,
+            hm1m_shadow_buf,
+        ) = create_tier_placeholder(&gpu_ctx.device, &gpu_ctx.queue, "hm1m");
 
         // normals buffers — COPY_DST so update_heightmap can write_buffer
         let nx_buf = gpu_ctx
@@ -688,6 +732,7 @@ impl GpuScene {
             hm5m_extent_y: 0.0,
             hm5m_cols: 0,
             hm5m_rows: 0,
+            hm5m_buf_elems: 1,
             _hm1m_texture: hm1m_texture,
             _hm1m_view: hm1m_view,
             _hm1m_sampler: hm1m_sampler,
@@ -701,6 +746,7 @@ impl GpuScene {
             hm1m_extent_y: 0.0,
             hm1m_cols: 0,
             hm1m_rows: 0,
+            hm1m_buf_elems: 1,
             shadow_buf,
             cam_buf,
             output_buf,
@@ -979,8 +1025,7 @@ impl GpuScene {
         normal_map: &NormalMap,
         ao_data_mask: &[f32],
     ) {
-        let hm_data: Vec<half::f16> =
-            hm.data.iter().map(|&v| half::f16::from_f32(v)).collect();
+        let hm_data: Vec<half::f16> = hm.data.iter().map(|&v| half::f16::from_f32(v)).collect();
         self.gpu_ctx.queue.write_texture(
             wgpu::TexelCopyTextureInfo {
                 texture: &self._hm_texture,
