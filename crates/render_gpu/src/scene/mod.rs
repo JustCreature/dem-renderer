@@ -30,9 +30,9 @@ pub struct GpuScene {
     pub(super) _hm5m_texture: wgpu::Texture,
     pub(super) _hm5m_view: wgpu::TextureView,
     pub(super) _hm5m_sampler: wgpu::Sampler,
-    pub(super) _hm5m_nx_buf: wgpu::Buffer,
-    pub(super) _hm5m_ny_buf: wgpu::Buffer,
-    pub(super) _hm5m_nz_buf: wgpu::Buffer,
+    pub(super) _hm5m_normal_tex: wgpu::Texture,
+    pub(super) _hm5m_normal_view: wgpu::TextureView,
+    pub(super) _hm5m_normal_sampler: wgpu::Sampler,
     pub(super) _hm5m_shadow_buf: wgpu::Buffer,
     pub(super) hm5m_origin_x: f32,
     pub(super) hm5m_origin_y: f32,
@@ -46,9 +46,9 @@ pub struct GpuScene {
     pub(super) _hm1m_texture: wgpu::Texture,
     pub(super) _hm1m_view: wgpu::TextureView,
     pub(super) _hm1m_sampler: wgpu::Sampler,
-    pub(super) _hm1m_nx_buf: wgpu::Buffer,
-    pub(super) _hm1m_ny_buf: wgpu::Buffer,
-    pub(super) _hm1m_nz_buf: wgpu::Buffer,
+    pub(super) _hm1m_normal_tex: wgpu::Texture,
+    pub(super) _hm1m_normal_view: wgpu::TextureView,
+    pub(super) _hm1m_normal_sampler: wgpu::Sampler,
     pub(super) _hm1m_shadow_buf: wgpu::Buffer,
     pub(super) hm1m_origin_x: f32,
     pub(super) hm1m_origin_y: f32,
@@ -90,11 +90,12 @@ pub(super) fn create_tier_placeholder(
     wgpu::Texture,
     wgpu::TextureView,
     wgpu::Sampler,
-    wgpu::Buffer,
-    wgpu::Buffer,
-    wgpu::Buffer,
-    wgpu::Buffer,
+    wgpu::Texture, // normal tex (Rgba8Snorm)
+    wgpu::TextureView,
+    wgpu::Sampler,
+    wgpu::Buffer, // shadow buf
 ) {
+    // Heightmap placeholder: R16Float 1×1
     let ph_tex_data: [half::f16; 1] = [half::f16::from_f32(0.0)];
     let texture = device.create_texture(&wgpu::TextureDescriptor {
         label: Some(&format!("{}_tex", label)),
@@ -130,22 +131,57 @@ pub(super) fn create_tier_placeholder(
         min_filter: wgpu::FilterMode::Linear,
         ..Default::default()
     });
+    // Normal placeholder: Rgba8Snorm 1×1, [0, 0] decodes to (x=0, y=0) → z=1 (up normal)
+    let ph_normal_data: [i8; 4] = [0, 0, 0, 0];
+    let normal_tex = device.create_texture(&wgpu::TextureDescriptor {
+        label: Some(&format!("{}_normal_tex", label)),
+        size: wgpu::Extent3d {
+            width: 1,
+            height: 1,
+            depth_or_array_layers: 1,
+        },
+        mip_level_count: 1,
+        sample_count: 1,
+        dimension: wgpu::TextureDimension::D2,
+        format: wgpu::TextureFormat::Rgba8Snorm,
+        usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+        view_formats: &[],
+    });
+    queue.write_texture(
+        normal_tex.as_image_copy(),
+        bytemuck::cast_slice(&ph_normal_data),
+        wgpu::TexelCopyBufferLayout {
+            offset: 0,
+            bytes_per_row: Some(4),
+            rows_per_image: None,
+        },
+        wgpu::Extent3d {
+            width: 1,
+            height: 1,
+            depth_or_array_layers: 1,
+        },
+    );
+    let normal_view = normal_tex.create_view(&wgpu::TextureViewDescriptor::default());
+    let normal_sampler = device.create_sampler(&wgpu::SamplerDescriptor {
+        mag_filter: wgpu::FilterMode::Linear,
+        min_filter: wgpu::FilterMode::Linear,
+        ..Default::default()
+    });
+    // Shadow placeholder: 1-element f32 buffer
     let ph_buf_data: [f32; 1] = [0.0];
-    let make_buf = |suffix: &str| {
-        device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some(&format!("{}_{}", label, suffix)),
-            contents: bytemuck::cast_slice(&ph_buf_data),
-            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
-        })
-    };
+    let shadow_buf = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+        label: Some(&format!("{}_shadow", label)),
+        contents: bytemuck::cast_slice(&ph_buf_data),
+        usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+    });
     (
         texture,
         view,
         sampler,
-        make_buf("nx"),
-        make_buf("ny"),
-        make_buf("nz"),
-        make_buf("shadow"),
+        normal_tex,
+        normal_view,
+        normal_sampler,
+        shadow_buf,
     )
 }
 
@@ -297,18 +333,18 @@ impl GpuScene {
             hm5m_texture,
             hm5m_view,
             hm5m_sampler,
-            hm5m_nx_buf,
-            hm5m_ny_buf,
-            hm5m_nz_buf,
+            hm5m_normal_tex,
+            hm5m_normal_view,
+            hm5m_normal_sampler,
             hm5m_shadow_buf,
         ) = create_tier_placeholder(&gpu_ctx.device, &gpu_ctx.queue, "hm5m");
         let (
             hm1m_texture,
             hm1m_view,
             hm1m_sampler,
-            hm1m_nx_buf,
-            hm1m_ny_buf,
-            hm1m_nz_buf,
+            hm1m_normal_tex,
+            hm1m_normal_view,
+            hm1m_normal_sampler,
             hm1m_shadow_buf,
         ) = create_tier_placeholder(&gpu_ctx.device, &gpu_ctx.queue, "hm1m");
 
@@ -485,21 +521,17 @@ impl GpuScene {
                         wgpu::BindGroupLayoutEntry {
                             binding: 12,
                             visibility: wgpu::ShaderStages::COMPUTE,
-                            ty: wgpu::BindingType::Buffer {
-                                ty: wgpu::BufferBindingType::Storage { read_only: true },
-                                has_dynamic_offset: false,
-                                min_binding_size: None,
+                            ty: wgpu::BindingType::Texture {
+                                sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                                view_dimension: wgpu::TextureViewDimension::D2,
+                                multisampled: false,
                             },
                             count: None,
                         },
                         wgpu::BindGroupLayoutEntry {
                             binding: 13,
                             visibility: wgpu::ShaderStages::COMPUTE,
-                            ty: wgpu::BindingType::Buffer {
-                                ty: wgpu::BufferBindingType::Storage { read_only: true },
-                                has_dynamic_offset: false,
-                                min_binding_size: None,
-                            },
+                            ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
                             count: None,
                         },
                         wgpu::BindGroupLayoutEntry {
@@ -512,19 +544,9 @@ impl GpuScene {
                             },
                             count: None,
                         },
-                        wgpu::BindGroupLayoutEntry {
-                            binding: 15,
-                            visibility: wgpu::ShaderStages::COMPUTE,
-                            ty: wgpu::BindingType::Buffer {
-                                ty: wgpu::BufferBindingType::Storage { read_only: true },
-                                has_dynamic_offset: false,
-                                min_binding_size: None,
-                            },
-                            count: None,
-                        },
                         // hm1m fine tier
                         wgpu::BindGroupLayoutEntry {
-                            binding: 16,
+                            binding: 15,
                             visibility: wgpu::ShaderStages::COMPUTE,
                             ty: wgpu::BindingType::Texture {
                                 sample_type: wgpu::TextureSampleType::Float { filterable: true },
@@ -534,43 +556,29 @@ impl GpuScene {
                             count: None,
                         },
                         wgpu::BindGroupLayoutEntry {
-                            binding: 17,
+                            binding: 16,
                             visibility: wgpu::ShaderStages::COMPUTE,
                             ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
                             count: None,
                         },
                         wgpu::BindGroupLayoutEntry {
+                            binding: 17,
+                            visibility: wgpu::ShaderStages::COMPUTE,
+                            ty: wgpu::BindingType::Texture {
+                                sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                                view_dimension: wgpu::TextureViewDimension::D2,
+                                multisampled: false,
+                            },
+                            count: None,
+                        },
+                        wgpu::BindGroupLayoutEntry {
                             binding: 18,
                             visibility: wgpu::ShaderStages::COMPUTE,
-                            ty: wgpu::BindingType::Buffer {
-                                ty: wgpu::BufferBindingType::Storage { read_only: true },
-                                has_dynamic_offset: false,
-                                min_binding_size: None,
-                            },
+                            ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
                             count: None,
                         },
                         wgpu::BindGroupLayoutEntry {
                             binding: 19,
-                            visibility: wgpu::ShaderStages::COMPUTE,
-                            ty: wgpu::BindingType::Buffer {
-                                ty: wgpu::BufferBindingType::Storage { read_only: true },
-                                has_dynamic_offset: false,
-                                min_binding_size: None,
-                            },
-                            count: None,
-                        },
-                        wgpu::BindGroupLayoutEntry {
-                            binding: 20,
-                            visibility: wgpu::ShaderStages::COMPUTE,
-                            ty: wgpu::BindingType::Buffer {
-                                ty: wgpu::BufferBindingType::Storage { read_only: true },
-                                has_dynamic_offset: false,
-                                min_binding_size: None,
-                            },
-                            count: None,
-                        },
-                        wgpu::BindGroupLayoutEntry {
-                            binding: 21,
                             visibility: wgpu::ShaderStages::COMPUTE,
                             ty: wgpu::BindingType::Buffer {
                                 ty: wgpu::BufferBindingType::Storage { read_only: true },
@@ -641,43 +649,35 @@ impl GpuScene {
                     },
                     wgpu::BindGroupEntry {
                         binding: 12,
-                        resource: hm5m_nx_buf.as_entire_binding(),
+                        resource: wgpu::BindingResource::TextureView(&hm5m_normal_view),
                     },
                     wgpu::BindGroupEntry {
                         binding: 13,
-                        resource: hm5m_ny_buf.as_entire_binding(),
+                        resource: wgpu::BindingResource::Sampler(&hm5m_normal_sampler),
                     },
                     wgpu::BindGroupEntry {
                         binding: 14,
-                        resource: hm5m_nz_buf.as_entire_binding(),
-                    },
-                    wgpu::BindGroupEntry {
-                        binding: 15,
                         resource: hm5m_shadow_buf.as_entire_binding(),
                     },
                     // hm1m fine tier (placeholder)
                     wgpu::BindGroupEntry {
-                        binding: 16,
+                        binding: 15,
                         resource: wgpu::BindingResource::TextureView(&hm1m_view),
                     },
                     wgpu::BindGroupEntry {
-                        binding: 17,
+                        binding: 16,
                         resource: wgpu::BindingResource::Sampler(&hm1m_sampler),
                     },
                     wgpu::BindGroupEntry {
+                        binding: 17,
+                        resource: wgpu::BindingResource::TextureView(&hm1m_normal_view),
+                    },
+                    wgpu::BindGroupEntry {
                         binding: 18,
-                        resource: hm1m_nx_buf.as_entire_binding(),
+                        resource: wgpu::BindingResource::Sampler(&hm1m_normal_sampler),
                     },
                     wgpu::BindGroupEntry {
                         binding: 19,
-                        resource: hm1m_ny_buf.as_entire_binding(),
-                    },
-                    wgpu::BindGroupEntry {
-                        binding: 20,
-                        resource: hm1m_nz_buf.as_entire_binding(),
-                    },
-                    wgpu::BindGroupEntry {
-                        binding: 21,
                         resource: hm1m_shadow_buf.as_entire_binding(),
                     },
                 ],
@@ -722,9 +722,9 @@ impl GpuScene {
             _hm5m_texture: hm5m_texture,
             _hm5m_view: hm5m_view,
             _hm5m_sampler: hm5m_sampler,
-            _hm5m_nx_buf: hm5m_nx_buf,
-            _hm5m_ny_buf: hm5m_ny_buf,
-            _hm5m_nz_buf: hm5m_nz_buf,
+            _hm5m_normal_tex: hm5m_normal_tex,
+            _hm5m_normal_view: hm5m_normal_view,
+            _hm5m_normal_sampler: hm5m_normal_sampler,
             _hm5m_shadow_buf: hm5m_shadow_buf,
             hm5m_origin_x: 0.0,
             hm5m_origin_y: 0.0,
@@ -736,9 +736,9 @@ impl GpuScene {
             _hm1m_texture: hm1m_texture,
             _hm1m_view: hm1m_view,
             _hm1m_sampler: hm1m_sampler,
-            _hm1m_nx_buf: hm1m_nx_buf,
-            _hm1m_ny_buf: hm1m_ny_buf,
-            _hm1m_nz_buf: hm1m_nz_buf,
+            _hm1m_normal_tex: hm1m_normal_tex,
+            _hm1m_normal_view: hm1m_normal_view,
+            _hm1m_normal_sampler: hm1m_normal_sampler,
             _hm1m_shadow_buf: hm1m_shadow_buf,
             hm1m_origin_x: 0.0,
             hm1m_origin_y: 0.0,

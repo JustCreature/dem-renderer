@@ -64,17 +64,15 @@ struct CameraUniforms {
 // hm5m close tier
 @group(0) @binding(10) var hm5m_tex: texture_2d<f32>;
 @group(0) @binding(11) var hm5m_samp: sampler;
-@group(0) @binding(12) var<storage, read> hm5m_nx: array<f32>;
-@group(0) @binding(13) var<storage, read> hm5m_ny: array<f32>;
-@group(0) @binding(14) var<storage, read> hm5m_nz: array<f32>;
-@group(0) @binding(15) var<storage, read> hm5m_shadow: array<f32>;
+@group(0) @binding(12) var hm5m_normal_tex: texture_2d<f32>;
+@group(0) @binding(13) var hm5m_normal_samp: sampler;
+@group(0) @binding(14) var<storage, read> hm5m_shadow: array<f32>;
 // hm1m fine tier
-@group(0) @binding(16) var hm1m_tex: texture_2d<f32>;
-@group(0) @binding(17) var hm1m_samp: sampler;
-@group(0) @binding(18) var<storage, read> hm1m_nx: array<f32>;
-@group(0) @binding(19) var<storage, read> hm1m_ny: array<f32>;
-@group(0) @binding(20) var<storage, read> hm1m_nz: array<f32>;
-@group(0) @binding(21) var<storage, read> hm1m_shadow: array<f32>;
+@group(0) @binding(15) var hm1m_tex: texture_2d<f32>;
+@group(0) @binding(16) var hm1m_samp: sampler;
+@group(0) @binding(17) var hm1m_normal_tex: texture_2d<f32>;
+@group(0) @binding(18) var hm1m_normal_samp: sampler;
+@group(0) @binding(19) var<storage, read> hm1m_shadow: array<f32>;
 
 // Width of the blend zone at the edge of any tier boundary, in metres.
 // smoothstep from 0 (edge, fully base tier) to BLEND_MARGIN (inner, fully close tier).
@@ -351,7 +349,10 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
         var hit_uv: vec2<f32>;
 
         if t5 > 0.0 {
-            // ── close tier normals and shadow ──
+            // ── close tier normals (texture sample) and shadow (buffer bilinear) ──
+            let close_uv = vec2<f32>(lx_hit / cam.hm5m_extent_x, ly_hit / cam.hm5m_extent_y);
+            let n5_rg = textureSampleLevel(hm5m_normal_tex, hm5m_normal_samp, close_uv, 0.0).rg;
+            let n5 = normalize(vec3<f32>(n5_rg.x, n5_rg.y, sqrt(max(0.0, 1.0 - dot(n5_rg, n5_rg)))));
             let dx5 = cam.hm5m_extent_x / f32(cam.hm5m_cols);
             let dy5 = cam.hm5m_extent_y / f32(cam.hm5m_rows);
             let c5_f = lx_hit / dx5;
@@ -364,15 +365,8 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
             let i5_10 = u32(r5) * cam.hm5m_cols + u32(c5 + 1);
             let i5_01 = u32(r5 + 1) * cam.hm5m_cols + u32(c5);
             let i5_11 = u32(r5 + 1) * cam.hm5m_cols + u32(c5 + 1);
-            let n5 = normalize(mix(
-                mix(vec3<f32>(hm5m_nx[i5_00], hm5m_ny[i5_00], hm5m_nz[i5_00]),
-                    vec3<f32>(hm5m_nx[i5_10], hm5m_ny[i5_10], hm5m_nz[i5_10]), fx5),
-                mix(vec3<f32>(hm5m_nx[i5_01], hm5m_ny[i5_01], hm5m_nz[i5_01]),
-                    vec3<f32>(hm5m_nx[i5_11], hm5m_ny[i5_11], hm5m_nz[i5_11]), fx5), fy5
-            ));
             let sh5 = mix(mix(hm5m_shadow[i5_00], hm5m_shadow[i5_10], fx5),
                 mix(hm5m_shadow[i5_01], hm5m_shadow[i5_11], fx5), fy5);
-            let close_uv = vec2<f32>(lx_hit / cam.hm5m_extent_x, ly_hit / cam.hm5m_extent_y);
 
             normal = normalize(mix(n_base, n5, t5));
             in_shadow = mix(sh_base, sh5, t5);
@@ -390,6 +384,10 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
             let in_1m = lx1 >= 0.0 && lx1 < cam.hm1m_extent_x && ly1 >= 0.0 && ly1 < cam.hm1m_extent_y;
             let t1 = select(0.0, smoothstep(0.0, BLEND_MARGIN, fine_tier_edge_dist(lx1, ly1)), in_1m);
             if t1 > 0.0 {
+                // ── fine tier normals (texture sample) and shadow (buffer bilinear) ──
+                let fine_uv = vec2<f32>(lx1 / cam.hm1m_extent_x, ly1 / cam.hm1m_extent_y);
+                let n1_rg = textureSampleLevel(hm1m_normal_tex, hm1m_normal_samp, fine_uv, 0.0).rg;
+                let n1 = normalize(vec3<f32>(n1_rg.x, n1_rg.y, sqrt(max(0.0, 1.0 - dot(n1_rg, n1_rg)))));
                 let dx1 = cam.hm1m_extent_x / f32(cam.hm1m_cols);
                 let dy1 = cam.hm1m_extent_y / f32(cam.hm1m_rows);
                 let c1_f = lx1 / dx1;
@@ -402,15 +400,8 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
                 let i1_10 = u32(r1) * cam.hm1m_cols + u32(c1 + 1);
                 let i1_01 = u32(r1 + 1) * cam.hm1m_cols + u32(c1);
                 let i1_11 = u32(r1 + 1) * cam.hm1m_cols + u32(c1 + 1);
-                let n1 = normalize(mix(
-                    mix(vec3<f32>(hm1m_nx[i1_00], hm1m_ny[i1_00], hm1m_nz[i1_00]),
-                        vec3<f32>(hm1m_nx[i1_10], hm1m_ny[i1_10], hm1m_nz[i1_10]), fx1),
-                    mix(vec3<f32>(hm1m_nx[i1_01], hm1m_ny[i1_01], hm1m_nz[i1_01]),
-                        vec3<f32>(hm1m_nx[i1_11], hm1m_ny[i1_11], hm1m_nz[i1_11]), fx1), fy1
-                ));
                 let sh1 = mix(mix(hm1m_shadow[i1_00], hm1m_shadow[i1_10], fx1),
                     mix(hm1m_shadow[i1_01], hm1m_shadow[i1_11], fx1), fy1);
-                let fine_uv = vec2<f32>(lx1 / cam.hm1m_extent_x, ly1 / cam.hm1m_extent_y);
 
                 normal = normalize(mix(normal, n1, t1));
                 in_shadow = mix(in_shadow, sh1, t1);

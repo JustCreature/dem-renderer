@@ -40,28 +40,30 @@ impl GpuScene {
                 });
             self._hm5m_view = texture.create_view(&wgpu::TextureViewDescriptor::default());
             self._hm5m_texture = texture;
+            let normal_tex = self
+                .gpu_ctx
+                .device
+                .create_texture(&wgpu::TextureDescriptor {
+                    label: Some("hm5m_normal_tex"),
+                    size: wgpu::Extent3d {
+                        width: cols,
+                        height: rows,
+                        depth_or_array_layers: 1,
+                    },
+                    mip_level_count: 1,
+                    sample_count: 1,
+                    dimension: wgpu::TextureDimension::D2,
+                    format: wgpu::TextureFormat::Rgba8Snorm,
+                    usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+                    view_formats: &[],
+                });
+            self._hm5m_normal_view =
+                normal_tex.create_view(&wgpu::TextureViewDescriptor::default());
+            self._hm5m_normal_tex = normal_tex;
         }
 
         if buf_too_small {
             let size = needed_elems * 4;
-            self._hm5m_nx_buf = self.gpu_ctx.device.create_buffer(&wgpu::BufferDescriptor {
-                label: Some("hm5m_nx"),
-                size,
-                usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
-                mapped_at_creation: false,
-            });
-            self._hm5m_ny_buf = self.gpu_ctx.device.create_buffer(&wgpu::BufferDescriptor {
-                label: Some("hm5m_ny"),
-                size,
-                usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
-                mapped_at_creation: false,
-            });
-            self._hm5m_nz_buf = self.gpu_ctx.device.create_buffer(&wgpu::BufferDescriptor {
-                label: Some("hm5m_nz"),
-                size,
-                usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
-                mapped_at_creation: false,
-            });
             self._hm5m_shadow_buf = self.gpu_ctx.device.create_buffer(&wgpu::BufferDescriptor {
                 label: Some("hm5m_shadow"),
                 size,
@@ -90,15 +92,33 @@ impl GpuScene {
                 depth_or_array_layers: 1,
             },
         );
-        self.gpu_ctx
-            .queue
-            .write_buffer(&self._hm5m_nx_buf, 0, bytemuck::cast_slice(&normals.nx));
-        self.gpu_ctx
-            .queue
-            .write_buffer(&self._hm5m_ny_buf, 0, bytemuck::cast_slice(&normals.ny));
-        self.gpu_ctx
-            .queue
-            .write_buffer(&self._hm5m_nz_buf, 0, bytemuck::cast_slice(&normals.nz));
+        let normal_data: Vec<i8> = normals
+            .nx
+            .iter()
+            .zip(normals.ny.iter())
+            .flat_map(|(&nx, &ny)| {
+                [
+                    (nx.clamp(-1.0, 1.0) * 127.0).round() as i8,
+                    (ny.clamp(-1.0, 1.0) * 127.0).round() as i8,
+                    0i8,
+                    0i8,
+                ]
+            })
+            .collect();
+        self.gpu_ctx.queue.write_texture(
+            self._hm5m_normal_tex.as_image_copy(),
+            bytemuck::cast_slice(&normal_data),
+            wgpu::TexelCopyBufferLayout {
+                offset: 0,
+                bytes_per_row: Some(cols * 4),
+                rows_per_image: None,
+            },
+            wgpu::Extent3d {
+                width: cols,
+                height: rows,
+                depth_or_array_layers: 1,
+            },
+        );
         self.gpu_ctx.queue.write_buffer(
             &self._hm5m_shadow_buf,
             0,
@@ -155,28 +175,30 @@ impl GpuScene {
                 });
             self._hm1m_view = texture.create_view(&wgpu::TextureViewDescriptor::default());
             self._hm1m_texture = texture;
+            let normal_tex = self
+                .gpu_ctx
+                .device
+                .create_texture(&wgpu::TextureDescriptor {
+                    label: Some("hm1m_normal_tex"),
+                    size: wgpu::Extent3d {
+                        width: cols,
+                        height: rows,
+                        depth_or_array_layers: 1,
+                    },
+                    mip_level_count: 1,
+                    sample_count: 1,
+                    dimension: wgpu::TextureDimension::D2,
+                    format: wgpu::TextureFormat::Rgba8Snorm,
+                    usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+                    view_formats: &[],
+                });
+            self._hm1m_normal_view =
+                normal_tex.create_view(&wgpu::TextureViewDescriptor::default());
+            self._hm1m_normal_tex = normal_tex;
         }
 
         if buf_too_small {
             let size = needed_elems * 4;
-            self._hm1m_nx_buf = self.gpu_ctx.device.create_buffer(&wgpu::BufferDescriptor {
-                label: Some("hm1m_nx"),
-                size,
-                usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
-                mapped_at_creation: false,
-            });
-            self._hm1m_ny_buf = self.gpu_ctx.device.create_buffer(&wgpu::BufferDescriptor {
-                label: Some("hm1m_ny"),
-                size,
-                usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
-                mapped_at_creation: false,
-            });
-            self._hm1m_nz_buf = self.gpu_ctx.device.create_buffer(&wgpu::BufferDescriptor {
-                label: Some("hm1m_nz"),
-                size,
-                usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
-                mapped_at_creation: false,
-            });
             self._hm1m_shadow_buf = self.gpu_ctx.device.create_buffer(&wgpu::BufferDescriptor {
                 label: Some("hm1m_shadow"),
                 size,
@@ -205,15 +227,33 @@ impl GpuScene {
                 depth_or_array_layers: 1,
             },
         );
-        self.gpu_ctx
-            .queue
-            .write_buffer(&self._hm1m_nx_buf, 0, bytemuck::cast_slice(&normals.nx));
-        self.gpu_ctx
-            .queue
-            .write_buffer(&self._hm1m_ny_buf, 0, bytemuck::cast_slice(&normals.ny));
-        self.gpu_ctx
-            .queue
-            .write_buffer(&self._hm1m_nz_buf, 0, bytemuck::cast_slice(&normals.nz));
+        let normal_data: Vec<i8> = normals
+            .nx
+            .iter()
+            .zip(normals.ny.iter())
+            .flat_map(|(&nx, &ny)| {
+                [
+                    (nx.clamp(-1.0, 1.0) * 127.0).round() as i8,
+                    (ny.clamp(-1.0, 1.0) * 127.0).round() as i8,
+                    0i8,
+                    0i8,
+                ]
+            })
+            .collect();
+        self.gpu_ctx.queue.write_texture(
+            self._hm1m_normal_tex.as_image_copy(),
+            bytemuck::cast_slice(&normal_data),
+            wgpu::TexelCopyBufferLayout {
+                offset: 0,
+                bytes_per_row: Some(cols * 4),
+                rows_per_image: None,
+            },
+            wgpu::Extent3d {
+                width: cols,
+                height: rows,
+                depth_or_array_layers: 1,
+            },
+        );
         self.gpu_ctx.queue.write_buffer(
             &self._hm1m_shadow_buf,
             0,
