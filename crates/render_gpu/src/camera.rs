@@ -42,6 +42,15 @@ pub struct CameraUniforms {
     pub hm5m_rows: u32,
     pub _pad6: u32,
     pub _pad7: u32,
+    // 1m fine tier (extent_x == 0.0 means inactive)
+    pub hm1m_origin_x: f32,
+    pub hm1m_origin_y: f32,
+    pub hm1m_extent_x: f32,
+    pub hm1m_extent_y: f32,
+    pub hm1m_cols: u32,
+    pub hm1m_rows: u32,
+    pub _pad8: u32,
+    pub _pad9: u32,
 }
 
 impl CameraUniforms {
@@ -104,6 +113,14 @@ impl CameraUniforms {
             hm5m_rows: 0,
             _pad6: 0,
             _pad7: 0,
+            hm1m_origin_x: 0.0,
+            hm1m_origin_y: 0.0,
+            hm1m_extent_x: 0.0,
+            hm1m_extent_y: 0.0,
+            hm1m_cols: 0,
+            hm1m_rows: 0,
+            _pad8: 0,
+            _pad9: 0,
         }
     }
 }

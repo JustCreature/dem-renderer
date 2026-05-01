@@ -229,3 +229,101 @@ N46E010, N46E011, N46E012, N47E010, N47E012, N48E010, N48E011, N48E012
 - Step 3: per-tier background loader threads — 5m and 1m tiers using `extract_window`
 - Step 4: multi-source-tile stitching
 - Step 5: multi-tier shader
+
+---
+
+## 2026-04-28 (session 6)
+
+### What we worked on
+
+**Completed Step 3 (5m + 1m background loader threads) and Step 4 (1m tile stitching).**
+
+**1m streaming tier — full implementation (Steps 3+4+5 for 1m):**
+
+Architecture: three-tier streaming stack — base (~20m, 90km), close (5m, 20km), fine (1m, 3.5km).
+All three tiers use the `StreamingTier` abstraction (tx/rx channels, `needs_reload`, `try_trigger`, `try_recv`, `invalidate`).
+
+Files modified:
+
+- `src/viewer/tiers.rs` — added `BEV_1M_RADIUS_M = 3500.0`, `BEV_1M_DRIFT_THRESHOLD_M = 1000.0`; added `fine: Option<StreamingTier>` to `BevBaseState`
+- `src/viewer/geo.rs` — added `laea_epsg3035_inverse` (spherical LAEA inverse, for event loop: EPSG:3035 origin → WGS84); added `lcc_epsg31287_inverse` (iterative LCC inverse, Bessel 1841, converges <10 iters, for worker: EPSG:31287 → WGS84)
+- `crates/render_gpu/src/camera.rs` — added 8 new fields to `CameraUniforms` (hm1m_origin_x/y, hm1m_extent_x/y, hm1m_cols/rows, _pad8/9); struct is now 256 bytes
+- `crates/render_gpu/src/scene.rs` — added `_hm1m_*` fields (texture R16Float, sampler, 4 storage buffers nx/ny/nz/shadow, 6 metadata scalars); added bindings 16–21 to `render_bgl`, all bind groups, `new()` init (1×1 placeholder), `upload_hm1m()`, `set_hm1m_inactive()`; updated both CameraUniforms construction sites
+- `crates/render_gpu/src/shader_texture.wgsl` — added hm1m fields to WGSL CameraUniforms; added binding declarations 16–21; added `fine_tier_edge_dist` helper; updated `sample_h_exact` to three-tier blend; added 1m normals/shadow blend block in shading
+- `src/viewer/mod.rs` — added `find_1m_tile`, worker thread (EPSG:31287→WGS84→EPSG:3035 conversion, `extract_window`, normals+shadow), fine tier poll block, `--1m-tiles-dir` plumbing; on base reload: `set_hm1m_inactive()` + `fine.invalidate()`
+- `src/main.rs` — `--1m-tiles-dir <path>` CLI arg parsed; `viewer::run` signature updated
+
+**Coordinate conversion chain for 1m tier:**
+- Worker receives EPSG:31287 → `lcc_epsg31287_inverse` → WGS84 → `laea_epsg3035` → (e3035, n3035) → `extract_window`
+- Event loop receives hm with EPSG:3035 origin → `laea_epsg3035_inverse` → WGS84 → `lcc_epsg31287` → EPSG:31287 → subtract base tile CRS origin → tile-local offset for shader
+
+**Edge-tile stride bug fixed in `extract_window`:**
+- 1m tiles are 50001×50001 with 256×256 internal tiles; last column of tiles is only 81px wide (50001 mod 256 = 81)
+- `tiff` crate returns 81×256=20736 elements for edge tiles; old code used `tw=256` as stride → index out of bounds
+- Fix: `actual_tw = tile_col1.min(cols) - tile_col0`; use as stride instead of declared `tw`
+
+**1m tile stitching (two adjacent tiles at EPSG:3035 easting 4450000):**
+- `find_1m_tile(dir, e3035, n3035) -> Option<PathBuf>` replaced by `find_1m_tiles(dir, e3035, n3035, radius_m) -> Vec<PathBuf>` — returns all tiles whose 50km bounds overlap the ±3500m window
+- Worker now captures `tiles_1m_dir` (not a fixed tile path); calls `find_1m_tiles` dynamically on every reload; spawns unconditionally when `--1m-tiles-dir` provided
+- `stitch_1m_windows(windows, centre_e, centre_n, radius_m) -> Heightmap` — aligns each window using `crs_origin_x/y` and 1m pixel arithmetic, fills NODATA gaps, returns a complete 7000×7000 output; single-tile case passes through without stitching
+
+**Available 1m tiles (EPSG:3035):**
+- `tiles/big_size/1m_innsbruck_area/CRS3035RES50000mN2650000E4400000.tif` — easting [4400000, 4450000)
+- `tiles/big_size/1m_salzburg_south_area/CRS3035RES50000mN2650000E4450000.tif` — easting [4450000, 4500000)
+- Shared boundary at easting 4450000; both tiles same northing band [2650000, 2700000)
+
+### Open items remaining
+
+- Step 3 (5m background loader): already implemented in same session as 1m (both use `StreamingTier`)
+- Step 5 (shader three-tier blend): complete — `fine_tier_edge_dist`, smoothstep blend in raymarcher + shading
+
+---
+
+## 2026-04-29 (session 7)
+
+### What we worked on
+
+**Refactored `crates/render_gpu/src/scene.rs` → `scene/` module (3 steps).**
+
+`scene.rs` had grown to 1527 lines with two structural problems:
+1. The 22-entry bind group rebuild block copy-pasted in 4 places (`new`, `upload_hm5m`, `upload_hm1m`, `resize`) — ~90 lines × 4 = ~360 lines of duplication.
+2. The 1×1 placeholder tier creation (texture + view + sampler + 4 buffers) copy-pasted identically for `hm5m` and `hm1m` in `new` — ~45 lines × 2 = ~90 lines of duplication.
+
+**Step 1 — `rebuild_bind_group` method:**
+- Extracted a `pub(super) fn rebuild_bind_group(&mut self)` consolidating all 22 bind group entries.
+- Replaced the 3 duplicate sites in `upload_hm5m`, `upload_hm1m`, and `resize` with `self.rebuild_bind_group()`.
+- Initial bind group in `new()` kept inline (uses local variables before struct construction).
+
+**Step 2 — `create_tier_placeholder` free function:**
+- Extracted `fn create_tier_placeholder(device: &wgpu::Device, queue: &wgpu::Queue, label: &str) -> (Texture, TextureView, Sampler, Buffer, Buffer, Buffer, Buffer)`.
+- Returns 7-tuple: 1×1 R16Float texture + view + Linear sampler + 4 × 1-element f32 storage buffers.
+- Replaced 2 identical placeholder blocks in `new()` for `hm5m` and `hm1m`.
+
+**Step 3 — Module split:**
+- Deleted `scene.rs`; created `scene/mod.rs`, `scene/bind_group.rs`, `scene/tiers.rs`.
+- All `GpuScene` struct fields changed to `pub(super)` so submodules can access them.
+- `include_str!` path updated: `"shader_texture.wgsl"` → `"../shader_texture.wgsl"` (file is now one directory deeper).
+- `scene/bind_group.rs`: single `rebuild_bind_group` impl block.
+- `scene/tiers.rs`: `upload_hm5m`, `set_hm5m_inactive`, `upload_hm1m`, `set_hm1m_inactive`.
+- `lib.rs` export `pub use scene::GpuScene` unchanged.
+
+**Bug found during extraction:**
+- `create_tier_placeholder` initially only took `device`; function calls `queue.write_texture(...)` for the placeholder data → needed `queue: &wgpu::Queue` as second parameter.
+
+**Result:** 3 files totalling 1297 lines (mod.rs 1062 + bind_group.rs 34 + tiers.rs 201), down from 1527. `cargo build --release` clean.
+
+### Phase 9 complete
+
+All planned items done:
+- Step 1: 30m 3×3 sliding window ✓
+- Step 2: windowed GeoTIFF extraction (`extract_window`) ✓
+- Step 3: per-tier background loader threads + AO crop ✓
+- Step 4: 1m multi-tile stitching (`stitch_1m_windows`) ✓
+- Step 5: three-tier shader blend ✓
+- scene.rs refactor ✓
+
+Carried into Phase 10:
+- GPU shadow via parallel prefix scan (from Phase 5)
+- `render_gif` commented out (from Phase 5)
+
+Phase 10 begins next session.

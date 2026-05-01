@@ -68,6 +68,63 @@ pub fn assemble_grid(grid: &[[Option<&Heightmap>; 3]; 3]) -> Heightmap {
     }
 }
 
+/// Merge multiple `Heightmap` windows (same CRS and resolution) into one output grid
+/// covering [centre_e±radius_m) × [centre_n±radius_m). Pixels from each window are placed
+/// by computing pixel offsets from the output origin using the window's `crs_origin_x/y`.
+/// NODATA cells (-9999 or NaN) in a source window are skipped, so any window can partially
+/// fill the output without overwriting valid data from another window.
+pub fn stitch_windows(
+    windows: Vec<Heightmap>,
+    centre_e: f64,
+    centre_n: f64,
+    radius_m: f64,
+) -> Heightmap {
+    let out_cols = (2.0 * radius_m) as usize;
+    let out_rows = (2.0 * radius_m) as usize;
+    let out_e0 = centre_e - radius_m; // left edge easting
+    let out_n1 = centre_n + radius_m; // top edge northing
+    const NODATA: f32 = -9999.0;
+    let mut data = vec![NODATA; out_cols * out_rows];
+
+    for win in &windows {
+        let col_offset = ((win.crs_origin_x - out_e0) / win.dx_meters).round() as isize;
+        let row_offset = ((out_n1 - win.crs_origin_y) / win.dy_meters).round() as isize;
+        for wr in 0..win.rows {
+            let or_ = row_offset + wr as isize;
+            if or_ < 0 || or_ >= out_rows as isize {
+                continue;
+            }
+            for wc in 0..win.cols {
+                let oc = col_offset + wc as isize;
+                if oc < 0 || oc >= out_cols as isize {
+                    continue;
+                }
+                let v = win.data[wr * win.cols + wc];
+                if v != NODATA && !v.is_nan() {
+                    data[or_ as usize * out_cols + oc as usize] = v;
+                }
+            }
+        }
+    }
+
+    let first = &windows[0];
+    Heightmap {
+        data,
+        rows: out_rows,
+        cols: out_cols,
+        nodata: NODATA,
+        crs_origin_x: out_e0,
+        crs_origin_y: out_n1,
+        dx_meters: first.dx_meters,
+        dy_meters: first.dy_meters,
+        crs_epsg: first.crs_epsg,
+        origin_lat: first.origin_lat,
+        origin_lon: first.origin_lon,
+        dx_deg: first.dx_deg,
+        dy_deg: first.dy_deg,
+    }
+}
+
 pub fn crop(
     hm: &Heightmap,
     row_start: usize,
