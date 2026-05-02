@@ -6,6 +6,7 @@ pub struct GpuContext {
     pub queue: wgpu::Queue,
     pub adapter_name: String,
     pub adapter: Adapter,
+    pub bgra8unorm_storage: bool,
 }
 
 impl GpuContext {
@@ -39,8 +40,18 @@ impl GpuContext {
             let info = adapter.get_info();
             println!("  [GPU] selected: {} ({:?})", info.name, info.device_type);
 
+            let bgra8unorm_storage = adapter
+                .features()
+                .contains(wgpu::Features::BGRA8UNORM_STORAGE);
+            let required_features = if bgra8unorm_storage {
+                wgpu::Features::BGRA8UNORM_STORAGE
+            } else {
+                wgpu::Features::empty()
+            };
+
             let (device, queue) = adapter
                 .request_device(&wgpu::DeviceDescriptor {
+                    required_features,
                     required_limits: adapter.limits(),
                     ..Default::default()
                 })
@@ -53,6 +64,7 @@ impl GpuContext {
                 queue,
                 adapter_name: info.name,
                 adapter,
+                bgra8unorm_storage,
             }
         })
     }

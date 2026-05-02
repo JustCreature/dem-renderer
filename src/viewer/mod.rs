@@ -37,6 +37,7 @@ struct Viewer {
     height: u32,
     render_width: u32,
     vsync: bool,
+    direct_write: bool, // true = compute writes directly to swap-chain (no buffer copy)
     ao_mode: u32,
     shadows_enabled: bool,
     fog_enabled: bool,
@@ -141,8 +142,27 @@ impl ApplicationHandler for Viewer {
             println!("present mode in capabilities not fount: wgpu::PresentMode::Immediate; FALLBACK to wgpu::PresentMode::Fifo")
         }
 
+        // Direct swap-chain write: compute shader writes directly to the surface texture,
+        // eliminating the buffer→texture copy. Only beneficial on IMR GPUs (Vulkan/DX12).
+        // Metal = Apple Silicon TBDR: marking the surface as a storage texture forces
+        // it out of tile-memory-optimised layout, which hurts more than the copy saves.
+        let backend = ctx.adapter.get_info().backend;
+        let is_tbdr = backend == wgpu::Backend::Metal;
+        let direct_write = scene.has_viewer_pipeline()
+            && format == wgpu::TextureFormat::Bgra8Unorm
+            && !is_tbdr;
+        let surface_usage = if direct_write {
+            wgpu::TextureUsages::STORAGE_BINDING | wgpu::TextureUsages::RENDER_ATTACHMENT
+        } else {
+            wgpu::TextureUsages::COPY_DST | wgpu::TextureUsages::RENDER_ATTACHMENT
+        };
+        println!(
+            "  [viewer] backend={:?} TBDR={} direct_write={}",
+            backend, is_tbdr, direct_write
+        );
+
         let config: wgpu::SurfaceConfiguration = wgpu::SurfaceConfiguration {
-            usage: wgpu::TextureUsages::COPY_DST | wgpu::TextureUsages::RENDER_ATTACHMENT,
+            usage: surface_usage,
             format,
             width: self.width,
             height: self.height,
@@ -157,6 +177,7 @@ impl ApplicationHandler for Viewer {
             .expect("no surface to configure")
             .configure(device, &config);
         self.surface_config = Some(config);
+        self.direct_write = direct_write;
 
         self.window
             .as_ref()
@@ -480,39 +501,64 @@ impl ApplicationHandler for Viewer {
 
                 let vat_step_divisors = [20.0_f32, 10.0, 5.0, 3.0];
                 let step_m = scene.get_dx_meters() / vat_step_divisors[self.vat_mode as usize];
-                scene.dispatch_frame(
-                    &mut encoder,
-                    self.cam_pos,
-                    look_at,
-                    70.0,
-                    self.width as f32 / self.height as f32,
-                    sun_dir,
-                    step_m,
-                    200_000.0,
-                    self.ao_mode,
-                    self.shadows_enabled as u32,
-                    self.fog_enabled as u32,
-                    self.vat_mode,
-                    self.lod_mode,
-                );
-                let output_buf: &wgpu::Buffer = scene.get_output_buffer();
 
-                encoder.copy_buffer_to_texture(
-                    wgpu::TexelCopyBufferInfo {
-                        buffer: &output_buf,
-                        layout: wgpu::TexelCopyBufferLayout {
-                            offset: 0,
-                            bytes_per_row: Some(self.render_width * 4), // 4 bytes per RGBA pixel
-                            rows_per_image: None,
+                if self.direct_write {
+                    // Direct path: compute shader writes to swap-chain surface texture,
+                    // eliminating the intermediate buffer→texture copy.
+                    let surface_view = surface_texture
+                        .texture
+                        .create_view(&wgpu::TextureViewDescriptor::default());
+                    scene.dispatch_frame_to_surface(
+                        &mut encoder,
+                        &surface_view,
+                        self.cam_pos,
+                        look_at,
+                        70.0,
+                        self.width as f32 / self.height as f32,
+                        sun_dir,
+                        step_m,
+                        200_000.0,
+                        self.ao_mode,
+                        self.shadows_enabled as u32,
+                        self.fog_enabled as u32,
+                        self.vat_mode,
+                        self.lod_mode,
+                    );
+                } else {
+                    // Fallback path: compute → output_buf → copy_buffer_to_texture.
+                    scene.dispatch_frame(
+                        &mut encoder,
+                        self.cam_pos,
+                        look_at,
+                        70.0,
+                        self.width as f32 / self.height as f32,
+                        sun_dir,
+                        step_m,
+                        200_000.0,
+                        self.ao_mode,
+                        self.shadows_enabled as u32,
+                        self.fog_enabled as u32,
+                        self.vat_mode,
+                        self.lod_mode,
+                    );
+                    let output_buf: &wgpu::Buffer = scene.get_output_buffer();
+                    encoder.copy_buffer_to_texture(
+                        wgpu::TexelCopyBufferInfo {
+                            buffer: output_buf,
+                            layout: wgpu::TexelCopyBufferLayout {
+                                offset: 0,
+                                bytes_per_row: Some(self.render_width * 4),
+                                rows_per_image: None,
+                            },
                         },
-                    },
-                    surface_texture.texture.as_image_copy(),
-                    wgpu::Extent3d {
-                        width: self.width,
-                        height: self.height,
-                        depth_or_array_layers: 1,
-                    },
-                );
+                        surface_texture.texture.as_image_copy(),
+                        wgpu::Extent3d {
+                            width: self.width,
+                            height: self.height,
+                            depth_or_array_layers: 1,
+                        },
+                    );
+                }
 
                 // HUD
                 if self.hud_visible {
@@ -822,6 +868,7 @@ pub fn run(tile_path: &Path, width: u32, height: u32, vsync: bool, tiles_1m_dir:
         height,
         render_width: width,
         vsync,
+        direct_write: false, // set to true in resumed() if BGRA8UNORM_STORAGE is available
         ao_mode: 0,
         shadows_enabled: true,
         fog_enabled: true,

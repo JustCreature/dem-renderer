@@ -71,6 +71,13 @@ pub struct GpuScene {
     pub(super) render_bg: wgpu::BindGroup,
     pub(super) render_bgl: wgpu::BindGroupLayout,
 
+    // Viewer pipeline: writes directly to swap-chain surface (no buffer→texture copy).
+    // None when BGRA8UNORM_STORAGE feature is unavailable on the device.
+    pub(super) viewer_pipeline: Option<wgpu::ComputePipeline>,
+    pub(super) viewer_bgl: Option<wgpu::BindGroupLayout>,   // group 0, no binding 3
+    pub(super) output_bgl: Option<wgpu::BindGroupLayout>,   // group 1, StorageTexture
+    pub(super) viewer_bg: Option<wgpu::BindGroup>,          // stable group 0 bind group
+
     // Dimensions and terrain scalars needed to build CameraUniforms
     pub(super) width: u32,
     pub(super) height: u32,
@@ -708,7 +715,230 @@ impl GpuScene {
                     cache: None,
                 });
 
-        GpuScene {
+        // Viewer pipeline: writes directly to swap-chain surface texture.
+        // Built only when BGRA8UNORM_STORAGE is available; falls back to buffer copy otherwise.
+        let (viewer_pipeline, viewer_bgl, output_bgl) = if gpu_ctx.bgra8unorm_storage {
+            // group 0: same as render_bgl but without binding 3 (output buffer).
+            // WebGPU allows gaps in binding indices.
+            let vbgl = gpu_ctx.device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+                label: Some("viewer_bgl"),
+                entries: &[
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 0,
+                        visibility: wgpu::ShaderStages::COMPUTE,
+                        ty: wgpu::BindingType::Buffer {
+                            ty: wgpu::BufferBindingType::Uniform,
+                            has_dynamic_offset: false,
+                            min_binding_size: None,
+                        },
+                        count: None,
+                    },
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 1,
+                        visibility: wgpu::ShaderStages::COMPUTE,
+                        ty: wgpu::BindingType::Texture {
+                            sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                            view_dimension: wgpu::TextureViewDimension::D2,
+                            multisampled: false,
+                        },
+                        count: None,
+                    },
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 2,
+                        visibility: wgpu::ShaderStages::COMPUTE,
+                        ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                        count: None,
+                    },
+                    // binding 3 intentionally absent — output is in group 1
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 4,
+                        visibility: wgpu::ShaderStages::COMPUTE,
+                        ty: wgpu::BindingType::Buffer {
+                            ty: wgpu::BufferBindingType::Storage { read_only: true },
+                            has_dynamic_offset: false,
+                            min_binding_size: None,
+                        },
+                        count: None,
+                    },
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 5,
+                        visibility: wgpu::ShaderStages::COMPUTE,
+                        ty: wgpu::BindingType::Buffer {
+                            ty: wgpu::BufferBindingType::Storage { read_only: true },
+                            has_dynamic_offset: false,
+                            min_binding_size: None,
+                        },
+                        count: None,
+                    },
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 6,
+                        visibility: wgpu::ShaderStages::COMPUTE,
+                        ty: wgpu::BindingType::Buffer {
+                            ty: wgpu::BufferBindingType::Storage { read_only: true },
+                            has_dynamic_offset: false,
+                            min_binding_size: None,
+                        },
+                        count: None,
+                    },
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 7,
+                        visibility: wgpu::ShaderStages::COMPUTE,
+                        ty: wgpu::BindingType::Buffer {
+                            ty: wgpu::BufferBindingType::Storage { read_only: true },
+                            has_dynamic_offset: false,
+                            min_binding_size: None,
+                        },
+                        count: None,
+                    },
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 8,
+                        visibility: wgpu::ShaderStages::COMPUTE,
+                        ty: wgpu::BindingType::Texture {
+                            sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                            view_dimension: wgpu::TextureViewDimension::D2,
+                            multisampled: false,
+                        },
+                        count: None,
+                    },
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 9,
+                        visibility: wgpu::ShaderStages::COMPUTE,
+                        ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                        count: None,
+                    },
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 10,
+                        visibility: wgpu::ShaderStages::COMPUTE,
+                        ty: wgpu::BindingType::Texture {
+                            sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                            view_dimension: wgpu::TextureViewDimension::D2,
+                            multisampled: false,
+                        },
+                        count: None,
+                    },
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 11,
+                        visibility: wgpu::ShaderStages::COMPUTE,
+                        ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                        count: None,
+                    },
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 12,
+                        visibility: wgpu::ShaderStages::COMPUTE,
+                        ty: wgpu::BindingType::Texture {
+                            sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                            view_dimension: wgpu::TextureViewDimension::D2,
+                            multisampled: false,
+                        },
+                        count: None,
+                    },
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 13,
+                        visibility: wgpu::ShaderStages::COMPUTE,
+                        ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                        count: None,
+                    },
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 14,
+                        visibility: wgpu::ShaderStages::COMPUTE,
+                        ty: wgpu::BindingType::Buffer {
+                            ty: wgpu::BufferBindingType::Storage { read_only: true },
+                            has_dynamic_offset: false,
+                            min_binding_size: None,
+                        },
+                        count: None,
+                    },
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 15,
+                        visibility: wgpu::ShaderStages::COMPUTE,
+                        ty: wgpu::BindingType::Texture {
+                            sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                            view_dimension: wgpu::TextureViewDimension::D2,
+                            multisampled: false,
+                        },
+                        count: None,
+                    },
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 16,
+                        visibility: wgpu::ShaderStages::COMPUTE,
+                        ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                        count: None,
+                    },
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 17,
+                        visibility: wgpu::ShaderStages::COMPUTE,
+                        ty: wgpu::BindingType::Texture {
+                            sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                            view_dimension: wgpu::TextureViewDimension::D2,
+                            multisampled: false,
+                        },
+                        count: None,
+                    },
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 18,
+                        visibility: wgpu::ShaderStages::COMPUTE,
+                        ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                        count: None,
+                    },
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 19,
+                        visibility: wgpu::ShaderStages::COMPUTE,
+                        ty: wgpu::BindingType::Buffer {
+                            ty: wgpu::BufferBindingType::Storage { read_only: true },
+                            has_dynamic_offset: false,
+                            min_binding_size: None,
+                        },
+                        count: None,
+                    },
+                ],
+            });
+
+            // group 1: single storage texture — the swap-chain surface image written per frame.
+            let obgl = gpu_ctx.device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+                label: Some("output_bgl"),
+                entries: &[wgpu::BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::StorageTexture {
+                        access: wgpu::StorageTextureAccess::WriteOnly,
+                        format: wgpu::TextureFormat::Bgra8Unorm,
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                    },
+                    count: None,
+                }],
+            });
+
+            let viewer_shader = gpu_ctx.device.create_shader_module(wgpu::ShaderModuleDescriptor {
+                label: Some("viewer_shader"),
+                source: wgpu::ShaderSource::Wgsl(include_str!("../shader_viewer.wgsl").into()),
+            });
+            let viewer_pl_layout =
+                gpu_ctx
+                    .device
+                    .create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                        label: Some("viewer_pl"),
+                        bind_group_layouts: &[Some(&vbgl), Some(&obgl)],
+                        immediate_size: 0,
+                    });
+            let vpipeline =
+                gpu_ctx
+                    .device
+                    .create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+                        label: Some("viewer_pipeline"),
+                        layout: Some(&viewer_pl_layout),
+                        module: &viewer_shader,
+                        entry_point: Some("main"),
+                        compilation_options: wgpu::PipelineCompilationOptions::default(),
+                        cache: None,
+                    });
+
+            (Some(vpipeline), Some(vbgl), Some(obgl))
+        } else {
+            println!("  [GPU] BGRA8UNORM_STORAGE not available — viewer uses buffer copy path");
+            (None, None, None)
+        };
+
+        let mut scene = GpuScene {
             gpu_ctx,
             _hm_texture: hm_texture,
             _hm_view: hm_view,
@@ -754,13 +984,19 @@ impl GpuScene {
             render_pipeline,
             render_bg,
             render_bgl,
+            viewer_pipeline,
+            viewer_bgl,
+            output_bgl,
+            viewer_bg: None,
             width,
             height,
             hm_cols: hm.cols as u32,
             hm_rows: hm.rows as u32,
             dx_meters: hm.dx_meters as f32,
             dy_meters: hm.dy_meters as f32,
-        }
+        };
+        scene.rebuild_viewer_bind_group();
+        scene
     }
 
     /// Render one frame. Only writes 128 bytes (camera uniform) then dispatches.
@@ -960,6 +1196,113 @@ impl GpuScene {
             });
             pass.set_pipeline(&self.render_pipeline);
             pass.set_bind_group(0, &self.render_bg, &[]);
+            pass.dispatch_workgroups((self.width + 7) / 8, (self.height + 7) / 8, 1);
+        }
+    }
+
+    /// Returns true when the viewer pipeline is available (BGRA8UNORM_STORAGE supported).
+    pub fn has_viewer_pipeline(&self) -> bool {
+        self.viewer_pipeline.is_some()
+    }
+
+    /// Dispatches one frame, writing directly to the swap-chain surface texture.
+    /// Eliminates the `copy_buffer_to_texture` step in the viewer loop.
+    /// Only valid when `has_viewer_pipeline()` is true and the surface texture was
+    /// created with `TextureUsages::STORAGE_BINDING`.
+    pub fn dispatch_frame_to_surface(
+        &self,
+        encoder: &mut wgpu::CommandEncoder,
+        surface_view: &wgpu::TextureView,
+        origin: [f32; 3],
+        look_at: [f32; 3],
+        fov_deg: f32,
+        aspect: f32,
+        sun_dir: [f32; 3],
+        step_m: f32,
+        t_max: f32,
+        ao_mode: u32,
+        shadows_enabled: u32,
+        fog_enabled: u32,
+        vat_mode: u32,
+        lod_mode: u32,
+    ) {
+        let forward = crate::vector_utils::normalize(crate::vector_utils::sub(look_at, origin));
+        let right =
+            crate::vector_utils::normalize(crate::vector_utils::cross(forward, [0.0, 0.0, 1.0]));
+        let up = crate::vector_utils::cross(right, forward);
+        let half_w = (fov_deg / 2.0_f32).to_radians().tan();
+        let half_h = half_w / aspect;
+
+        let cam = CameraUniforms {
+            origin,
+            _pad0: 0.0,
+            forward,
+            _pad1: 0.0,
+            right,
+            _pad2: 0.0,
+            up,
+            _pad3: 0.0,
+            sun_dir,
+            _pad4: 0.0,
+            half_w,
+            half_h,
+            img_width: self.width,
+            img_height: self.height,
+            hm_cols: self.hm_cols,
+            hm_rows: self.hm_rows,
+            dx_meters: self.dx_meters,
+            dy_meters: self.dy_meters,
+            step_m,
+            t_max,
+            ao_mode,
+            _pad5: 0.0,
+            shadows_enabled,
+            fog_enabled,
+            vat_mode,
+            lod_mode,
+            hm5m_origin_x: self.hm5m_origin_x,
+            hm5m_origin_y: self.hm5m_origin_y,
+            hm5m_extent_x: self.hm5m_extent_x,
+            hm5m_extent_y: self.hm5m_extent_y,
+            hm5m_cols: self.hm5m_cols,
+            hm5m_rows: self.hm5m_rows,
+            _pad6: 0,
+            _pad7: 0,
+            hm1m_origin_x: self.hm1m_origin_x,
+            hm1m_origin_y: self.hm1m_origin_y,
+            hm1m_extent_x: self.hm1m_extent_x,
+            hm1m_extent_y: self.hm1m_extent_y,
+            hm1m_cols: self.hm1m_cols,
+            hm1m_rows: self.hm1m_rows,
+            _pad8: 0,
+            _pad9: 0,
+        };
+
+        self.gpu_ctx
+            .queue
+            .write_buffer(&self.cam_buf, 0, bytemuck::bytes_of(&cam));
+
+        // Per-frame bind group (group 1): output storage texture = current surface image.
+        let output_bg =
+            self.gpu_ctx
+                .device
+                .create_bind_group(&wgpu::BindGroupDescriptor {
+                    label: Some("output_bg"),
+                    layout: self.output_bgl.as_ref().unwrap(),
+                    entries: &[wgpu::BindGroupEntry {
+                        binding: 0,
+                        resource: wgpu::BindingResource::TextureView(surface_view),
+                    }],
+                });
+
+        {
+            let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                label: Some("viewer_pass"),
+                timestamp_writes: None,
+            });
+            pass.set_pipeline(self.viewer_pipeline.as_ref().unwrap());
+            pass.set_bind_group(0, self.viewer_bg.as_ref().unwrap(), &[]);
+            pass.set_bind_group(1, &output_bg, &[]);
             pass.dispatch_workgroups((self.width + 7) / 8, (self.height + 7) / 8, 1);
         }
     }
