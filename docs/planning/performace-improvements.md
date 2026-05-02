@@ -226,38 +226,12 @@ Probably 10–25% on top of Hi-Z when the camera is near tier edges (the common
 case for the Hintertux scenario). Less impactful when fully inside or outside
 a tier.
 
-## 6. Pack base tier normals (12 storage loads → 4)
+## 6. Pack base tier normals (12 storage loads → 4) — DONE (2026-05-02)
 
-`_nx_buf`, `_ny_buf`, `_nz_buf` (bindings 4–6) are still three `array<f32>`
-storage buffers. Per-pixel hit shading does **12 unindexed buffer loads** (4
-corners × 3 components):
-
-```wgsl
-// shader_texture.wgsl:341–344
-let n_base = normalize(mix(
-    mix(vec3<f32>(nx[i00], ny[i00], nz[i00]), vec3<f32>(nx[i10], ny[i10], nz[i10]), fx),
-    mix(vec3<f32>(nx[i01], ny[i01], nz[i01]), vec3<f32>(nx[i11], ny[i11], nz[i11]), fx), fy
-));
-```
-
-This couldn't move to a 2D texture (>8192px Copernicus grid), but two options:
-
-**a) `texture_2d_array<f32>` with 4 layers** of 8192×8192 covering the
-10800×10800 grid with overlap. Picks slice based on (col, row). Gets cached
-sampling.
-
-**b) Packed `u32` storage buffer:** `(nx_i16 << 16) | ny_i16` per pixel.
-Reconstruct `nz = sqrt(1 - nx² - ny²)` in the shader (same trick we did for
-hm5m/hm1m). 12 loads → 4 loads, 12 bytes/px → 4 bytes/px.
-
-Memory: 1.4 GB → 466 MB on the 10800×10800 base grid (3× reduction).
-
-### Impact
-
-Moderate. Base tier hit shading is one-shot per ray, not per-step, so this is
-small relative to Hi-Z. But the memory savings are significant if you ever
-want to hold multiple base grids simultaneously (e.g., for tile-slide
-overlap).
+Option b implemented: single `normals_packed: array<u32>` at binding 4 replaces
+the three `nx`/`ny`/`nz: array<f32>` buffers (bindings 4–6). Each pixel stores
+`(nx_i16 << 16) | ny_i16`; shader reconstructs `nz = sqrt(max(0.0, 1 − nx² − ny²))`
+via `unpack_normal()`. 12 storage loads → 4; memory 1.4 GB → 466 MB (3×).
 
 ## 7. Specialization constants for runtime mode flags
 
@@ -291,12 +265,12 @@ complexity.
 
 ## Suggested order of work
 
-1. **Hi-Z hierarchical traversal** — biggest win, infrastructure exists. ~1 day.
+1. ~~**Hi-Z hierarchical traversal**~~ — tried, refused: close-tier overlays cover the dominant pixels, Hi-Z cannot fire there; net regression (13 → 12 fps). See § 1 for full analysis.
 2. ~~**Tighter sky exit**~~ — done 2026-05-02.
 3. ~~**Reduce `binary_search_hit` to 10 iterations**~~ — done 2026-05-02.
-4. **Verify viewer path / direct swap-chain write** — investigation first.
+4. ~~**Direct swap-chain write**~~ — tried, refused: TBDR regression on M4 (-25%), no measurable gain on GTX 1650. See § 2 for full analysis.
 5. **Inner-loop divergence fix** — only after Hi-Z, since Hi-Z changes the loop structure.
-6. **Pack base normals** — when you next touch that area.
+6. ~~**Pack base normals**~~ — done 2026-05-02.
 7. **Specialization constants** — only after measuring whether it matters.
 
 ## What NOT to do
