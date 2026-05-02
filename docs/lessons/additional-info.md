@@ -257,3 +257,58 @@ The base heightmap is a large window extracted from the BEV GeoTIFF. Its top-lef
   Each tier overrides the previous one with a smooth smoothstep blend at its boundary — so all three data sources contribute without hard seams.
 
   
+  // ── close tier normals (texture sample) and shadow (buffer bilinear) ──
+            let close_uv = vec2<f32>(lx_hit / cam.hm5m_extent_x, ly_hit / cam.hm5m_extent_y);
+            let n5_rg = textureSampleLevel(hm5m_normal_tex, hm5m_normal_samp, close_uv, 0.0).rg;
+            let n5 = normalize(vec3<f32>(n5_rg.x, n5_rg.y, sqrt(max(0.0, 1.0 - dot(n5_rg, n5_rg)))));
+  
+  This is the unit sphere constraint — the key invariant that makes storing only 2 components safe.                                                            
+                                                                                                                                                                 
+  The invariant: every normal coming from compute_normals is a unit vector, meaning its length is exactly 1:                                                     
+                                                                                                                                                                 
+  x² + y² + z² = 1                                                                                                                                               
+                                                                                                                                                                 
+  So if you know x and y, you can always recover z:                                                                                                              
+                                                                                                                                                                 
+  z² = 1 - x² - y²                                                                                                                                               
+  z  = sqrt(1 - x² - y²)                                              
+                                         
+  Why the dot product? dot(v, v) is just a shorthand for squaring all components and summing them — exactly x² + y² for a 2D vector:                             
+   
+  dot(rg, rg) = rg.x*rg.x + rg.y*rg.y = x² + y²                                                                                                                  
+                                                                                                                                                                 
+  So 1.0 - dot(rg, rg) = 1 - x² - y² = z², and sqrt(...) gives z.                                                                                                
+                                                                                                                                                                 
+  Visual — the unit sphere:                                                                                                                                      
+                                                                      
+           z (up)                                                                                                                                                
+           │                                                          
+      ┌────┼────┐                        
+      │    │  * │← some normal (x, y, z)                                                                                                                         
+      │    │  /│                                                                                                                                                 
+      │    │ / │  z = height above xy-plane                                                                                                                      
+      │    │/  │                                                                                                                                                 
+      └────┼────┘──── y                                               
+          /                                                                                                                                                      
+         x                                                                                                                                                       
+                                         
+  Top-down view (xy-plane):                                                                                                                                      
+          y                                                           
+          │                              
+      ●───┼───●   The circle x²+y²=1 is the
+      │   │   │   "maximum reach" — if x²+y²=1                                                                                                                   
+      │   │   │   then z=0 (flat surface, 90° slope)                                                                                                             
+      ●───┼───●                                                                                                                                                  
+          │      x                                                                                                                                               
+                                                                                                                                                                 
+     x²+y² < 1 → the normal tilts upward → z > 0                                                                                                                 
+     x²+y² = 0 → straight up → z = 1     
+     x²+y² = 1 → horizontal → z = 0                                                                                                                              
+                                                                                                                                                                 
+  Why max(0.0, ...)? Floating-point rounding during encoding (* 127.0, round, cast to i8, then GPU decodes back) can produce values where x² + y² is slightly    
+  greater than 1.0 by a tiny epsilon. Without the clamp, you'd be sqrt-ing a negative number → NaN → black pixel. The max(0, ...) makes this safe.               
+                                                                                                                                                                 
+  Why normalize after reconstruction? The Rgba8Snorm decode has ~0.8% precision loss (127 levels per unit vs exact float). After decoding and reconstructing z,  
+  the vector might be length 0.998 instead of 1.0. normalize corrects it back to unit length so the dot product with the sun direction gives the right
+  illumination value.                                                                      
+  
