@@ -179,6 +179,47 @@ fn fine_tier_edge_dist(lx: f32, ly: f32) -> f32 {
     return min(min(lx, cam.hm1m_extent_x - lx), min(ly, cam.hm1m_extent_y - ly));
 }
 
+// ── Hi-Z (max-mip) sphere tracing helpers ──
+// The base heightmap has 8 mip levels (mip 0 = full res, 1..7 = max-filtered downsamples).
+const HIZ_MAX_MIP: i32 = 7;
+// Vertical clearance below which a coarse-mip skip is unsafe; keeps the ray from
+// shaving razor ridges encoded only in mip 0.
+const HIZ_SAFETY_M: f32 = 5.0;
+// Horizontal margin around close-tier AABBs. Inside this margin the base mip
+// max-filter may underestimate true terrain (hm5m/hm1m hold higher detail), so
+// we fall back to the linear/sphere-traced branch.
+const HIZ_TIER_MARGIN_M: f32 = 50.0;
+// Debug visualization: replace the rendered image with per-pixel iteration
+// counters so we can see whether Hi-Z is actually engaging.
+//   R = Hi-Z skip iterations (good — actual empty-space jumps)
+//   G = Hi-Z descent-only iterations (waste — refining without advancing t)
+//   B = linear / sphere-traced iterations (near-surface or in-tier work)
+// Each counter is multiplied by 4 then clamped to 255 (saturates at 64 events).
+const HIZ_DEBUG: bool = true;
+
+// Distance along the ray from `pos` to the next mip-`mip` cell boundary on the
+// (x,y) grid. Cells are squares of side `2^mip * dx_m`.
+fn cell_exit_dt(pos: vec3<f32>, dir: vec3<f32>, mip: i32, dx_m: f32) -> f32 {
+    let cell = exp2(f32(mip)) * dx_m;
+    let cx = floor(pos.x / cell);
+    let cy = floor(pos.y / cell);
+    let bx = (cx + select(0.0, 1.0, dir.x > 0.0)) * cell;
+    let by = (cy + select(0.0, 1.0, dir.y > 0.0)) * cell;
+    let tx = select(1e30, (bx - pos.x) / dir.x, abs(dir.x) > 1e-6);
+    let ty = select(1e30, (by - pos.y) / dir.y, abs(dir.y) > 1e-6);
+    return max(min(tx, ty), 1e-2);
+}
+
+// XY distance from `p` to the nearest edge of the AABB at (ox, oy) with extent
+// (ex, ey). Returns 0 if `p` is inside the AABB.
+fn dist_outside_tier_xy(p: vec2<f32>, ox: f32, oy: f32, ex: f32, ey: f32) -> f32 {
+    let lx = p.x - ox;
+    let ly = p.y - oy;
+    let dx = max(max(-lx, lx - ex), 0.0);
+    let dy = max(max(-ly, ly - ey), 0.0);
+    return sqrt(dx * dx + dy * dy);
+}
+
 // Height sample for the binary-search refinement pass (base → 5m → 1m).
 fn sample_h_exact(pos_xy: vec2<f32>) -> f32 {
     let uv_base = vec2<f32>(
@@ -251,6 +292,15 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
     var t = 0.0;
     var t_prev = 0.0;
     var hit = false;
+    // Current Hi-Z mip level. Climbs after a successful empty-cell skip,
+    // descends to 0 to refine a potential hit. Resets to MAX after every
+    // linear no-hit step so the ray re-engages Hi-Z on leaving tier territory.
+    var mip: i32 = HIZ_MAX_MIP;
+    // Diagnostic counters (used only when HIZ_DEBUG is true).
+    var dbg_skips: u32 = 0u;
+    var dbg_descents: u32 = 0u;
+    var dbg_linear_in_tier: u32 = 0u;   // safe_mip == 0 → forced into linear
+    var dbg_linear_outside: u32 = 0u;   // safe_mip > 0 but mip was 0 (post-descent fallback)
 
     loop {
         let col = i32(pos.x / cam.dx_meters);
@@ -264,6 +314,49 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
         // 10k is the limit, since Everest is lower than 10k,
         if dir.z > 0.0 && pos.z > 10000.0 { break; }
 
+        // ── Hi-Z fast path ──
+        // Pick the largest mip whose half-footprint still fits between `pos.xy`
+        // and the nearest active close-tier AABB (where base max-mips may
+        // underestimate true peaks held in hm5m/hm1m). Inside the tier or its
+        // safety margin `safe_mip` collapses to 0, which routes the iteration
+        // through the linear branch automatically — no separate bypass.
+        let d_5m = select(1e30,
+            dist_outside_tier_xy(pos.xy, cam.hm5m_origin_x, cam.hm5m_origin_y,
+                                 cam.hm5m_extent_x, cam.hm5m_extent_y),
+            cam.hm5m_extent_x > 0.0);
+        let d_1m = select(1e30,
+            dist_outside_tier_xy(pos.xy, cam.hm1m_origin_x, cam.hm1m_origin_y,
+                                 cam.hm1m_extent_x, cam.hm1m_extent_y),
+            cam.hm1m_extent_x > 0.0);
+        let d_tier = max(min(d_5m, d_1m) - HIZ_TIER_MARGIN_M, 0.0);
+        let safe_mip = i32(clamp(
+            floor(log2(max(2.0 * d_tier / cam.dx_meters, 1.0))),
+            0.0, f32(HIZ_MAX_MIP)));
+        mip = min(mip, safe_mip);
+
+        if mip > 0 {
+            let uv_hiz = vec2<f32>(
+                (pos.x / cam.dx_meters + 0.5) / f32(cam.hm_cols),
+                (pos.y / cam.dy_meters + 0.5) / f32(cam.hm_rows)
+            );
+            let h_max = textureSampleLevel(hm_tex, hm_sampler, uv_hiz, f32(mip)).r;
+            if pos.z > h_max + HIZ_SAFETY_M {
+                t_prev = t;
+                t += cell_exit_dt(pos, dir, mip, cam.dx_meters);
+                pos = cam.origin + dir * t;
+                mip = min(mip + 1, HIZ_MAX_MIP);
+                dbg_skips += 1u;
+            } else {
+                mip = mip - 1;
+                dbg_descents += 1u;
+            }
+            continue;
+        }
+        if safe_mip == 0 { dbg_linear_in_tier += 1u; } else { dbg_linear_outside += 1u; }
+
+        // ── Linear / sphere-traced branch ──
+        // Reached either at mip 0 or inside tier territory. Does the full
+        // 3-tier blend so a hit is detected and shaded correctly.
         let uv: vec2<f32> = vec2<f32>(
             (pos.x / cam.dx_meters + 0.5) / f32(cam.hm_cols),
             (pos.y / cam.dy_meters + 0.5) / f32(cam.hm_rows)
@@ -296,22 +389,32 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
         if pos.z <= h {
             hit = true;
             // use t_prev as lower bracket (correct for adaptive steps)
-            // pos = binary_search_hit(t - cam.step_m, t, dir, 8);
             pos = binary_search_hit(t_prev, t, dir, 32);
             break;
         }
 
         // adaptive step: scale by distance above terrain (sphere tracing)
-        // safety factor 0.5 — conservative enough for steep mountain slopes
         // cam.step_m is the minimum step to prevent stalling near-surface
         t_prev = t;
-        // t += cam.step_m;
-        // t += max((pos.z - h) * 0.3, cam.step_m);
         let lod_min_step = cam.step_m * (0.7 + t / lod_step_div);  // step reduction with distance CONFIG_PERFORMANCE
         // vat_mode: 0=Ultra→0.1, 1=High→0.2, 2=Mid→0.4, 3=Low→0.8
         let sphere_factor = select(select(select(0.8, 0.4, cam.vat_mode < 3u), 0.2, cam.vat_mode < 2u), 0.1, cam.vat_mode == 0u);
         t += max((pos.z - h) * sphere_factor, lod_min_step);  // step reduction spherical CONFIG_PERFORMANCE
         pos = cam.origin + dir * t;
+        // Re-engage Hi-Z next iteration if the ray has stepped out of tier territory.
+        mip = HIZ_MAX_MIP;
+    }
+
+    if HIZ_DEBUG {
+        // R = useful Hi-Z skips
+        // G = Hi-Z engaged but couldn't skip (descents OR a single mip-0 linear step
+        //     after descending — i.e. ray is below local peaks)
+        // B = forced linear because safe_mip == 0 (inside tier or its margin)
+        let dr = u32(clamp(f32(dbg_skips) * 4.0, 0.0, 255.0));
+        let dg = u32(clamp(f32(dbg_descents + dbg_linear_outside) * 4.0, 0.0, 255.0));
+        let db = u32(clamp(f32(dbg_linear_in_tier) * 1.0, 0.0, 255.0));
+        output[gid.y * cam.img_width + gid.x] = db | (dg << 8u) | (dr << 16u) | (255u << 24u);
+        return;
     }
 
     if hit {
