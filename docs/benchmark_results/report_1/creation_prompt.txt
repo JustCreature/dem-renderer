@@ -1,4 +1,0 @@
-now look at all the reports from all the laptops and different systems and architectures here docs/benchmark_results, analyse them all, create                 
-docs/benchmark_results/report_1/ and transform all the data to .csv file with all the information, we need to have all of the important info in csv files, then  
-generate a analisys report in report_1.md file and generate .html interactive report with all the findings, draw all the necessary conclusions, explain all of   
-it, it should all be in both .md and .html reports

@@ -1,9 +1,0 @@
-access_pattern,ray_width,m4_mac_gbs,asus_pentium_gbs,mac_intel_i7_gbs,win_nitro_gbs,notes
-scalar_1wide,1,1.42,0.05,0.31,0.24,scalar baseline — 1 miss per step
-adjacent_cols_4wide,4,3.49,0.08,0.76,0.77,4 adjacent cols share cache line — best case
-strided_rows_4wide,4,2.54,0.05,0.34,0.32,4 rows — different cache lines — divergent
-fully_random_4wide,4,8.10,0.21,1.27,1.00,fully random — maximally divergent
-adj_vs_scalar_ratio,,2.5,1.6,2.5,3.2,adjacent speedup (cache sharing)
-strided_vs_scalar_ratio,,1.8,1.0,1.1,1.3,strided speedup (separate lines)
-random_vs_scalar_ratio,,5.7,4.2,4.1,4.2,random 4x is just measuring 4x bytes
-net_simd_gain_expected,,1.0,1.0,1.0,1.0,Phase 4 conclusion: gather overhead cancels SIMD gain in real raymarching

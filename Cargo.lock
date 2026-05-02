@@ -545,7 +545,6 @@ dependencies = [
  "image",
  "profiling 0.1.0",
  "rayon",
- "render_cpu",
  "render_gpu",
  "sysinfo",
  "terrain",
@@ -2144,15 +2143,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f450ad9c3b1da563fb6948a8e0fb0fb9269711c9c73d9ea1de5058c79c8d643a"
 dependencies = [
  "bitflags 2.11.0",
-]
-
-[[package]]
-name = "render_cpu"
-version = "0.1.0"
-dependencies = [
- "dem_io",
- "rayon",
- "terrain",
 ]
 
 [[package]]

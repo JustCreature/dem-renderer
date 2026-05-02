@@ -1,5 +1,6 @@
 use sysinfo::{CpuRefreshKind, MemoryRefreshKind, RefreshKind, System};
 
+#[allow(dead_code)]
 pub fn print_system_info() {
     let mut sys = System::new_with_specifics(
         RefreshKind::nothing()
@@ -205,7 +206,7 @@ fn windows_cache_sizes() -> Option<String> {
 }
 
 // ── NUMA nodes ───────────────────────────────────────────────────────────────
-
+#[allow(dead_code)]
 fn numa_nodes() -> Option<String> {
     #[cfg(target_os = "linux")]
     {
@@ -256,7 +257,7 @@ fn numa_nodes() -> Option<String> {
 }
 
 // ── power / scheduler mode ───────────────────────────────────────────────────
-
+#[allow(dead_code)]
 fn power_mode() -> Option<String> {
     #[cfg(target_os = "macos")]
     return macos_power_mode();
@@ -268,6 +269,7 @@ fn power_mode() -> Option<String> {
     None
 }
 
+#[allow(dead_code)]
 #[cfg(target_os = "macos")]
 fn macos_power_mode() -> Option<String> {
     let out = std::process::Command::new("pmset")
@@ -290,6 +292,7 @@ fn macos_power_mode() -> Option<String> {
     Some("Normal".to_string())
 }
 
+#[allow(dead_code)]
 #[cfg(target_os = "linux")]
 fn linux_power_mode() -> Option<String> {
     // Per-CPU governor — read from cpu0
@@ -306,6 +309,7 @@ fn linux_power_mode() -> Option<String> {
     Some(format!("{gov}{}", epp.unwrap_or_default()))
 }
 
+#[allow(dead_code)]
 #[cfg(target_os = "windows")]
 fn windows_power_mode() -> Option<String> {
     let out = std::process::Command::new("powercfg")
@@ -322,7 +326,7 @@ fn windows_power_mode() -> Option<String> {
 }
 
 // ── rustc version ────────────────────────────────────────────────────────────
-
+#[allow(dead_code)]
 fn rustc_version() -> Option<String> {
     let out = std::process::Command::new("rustc")
         .arg("--version")
@@ -335,6 +339,7 @@ fn rustc_version() -> Option<String> {
 
 // ── GPU helpers ──────────────────────────────────────────────────────────────
 
+#[allow(dead_code)]
 #[cfg(target_os = "macos")]
 fn macos_gpu() -> Option<String> {
     let out = std::process::Command::new("system_profiler")
@@ -358,6 +363,7 @@ fn macos_gpu() -> Option<String> {
     Some(format!("{name}{vram}"))
 }
 
+#[allow(dead_code)]
 #[cfg(target_os = "linux")]
 fn linux_gpu() -> Option<String> {
     let out = std::process::Command::new("lspci").output().ok()?;
@@ -369,6 +375,7 @@ fn linux_gpu() -> Option<String> {
     Some(line.split(':').last()?.trim().to_string())
 }
 
+#[allow(dead_code)]
 #[cfg(target_os = "windows")]
 fn windows_gpu() -> Option<String> {
     let out = std::process::Command::new("wmic")
@@ -409,7 +416,7 @@ fn windows_gpu() -> Option<String> {
 }
 
 // ── utilities ────────────────────────────────────────────────────────────────
-
+#[allow(dead_code)]
 fn fmt_bytes(b: u64) -> String {
     if b >= 1_048_576 {
         format!("{} MB", b / 1_048_576)

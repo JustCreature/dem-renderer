@@ -21,10 +21,7 @@ use winit::{
 
 use crate::viewer::hud_renderer::HudRenderer;
 
-use self::geo::{
-    laea_epsg3035, laea_epsg3035_inverse, latlon_to_tile_metres, lcc_epsg31287,
-    lcc_epsg31287_inverse, sun_position,
-};
+use self::geo::{laea_epsg3035_inverse, latlon_to_tile_metres, lcc_epsg31287, sun_position};
 use self::scene_init::{compute_ao_cropped, prepare_scene, INIT_SIM_DAY, INIT_SIM_HOUR};
 use self::tiers::{BevBaseState, Glo30State, AO_DRIFT_THRESHOLD_M};
 

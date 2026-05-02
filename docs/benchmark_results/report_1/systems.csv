@@ -1,5 +1,0 @@
-system_id,hostname,os,arch,cpu,cpu_freq_mhz,physical_cores,logical_cores,l1d_kb,l2_kb,l3_mb,ram_gb,gpu,gpu_type,build_profile,rustc,rustflags
-m4_mac,ZALANDO-87372,macOS 26.4,aarch64,Apple M4 Max,4000,14,14,64,4096,,36,Apple M4 Max,IntegratedGpu,release,rustc 1.94.0,,
-asus_pentium,nikita-X540SA,Linux Mint 22.3,x86_64,Intel Pentium N3700 @ 1.60GHz,2160,4,4,,,, 3,Intel HD Graphics 405 (BSW),IntegratedGpu,release,rustc 1.94.1,,
-mac_intel_i7,Elizavetas-MacBook-Pro,macOS 26.2,x86_64,Intel Core i7-1068NG7 @ 2.30GHz,2300,4,8,48,512,8,32,Intel Iris Plus Graphics,IntegratedGpu,release,,,
-win_nitro_i5_gtx1650,LAPTOP-NIKITA,Windows 10 Home,x86_64,Intel Core i5-9300H @ 2.40GHz,2400,4,8,,1024,8,31,NVIDIA GeForce GTX 1650 + Intel UHD 630,DiscreteGpu,release,rustc 1.94.1,-C target-cpu=x86-64-v3

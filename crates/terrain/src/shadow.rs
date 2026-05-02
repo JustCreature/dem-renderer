@@ -1,11 +1,6 @@
 use core::f32;
 
-use crate::SendPtr;
 use dem_io::Heightmap;
-use rayon::{
-    iter::{IndexedParallelIterator, ParallelIterator},
-    slice::ParallelSliceMut,
-};
 
 // ── shared DDA helpers ───────────────────────────────────────────────────────
 

@@ -1,7 +1,0 @@
-tile_config,tile_size_kb,m4_mac_gbs,asus_pentium_gbs,mac_intel_i7_gbs,win_nitro_gbs,notes
-row_major,,71.25,5.80,26.38,17.84,vectorised baseline (no tiling)
-tiled_T32,2,10.59,0.61,3.67,1.81,2 KB/tile — fits all caches trivially
-tiled_T64,8,10.59,0.62,2.33,1.92,8 KB/tile — fits L1D
-tiled_T128,32,11.10,0.63,3.61,1.67,32 KB/tile — fits L1D (M4 has 128 KB L1D)
-tiled_T256,128,11.06,0.60,3.60,2.24,128 KB/tile — spills from L1D on most CPUs
-tiling_penalty_ratio,,6.7,9.4,7.2,7.9,row_major / best_tiled — all show ~7-10x penalty (continue branch blocks vectorisation)

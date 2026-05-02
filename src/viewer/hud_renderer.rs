@@ -36,12 +36,7 @@ pub struct HudRenderer {
 }
 
 impl HudBackground {
-    pub fn new(
-        device: &wgpu::Device,
-        width: u32,
-        height: u32,
-        format: wgpu::TextureFormat,
-    ) -> Self {
+    pub fn new(device: &wgpu::Device, format: wgpu::TextureFormat) -> Self {
         let shader = device.create_shader_module(wgpu::include_wgsl!("shader_hud_bg.wgsl"));
 
         let uniform_buf = device.create_buffer(&wgpu::BufferDescriptor {
@@ -237,7 +232,7 @@ impl SunIndicator {
     const BOTTOM_OFFSET: f32 = 118.0; // hint_bar(36)+label_h(18)+padding(14)+radius(50)
     const GAP: f32 = 60.0; // between circles
 
-    fn new(device: &wgpu::Device, width: u32, height: u32, format: wgpu::TextureFormat) -> Self {
+    fn new(device: &wgpu::Device, format: wgpu::TextureFormat) -> Self {
         let shader = device.create_shader_module(wgpu::include_wgsl!("shader_sun_hud.wgsl"));
         let uniform_buf = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("sun_hud_uniform"),
@@ -325,7 +320,7 @@ impl SunIndicator {
             cache: None,
         });
 
-        let mut indicator = SunIndicator {
+        let indicator = SunIndicator {
             pipeline,
             vertex_buf,
             uniform_buf,
@@ -477,8 +472,8 @@ impl HudRenderer {
         format: wgpu::TextureFormat,
     ) -> Self {
         let mut font_system: glyphon::FontSystem = glyphon::FontSystem::new();
-        let mut swash_cache: glyphon::SwashCache = glyphon::SwashCache::new();
-        let mut cache: glyphon::Cache = glyphon::Cache::new(device);
+        let swash_cache: glyphon::SwashCache = glyphon::SwashCache::new();
+        let cache: glyphon::Cache = glyphon::Cache::new(device);
         let mut text_atlas: glyphon::TextAtlas =
             glyphon::TextAtlas::new(device, queue, &cache, format);
         let text_renderer: glyphon::TextRenderer = glyphon::TextRenderer::new(
@@ -529,8 +524,8 @@ impl HudRenderer {
         // Dynamic current-value labels
         let season_current_buf = make_current_label(&mut font_system, "Day 172");
         let time_current_buf = make_current_label(&mut font_system, "10:00");
-        let hud_bg: HudBackground = HudBackground::new(device, width, height, format);
-        let mut sun_indicator = SunIndicator::new(device, width, height, format);
+        let hud_bg: HudBackground = HudBackground::new(device, format);
+        let mut sun_indicator = SunIndicator::new(device, format);
         // Write initial vertex + uniform data (requires queue, done here after construction)
         sun_indicator.update(queue, width, height, 172, 10.0);
         let viewport: glyphon::Viewport = glyphon::Viewport::new(device, &cache);

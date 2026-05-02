@@ -2,7 +2,6 @@
 members = [
     "crates/dem_io",
     "crates/terrain",
-    "crates/render_cpu",
     "crates/render_gpu",
     "crates/profiling",
 ]
@@ -21,7 +20,6 @@ path = "src/main.rs"
 profiling = { path = "crates/profiling" }
 dem_io = { path = "crates/dem_io" }
 terrain = { path = "crates/terrain" }
-render_cpu = { path = "crates/render_cpu" }
 render_gpu = { path = "crates/render_gpu" }
 image = "0.25"
 rayon = "1"
