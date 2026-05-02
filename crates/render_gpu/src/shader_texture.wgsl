@@ -52,10 +52,8 @@ struct CameraUniforms {
 @group(0) @binding(2) var hm_sampler: sampler;
 // output
 @group(0) @binding(3) var<storage, read_write> output: array<u32>;
-// normals map
-@group(0) @binding(4) var<storage, read> nx: array<f32>;
-@group(0) @binding(5) var<storage, read> ny: array<f32>;
-@group(0) @binding(6) var<storage, read> nz: array<f32>;
+// normals map (packed: bits 31–16 = nx_i16, bits 15–0 = ny_i16; nz reconstructed in shader)
+@group(0) @binding(4) var<storage, read> normals_packed: array<u32>;
 // shadows mask
 @group(0) @binding(7) var<storage, read> shadow: array<f32>;
 // AO texture + sampler
@@ -168,6 +166,13 @@ var<private> hbao_8x_kernel: array<vec2<f32>, 8> = array<vec2<f32>, 8>(
     vec2<f32>(0.0, -1.0),
     vec2<f32>(0.707, -0.707),
 );
+
+fn unpack_normal(p: u32) -> vec3<f32> {
+    let nx = f32(extractBits(i32(p), 16u, 16u)) / 32767.0;
+    let ny = f32(extractBits(i32(p), 0u, 16u)) / 32767.0;
+    let nz = sqrt(max(0.0, 1.0 - nx*nx - ny*ny));
+    return vec3<f32>(nx, ny, nz);
+}
 
 // Distance from (lx, ly) to the nearest edge of the 5m close tier rectangle.
 fn close_tier_edge_dist(lx: f32, ly: f32) -> f32 {
@@ -339,8 +344,8 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
         let i01 = u32(row0 + 1) * cam.hm_cols + u32(col0);
         let i11 = u32(row0 + 1) * cam.hm_cols + u32(col0 + 1);
         let n_base = normalize(mix(
-            mix(vec3<f32>(nx[i00], ny[i00], nz[i00]), vec3<f32>(nx[i10], ny[i10], nz[i10]), fx),
-            mix(vec3<f32>(nx[i01], ny[i01], nz[i01]), vec3<f32>(nx[i11], ny[i11], nz[i11]), fx), fy
+            mix(unpack_normal(normals_packed[i00]), unpack_normal(normals_packed[i10]), fx),
+            mix(unpack_normal(normals_packed[i01]), unpack_normal(normals_packed[i11]), fx), fy
         ));
         let sh_base = mix(mix(shadow[i00], shadow[i10], fx), mix(shadow[i01], shadow[i11], fx), fy);
 

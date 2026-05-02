@@ -27,15 +27,7 @@ impl GpuScene {
                     },
                     wgpu::BindGroupEntry {
                         binding: 4,
-                        resource: self._nx_buf.as_entire_binding(),
-                    },
-                    wgpu::BindGroupEntry {
-                        binding: 5,
-                        resource: self._ny_buf.as_entire_binding(),
-                    },
-                    wgpu::BindGroupEntry {
-                        binding: 6,
-                        resource: self._nz_buf.as_entire_binding(),
+                        resource: self._normals_packed_buf.as_entire_binding(),
                     },
                     wgpu::BindGroupEntry {
                         binding: 7,

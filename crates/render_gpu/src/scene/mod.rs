@@ -18,9 +18,7 @@ pub struct GpuScene {
     pub(super) _hm_texture: wgpu::Texture,
     pub(super) _hm_view: wgpu::TextureView,
     pub(super) _hm_sampler: wgpu::Sampler,
-    pub(super) _nx_buf: wgpu::Buffer,
-    pub(super) _ny_buf: wgpu::Buffer,
-    pub(super) _nz_buf: wgpu::Buffer,
+    pub(super) _normals_packed_buf: wgpu::Buffer,
     // AO
     pub(super) _ao_texture: wgpu::Texture,
     pub(super) _ao_view: wgpu::TextureView,
@@ -349,26 +347,20 @@ impl GpuScene {
             hm1m_shadow_buf,
         ) = create_tier_placeholder(&gpu_ctx.device, &gpu_ctx.queue, "hm1m");
 
-        // normals buffers — COPY_DST so update_heightmap can write_buffer
-        let nx_buf = gpu_ctx
+        // normals packed buffer: bits 31–16 = nx_i16, bits 15–0 = ny_i16; nz reconstructed in shader
+        // COPY_DST so update_heightmap can write_buffer
+        let normals_packed: Vec<u32> = normal_map.nx.iter().zip(normal_map.ny.iter())
+            .map(|(&nx, &ny)| {
+                let xi = (nx.clamp(-1.0, 1.0) * 32767.0).round() as i16;
+                let yi = (ny.clamp(-1.0, 1.0) * 32767.0).round() as i16;
+                ((xi as u32) << 16) | (yi as u16 as u32)
+            })
+            .collect();
+        let normals_packed_buf = gpu_ctx
             .device
             .create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                label: Some("nx"),
-                contents: bytemuck::cast_slice(&normal_map.nx),
-                usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
-            });
-        let ny_buf = gpu_ctx
-            .device
-            .create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                label: Some("ny"),
-                contents: bytemuck::cast_slice(&normal_map.ny),
-                usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
-            });
-        let nz_buf = gpu_ctx
-            .device
-            .create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                label: Some("nz"),
-                contents: bytemuck::cast_slice(&normal_map.nz),
+                label: Some("normals_packed"),
+                contents: bytemuck::cast_slice(&normals_packed),
                 usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
             });
 
@@ -448,26 +440,6 @@ impl GpuScene {
                         },
                         wgpu::BindGroupLayoutEntry {
                             binding: 4,
-                            visibility: wgpu::ShaderStages::COMPUTE,
-                            ty: wgpu::BindingType::Buffer {
-                                ty: wgpu::BufferBindingType::Storage { read_only: true },
-                                has_dynamic_offset: false,
-                                min_binding_size: None,
-                            },
-                            count: None,
-                        },
-                        wgpu::BindGroupLayoutEntry {
-                            binding: 5,
-                            visibility: wgpu::ShaderStages::COMPUTE,
-                            ty: wgpu::BindingType::Buffer {
-                                ty: wgpu::BufferBindingType::Storage { read_only: true },
-                                has_dynamic_offset: false,
-                                min_binding_size: None,
-                            },
-                            count: None,
-                        },
-                        wgpu::BindGroupLayoutEntry {
-                            binding: 6,
                             visibility: wgpu::ShaderStages::COMPUTE,
                             ty: wgpu::BindingType::Buffer {
                                 ty: wgpu::BufferBindingType::Storage { read_only: true },
@@ -616,15 +588,7 @@ impl GpuScene {
                     },
                     wgpu::BindGroupEntry {
                         binding: 4,
-                        resource: nx_buf.as_entire_binding(),
-                    },
-                    wgpu::BindGroupEntry {
-                        binding: 5,
-                        resource: ny_buf.as_entire_binding(),
-                    },
-                    wgpu::BindGroupEntry {
-                        binding: 6,
-                        resource: nz_buf.as_entire_binding(),
+                        resource: normals_packed_buf.as_entire_binding(),
                     },
                     wgpu::BindGroupEntry {
                         binding: 7,
@@ -714,9 +678,7 @@ impl GpuScene {
             _hm_texture: hm_texture,
             _hm_view: hm_view,
             _hm_sampler: hm_sampler,
-            _nx_buf: nx_buf,
-            _ny_buf: ny_buf,
-            _nz_buf: nz_buf,
+            _normals_packed_buf: normals_packed_buf,
             _ao_texture: ao_texture,
             _ao_view: ao_view,
             _ao_sampler: ao_sampler,
@@ -1055,15 +1017,16 @@ impl GpuScene {
             hm.rows,
         );
 
+        let normals_packed: Vec<u32> = normal_map.nx.iter().zip(normal_map.ny.iter())
+            .map(|(&nx, &ny)| {
+                let xi = (nx.clamp(-1.0, 1.0) * 32767.0).round() as i16;
+                let yi = (ny.clamp(-1.0, 1.0) * 32767.0).round() as i16;
+                ((xi as u32) << 16) | (yi as u16 as u32)
+            })
+            .collect();
         self.gpu_ctx
             .queue
-            .write_buffer(&self._nx_buf, 0, bytemuck::cast_slice(&normal_map.nx));
-        self.gpu_ctx
-            .queue
-            .write_buffer(&self._ny_buf, 0, bytemuck::cast_slice(&normal_map.ny));
-        self.gpu_ctx
-            .queue
-            .write_buffer(&self._nz_buf, 0, bytemuck::cast_slice(&normal_map.nz));
+            .write_buffer(&self._normals_packed_buf, 0, bytemuck::cast_slice(&normals_packed));
 
         let ao_data: Vec<u8> = ao_data_mask.iter().map(|&v| (v * 255.0) as u8).collect();
         self.gpu_ctx.queue.write_texture(
