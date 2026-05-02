@@ -41,15 +41,11 @@ fn main() {
         .find(|w| w[0] == "--1m-tiles-dir")
         .map(|w| std::path::PathBuf::from(&w[1]))
         .unwrap_or_else(|| std::path::PathBuf::from("tiles/big_size/"));
-    if args.contains(&"--view".to_string()) {
-        viewer::run(
-            tile_path,
-            WIDTH,
-            HEIGHT,
-            vsync,
-            Some(tiles_1m_dir.as_path()),
-        );
-
-        return;
-    }
+    viewer::run(
+        tile_path,
+        WIDTH,
+        HEIGHT,
+        vsync,
+        Some(tiles_1m_dir.as_path()),
+    );
 }
