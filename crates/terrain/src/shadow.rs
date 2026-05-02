@@ -1,6 +1,8 @@
 use core::f32;
 
+#[cfg(target_arch = "aarch64")]
 use crate::SendPtr;
+#[cfg(target_arch = "aarch64")]
 use rayon::{
     iter::{IndexedParallelIterator, ParallelIterator},
     slice::ParallelSliceMut,

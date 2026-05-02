@@ -1,6 +1,9 @@
+#[cfg(target_arch = "aarch64")]
 use rayon::prelude::*;
 
-use crate::{NormalMap, SendPtr};
+use crate::NormalMap;
+#[cfg(target_arch = "aarch64")]
+use crate::SendPtr;
 
 pub fn compute_normals_scalar(hm: &dem_io::Heightmap) -> NormalMap {
     let mut nx: Vec<f32> = vec![0.0f32; hm.rows * hm.cols];
