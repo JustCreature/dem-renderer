@@ -19,8 +19,6 @@ pub use shadow::{
 pub use shadow::{
     compute_shadow_neon, compute_shadow_neon_parallel, compute_shadow_neon_parallel_with_azimuth,
 };
-#[cfg(target_arch = "aarch64")]
-pub use tiled::{compute_normals_neon_tiled, compute_normals_neon_tiled_parallel};
 
 #[cfg(target_arch = "x86_64")]
 pub use row_major_avx2::{compute_normals_avx2, compute_normals_avx2_parallel};
