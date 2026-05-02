@@ -4,9 +4,6 @@ mod row_major_avx2;
 mod shadow;
 #[cfg(target_arch = "x86_64")]
 mod shadow_avx2;
-mod tiled;
-#[cfg(target_arch = "x86_64")]
-mod tiled_avx2;
 
 use std::usize;
 
@@ -31,8 +28,6 @@ pub use row_major_avx2::{compute_normals_avx2, compute_normals_avx2_parallel};
 pub use shadow_avx2::{
     compute_shadow_avx2, compute_shadow_avx2_parallel, compute_shadow_avx2_parallel_with_azimuth,
 };
-#[cfg(target_arch = "x86_64")]
-pub use tiled_avx2::{compute_normals_avx2_tiled, compute_normals_avx2_tiled_parallel};
 
 // ── Platform dispatchers ──────────────────────────────────────────────────────
 // On aarch64 → NEON (always available).
@@ -74,52 +69,6 @@ pub fn compute_normals_vector_par(hm: &dem_io::Heightmap) -> NormalMap {
         #[cfg(not(target_arch = "x86_64"))]
         eprintln!("[SCALAR FALLBACK] compute_normals_vector_par: no SIMD for this architecture");
         return row_major::compute_normals_scalar(hm);
-    }
-}
-
-pub fn compute_normals_vector_tiled(tiled_hm: &dem_io::TiledHeightmap) -> NormalMap {
-    #[cfg(target_arch = "aarch64")]
-    return unsafe { tiled::compute_normals_neon_tiled(tiled_hm) };
-
-    #[cfg(target_arch = "x86_64")]
-    if is_x86_feature_detected!("avx2") {
-        return unsafe { tiled_avx2::compute_normals_avx2_tiled(tiled_hm) };
-    }
-
-    #[cfg(not(target_arch = "aarch64"))]
-    {
-        #[cfg(target_arch = "x86_64")]
-        eprintln!(
-            "[SCALAR FALLBACK] compute_normals_vector_tiled: AVX2 not detected — using scalar via get()"
-        );
-        #[cfg(not(target_arch = "x86_64"))]
-        eprintln!(
-            "[SCALAR FALLBACK] compute_normals_vector_tiled: no SIMD for this architecture — using scalar via get()"
-        );
-        return tiled::compute_normals_scalar_tiled(tiled_hm);
-    }
-}
-
-pub fn compute_normals_vector_tiled_par(tiled_hm: &dem_io::TiledHeightmap) -> NormalMap {
-    #[cfg(target_arch = "aarch64")]
-    return unsafe { tiled::compute_normals_neon_tiled_parallel(tiled_hm) };
-
-    #[cfg(target_arch = "x86_64")]
-    if is_x86_feature_detected!("avx2") {
-        return unsafe { tiled_avx2::compute_normals_avx2_tiled_parallel(tiled_hm) };
-    }
-
-    #[cfg(not(target_arch = "aarch64"))]
-    {
-        #[cfg(target_arch = "x86_64")]
-        eprintln!(
-            "[SCALAR FALLBACK] compute_normals_vector_tiled_par: AVX2 not detected — using scalar via get()"
-        );
-        #[cfg(not(target_arch = "x86_64"))]
-        eprintln!(
-            "[SCALAR FALLBACK] compute_normals_vector_tiled_par: no SIMD for this architecture — using scalar via get()"
-        );
-        return tiled::compute_normals_scalar_tiled(tiled_hm);
     }
 }
 

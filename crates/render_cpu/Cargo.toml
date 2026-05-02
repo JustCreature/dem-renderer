@@ -1,9 +1,0 @@
-[package]
-name = "render_cpu"
-version = "0.1.0"
-edition = "2024"
-
-[dependencies]
-dem_io = { path = "../dem_io" }
-terrain = { path = "../terrain" }
-rayon = "1"
