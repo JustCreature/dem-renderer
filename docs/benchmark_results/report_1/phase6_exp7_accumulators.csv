@@ -1,8 +1,0 @@
-implementation,accumulators,simd_width,m4_mac_gbs,asus_pentium_gbs,mac_intel_i7_gbs,win_nitro_gbs,notes
-auto_vec_scalar,1,auto,23.4,3.3,10.1,10.1,compiler auto-vectorised
-neon_explicit_1acc,1,4-wide,18.1,,,, M4 only — slower than auto-vec (vfmaq latency 4-5 vs fadd 3)
-neon_explicit_4acc,4,4-wide,73.9,,,,4 parallel chains break serial dependency
-neon_explicit_8acc,8,4-wide,122.5,,,,8 chains — bandwidth-bound at this point
-speedup_4acc_vs_1acc,,,,3.2,,,,
-speedup_8acc_vs_4acc,,,,1.66,,,,diminishing returns — memory-bound
-memory_ceiling_single_thread,,,,68,,,,from Exp 1 row-major (M4)

@@ -1,9 +1,0 @@
-benchmark,resolution,unit,m4_mac,asus_pentium,mac_intel_i7,win_nitro_i5_gtx1650,notes
-cpu_scalar_parallel_ms,1600x533,ms_per_frame,67.6,6561.1,673.3,1143.9,CPU parallel 30-frame pan (Phase 7 run)
-cpu_scalar_parallel_fps,1600x533,fps,14.80,0.152,1.49,0.87,
-gpu_combined_rdback_ms,1600x533,ms_per_frame,21.7,1457.1,212.6,92.7,GPU combined with readback (Phase 7 run)
-gpu_combined_rdback_fps,1600x533,fps,46.2,0.686,4.7,10.8,
-gpu_scene_no_rdback_ms,1600x533,ms_per_frame,2.1,205.8,18.9,3.8,GPU scene dispatch_frame + poll(Wait) — no readback
-gpu_scene_no_rdback_fps,1600x533,fps,476.9,4.9,52.9,260.1,
-gpu_speedup_vs_cpu,,ratio,32.2,31.9,35.6,297.5,GPU no-rdback fps / CPU fps
-readback_overhead_ratio,,ratio,10.3,7.1,11.3,24.1,GPU combined ms / GPU no-rdback ms (readback multiplier)
