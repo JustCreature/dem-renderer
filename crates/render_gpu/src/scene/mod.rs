@@ -78,6 +78,7 @@ pub struct GpuScene {
     pub(super) hm_rows: u32,
     pub(super) dx_meters: f32,
     pub(super) dy_meters: f32,
+    pub(super) max_terrain_h: f32,
 }
 
 /// Create a 1×1 R16Float placeholder texture + Linear sampler + 4 × 1-element f32 storage
@@ -760,6 +761,7 @@ impl GpuScene {
             hm_rows: hm.rows as u32,
             dx_meters: hm.dx_meters as f32,
             dy_meters: hm.dy_meters as f32,
+            max_terrain_h: hm.data.iter().cloned().fold(f32::NEG_INFINITY, f32::max),
         }
     }
 
@@ -827,7 +829,7 @@ impl GpuScene {
             hm1m_extent_y: self.hm1m_extent_y,
             hm1m_cols: self.hm1m_cols,
             hm1m_rows: self.hm1m_rows,
-            _pad8: 0,
+            max_terrain_h: self.max_terrain_h,
             _pad9: 0,
         };
 
@@ -945,7 +947,7 @@ impl GpuScene {
             hm1m_extent_y: self.hm1m_extent_y,
             hm1m_cols: self.hm1m_cols,
             hm1m_rows: self.hm1m_rows,
-            _pad8: 0,
+            max_terrain_h: self.max_terrain_h,
             _pad9: 0,
         };
 
@@ -1088,6 +1090,7 @@ impl GpuScene {
         self.hm_rows = hm.rows as u32;
         self.dx_meters = hm.dx_meters as f32;
         self.dy_meters = hm.dy_meters as f32;
+        self.max_terrain_h = hm.data.iter().cloned().fold(f32::NEG_INFINITY, f32::max);
     }
 
     pub fn get_output_buffer(&self) -> &wgpu::Buffer {

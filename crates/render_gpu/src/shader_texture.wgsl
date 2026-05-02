@@ -41,7 +41,7 @@ struct CameraUniforms {
     hm1m_extent_y: f32,
     hm1m_cols: u32,
     hm1m_rows: u32,
-    _pad8: u32,
+    max_terrain_h: f32,
     _pad9: u32,
 }
 
@@ -262,7 +262,7 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
         if t > cam.t_max { break; }
         // sky early exit — upward ray already above max terrain height
         // 10k is the limit, since Everest is lower than 10k,
-        if dir.z > 0.0 && pos.z > 10000.0 { break; }
+        if dir.z > 0.0 && pos.z > cam.max_terrain_h + 100.0 { break; }
 
         let uv: vec2<f32> = vec2<f32>(
             (pos.x / cam.dx_meters + 0.5) / f32(cam.hm_cols),
@@ -297,7 +297,7 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
             hit = true;
             // use t_prev as lower bracket (correct for adaptive steps)
             // pos = binary_search_hit(t - cam.step_m, t, dir, 8);
-            pos = binary_search_hit(t_prev, t, dir, 32);
+            pos = binary_search_hit(t_prev, t, dir, 10);
             break;
         }
 
