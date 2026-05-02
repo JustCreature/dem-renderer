@@ -184,52 +184,15 @@ The buffer→texture copy is not the bottleneck on either architecture tested. D
 retry without first confirming (via GPU timestamp queries) that the copy itself
 takes measurable time in the current frame budget.
 
-## 3. Tighter sky early exit
+## 3. Tighter sky early exit — DONE (2026-05-02)
 
-```wgsl
-// shader_texture.wgsl:265
-if dir.z > 0.0 && pos.z > 10000.0 { break; }
-```
+`max_terrain_h: f32` added to `CameraUniforms`; computed from `hm.data` in
+`GpuScene::new()` and `update_heightmap()`; condition in `shader_texture.wgsl`
+changed to `pos.z > cam.max_terrain_h + 100.0`.
 
-For a camera at 2000m looking up at any non-grazing angle, the ray climbs to
-10km before this triggers — hundreds of wasted steps for sky pixels.
+## 4. Reduce `binary_search_hit` iterations from 32 to ~10 — DONE (2026-05-02)
 
-**Fix:** pass `max_terrain_height` (computed once from the top mip level) in
-the camera uniform. For Hintertux that's ~3700m, not 10000m.
-
-```wgsl
-if dir.z > 0.0 && pos.z > cam.max_terrain_h + 100.0 { break; }
-```
-
-### Impact
-
-60–70% reduction in sky-ray step count. Typically 30–50% of pixels are sky in
-a typical alpine view. Net: probably 10–20% overall fps gain.
-
-Trivial to implement: one float in `CameraUniforms`, one `max()` reduction
-over the top mip level when the heightmap is uploaded.
-
-## 4. Reduce `binary_search_hit` iterations from 32 to ~10
-
-```wgsl
-// shader_texture.wgsl:300
-pos = binary_search_hit(t_prev, t, dir, 32);
-```
-
-`binary_search_hit` does up to 32 iterations × up to 3 texture samples each
-(base + hm5m + hm1m via `sample_h_exact`) = **up to 96 samples per pixel just
-for hit refinement**.
-
-Math: each iteration halves the bracket. Starting from `t_hi - t_lo ≈ step_m
-≈ 20m`, after 10 iterations the bracket is `20 / 2^10 ≈ 0.02m` — well below
-sub-pixel error at any realistic camera distance.
-
-**Fix:** change `32` to `10`. Free win, no visual change.
-
-### Impact
-
-3× reduction in hit-refinement cost. Hit refinement is one-shot per pixel
-(only on hit), not per-step, so this is small relative to Hi-Z but trivial.
+Changed literal `32` → `10` in `shader_texture.wgsl:300`.
 
 ## 5. Eliminate divergent inner-loop branches
 
@@ -329,8 +292,8 @@ complexity.
 ## Suggested order of work
 
 1. **Hi-Z hierarchical traversal** — biggest win, infrastructure exists. ~1 day.
-2. **Tighter sky exit** — trivial, ~30 min.
-3. **Reduce `binary_search_hit` to 10 iterations** — trivial, ~5 min.
+2. ~~**Tighter sky exit**~~ — done 2026-05-02.
+3. ~~**Reduce `binary_search_hit` to 10 iterations**~~ — done 2026-05-02.
 4. **Verify viewer path / direct swap-chain write** — investigation first.
 5. **Inner-loop divergence fix** — only after Hi-Z, since Hi-Z changes the loop structure.
 6. **Pack base normals** — when you next touch that area.
