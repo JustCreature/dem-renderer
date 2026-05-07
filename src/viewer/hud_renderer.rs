@@ -180,21 +180,21 @@ fn build_vertices(width: u32, height: u32) -> [f32; 36] {
         height as f32 - 4.0, // (x1, y1)
         0.0,
         height as f32 - 4.0, // (x0, y1)
-        //For the settings box (x0=width-296, y0=4, x1=width-4, y1=116):
+        //For the settings box (x0=width-296, y0=4, x1=width-4, y1=136):
         // triangle 1
         width as f32 - 296.0,
         4.0, // (x0, y0)
         width as f32 - 4.0,
         4.0, // (x1, y0)
         width as f32 - 4.0,
-        116.0, // (x1, y1)
+        136.0, // (x1, y1)
         // triangle 2
         width as f32 - 296.0,
         4.0,
         width as f32 - 4.0,
-        116.0,
+        136.0,
         width as f32 - 296.0,
-        116.0,
+        136.0,
     ]
 }
 
@@ -583,6 +583,7 @@ impl HudRenderer {
         fog_enabled: bool,
         vat_mode: u32,
         lod_mode: u32,
+        smooth_radius_m: f32,
     ) {
         self.sim_day = sim_day;
         self.sim_hour = sim_hour;
@@ -646,9 +647,14 @@ impl HudRenderer {
             2 => "LOD: Mid         (Press ' to change)",
             _ => "LOD: Low         (Press ' to change)",
         };
+        let smooth_label = if smooth_radius_m <= 0.0 {
+            "Smooth: Off      (Press B to change)".to_string()
+        } else {
+            format!("Smooth: {:.0}m    (Press B to change)", smooth_radius_m)
+        };
         let settings_text = format!(
-            "{}\n{}\n{}\n{}\n{}",
-            ao_label, shadows_label, fog_label, vat_label, lod_label
+            "{}\n{}\n{}\n{}\n{}\n{}",
+            ao_label, shadows_label, fog_label, vat_label, lod_label, smooth_label
         );
         self.settings_buffer.set_text(
             &mut self.font_system,

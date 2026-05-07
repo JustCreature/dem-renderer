@@ -4,7 +4,7 @@ use std::sync::Arc;
 use dem_io::{crop, extract_window, geotiff_pixel_scale, load_grid, Heightmap};
 use render_gpu::{GpuContext, GpuScene};
 
-use super::geo::{lcc_epsg31287, latlon_to_tile_metres, sun_position};
+use super::geo::{latlon_to_tile_metres, lcc_epsg31287, sun_position};
 use super::tiers::{AO_RADIUS_M, BEV_BASE_IFD, BEV_BASE_RADIUS_M};
 
 // Day 172 = June 21 (summer solstice). Must match sim_day / sim_hour in the Viewer init

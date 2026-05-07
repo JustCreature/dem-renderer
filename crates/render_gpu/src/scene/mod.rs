@@ -349,20 +349,24 @@ impl GpuScene {
 
         // normals packed buffer: bits 31–16 = nx_i16, bits 15–0 = ny_i16; nz reconstructed in shader
         // COPY_DST so update_heightmap can write_buffer
-        let normals_packed: Vec<u32> = normal_map.nx.iter().zip(normal_map.ny.iter())
+        let normals_packed: Vec<u32> = normal_map
+            .nx
+            .iter()
+            .zip(normal_map.ny.iter())
             .map(|(&nx, &ny)| {
                 let xi = (nx.clamp(-1.0, 1.0) * 32767.0).round() as i16;
                 let yi = (ny.clamp(-1.0, 1.0) * 32767.0).round() as i16;
                 ((xi as u32) << 16) | (yi as u16 as u32)
             })
             .collect();
-        let normals_packed_buf = gpu_ctx
-            .device
-            .create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                label: Some("normals_packed"),
-                contents: bytemuck::cast_slice(&normals_packed),
-                usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
-            });
+        let normals_packed_buf =
+            gpu_ctx
+                .device
+                .create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                    label: Some("normals_packed"),
+                    contents: bytemuck::cast_slice(&normals_packed),
+                    usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+                });
 
         // shadow buffer (COPY_DST so update_shadow can write_buffer)
         let shadow_buf = gpu_ctx
@@ -792,7 +796,7 @@ impl GpuScene {
             hm1m_cols: self.hm1m_cols,
             hm1m_rows: self.hm1m_rows,
             max_terrain_h: self.max_terrain_h,
-            _pad9: 0,
+            smooth_radius_m: 2000.0,
         };
 
         self.gpu_ctx
@@ -860,6 +864,7 @@ impl GpuScene {
         fog_enabled: u32,
         vat_mode: u32,
         lod_mode: u32,
+        smooth_radius_m: f32,
     ) {
         let forward = crate::vector_utils::normalize(crate::vector_utils::sub(look_at, origin));
         let right =
@@ -910,7 +915,7 @@ impl GpuScene {
             hm1m_cols: self.hm1m_cols,
             hm1m_rows: self.hm1m_rows,
             max_terrain_h: self.max_terrain_h,
-            _pad9: 0,
+            smooth_radius_m,
         };
 
         self.gpu_ctx
@@ -1017,16 +1022,21 @@ impl GpuScene {
             hm.rows,
         );
 
-        let normals_packed: Vec<u32> = normal_map.nx.iter().zip(normal_map.ny.iter())
+        let normals_packed: Vec<u32> = normal_map
+            .nx
+            .iter()
+            .zip(normal_map.ny.iter())
             .map(|(&nx, &ny)| {
                 let xi = (nx.clamp(-1.0, 1.0) * 32767.0).round() as i16;
                 let yi = (ny.clamp(-1.0, 1.0) * 32767.0).round() as i16;
                 ((xi as u32) << 16) | (yi as u16 as u32)
             })
             .collect();
-        self.gpu_ctx
-            .queue
-            .write_buffer(&self._normals_packed_buf, 0, bytemuck::cast_slice(&normals_packed));
+        self.gpu_ctx.queue.write_buffer(
+            &self._normals_packed_buf,
+            0,
+            bytemuck::cast_slice(&normals_packed),
+        );
 
         let ao_data: Vec<u8> = ao_data_mask.iter().map(|&v| (v * 255.0) as u8).collect();
         self.gpu_ctx.queue.write_texture(

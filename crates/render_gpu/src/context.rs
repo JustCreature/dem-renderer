@@ -39,8 +39,15 @@ impl GpuContext {
             let info = adapter.get_info();
             println!("  [GPU] selected: {} ({:?})", info.name, info.device_type);
 
+            // Request optional features that improve precision; only enable what the
+            // adapter actually supports so the build stays cross-platform.
+            let wanted = wgpu::Features::FLOAT32_FILTERABLE        // R32Float + Linear sampler
+                       | wgpu::Features::TEXTURE_FORMAT_16BIT_NORM; // Rg16Snorm normal textures
+            let enabled = adapter.features() & wanted;
+
             let (device, queue) = adapter
                 .request_device(&wgpu::DeviceDescriptor {
+                    required_features: enabled,
                     required_limits: adapter.limits(),
                     ..Default::default()
                 })

@@ -37,8 +37,9 @@ struct Viewer {
     ao_mode: u32,
     shadows_enabled: bool,
     fog_enabled: bool,
-    vat_mode: u32, // 0=Ultra, 1=High, 2=Mid, 3=Low
-    lod_mode: u32, // 0=Ultra, 1=High, 2=Mid, 3=Low
+    vat_mode: u32,        // 0=Ultra, 1=High, 2=Mid, 3=Low
+    lod_mode: u32,        // 0=Ultra, 1=High, 2=Mid, 3=Low
+    smooth_radius_m: f32, // close-range bicubic smoothing radius (f32::MAX = off)
     // fps counter
     fps_timer: std::time::Instant,
     frame_count: u32,
@@ -491,6 +492,7 @@ impl ApplicationHandler for Viewer {
                     self.fog_enabled as u32,
                     self.vat_mode,
                     self.lod_mode,
+                    self.smooth_radius_m,
                 );
                 let output_buf: &wgpu::Buffer = scene.get_output_buffer();
 
@@ -530,6 +532,7 @@ impl ApplicationHandler for Viewer {
                         self.fog_enabled,
                         self.vat_mode,
                         self.lod_mode,
+                        self.smooth_radius_m,
                     );
                 }
 
@@ -606,6 +609,16 @@ impl ApplicationHandler for Viewer {
                     }
                     if kc == KeyCode::Quote && event.state == winit::event::ElementState::Pressed {
                         self.lod_mode = (self.lod_mode + 1).rem_euclid(4);
+                        return;
+                    }
+                    if kc == KeyCode::KeyB && event.state == winit::event::ElementState::Pressed {
+                        // 0.0 = off (dist < 0 never true), other values = active radius
+                        let presets = [0.0_f32, 500.0, 1000.0, 2000.0, 5000.0];
+                        let cur = presets
+                            .iter()
+                            .position(|&r| r >= self.smooth_radius_m)
+                            .unwrap_or(0);
+                        self.smooth_radius_m = presets[(cur + 1) % presets.len()];
                         return;
                     }
                     if kc == KeyCode::SuperLeft || kc == KeyCode::AltLeft {
@@ -824,6 +837,7 @@ pub fn run(tile_path: &Path, width: u32, height: u32, vsync: bool, tiles_1m_dir:
         fog_enabled: true,
         vat_mode: 2, // Mid
         lod_mode: 1, // High
+        smooth_radius_m: 2000.0,
         // fps counter
         fps_timer: std::time::Instant::now(),
         frame_count: 0,

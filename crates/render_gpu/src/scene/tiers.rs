@@ -34,7 +34,7 @@ impl GpuScene {
                     mip_level_count: 1,
                     sample_count: 1,
                     dimension: wgpu::TextureDimension::D2,
-                    format: wgpu::TextureFormat::R16Float,
+                    format: wgpu::TextureFormat::R32Float,
                     usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
                     view_formats: &[],
                 });
@@ -53,7 +53,7 @@ impl GpuScene {
                     mip_level_count: 1,
                     sample_count: 1,
                     dimension: wgpu::TextureDimension::D2,
-                    format: wgpu::TextureFormat::Rgba8Snorm,
+                    format: wgpu::TextureFormat::Rg16Snorm,
                     usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
                     view_formats: &[],
                 });
@@ -77,13 +77,12 @@ impl GpuScene {
             self.rebuild_bind_group();
         }
 
-        let hm_data: Vec<half::f16> = hm5m.data.iter().map(|&v| half::f16::from_f32(v)).collect();
         self.gpu_ctx.queue.write_texture(
             self._hm5m_texture.as_image_copy(),
-            bytemuck::cast_slice(&hm_data),
+            bytemuck::cast_slice(&hm5m.data),
             wgpu::TexelCopyBufferLayout {
                 offset: 0,
-                bytes_per_row: Some(cols * 2),
+                bytes_per_row: Some(cols * 4),
                 rows_per_image: None,
             },
             wgpu::Extent3d {
@@ -92,16 +91,14 @@ impl GpuScene {
                 depth_or_array_layers: 1,
             },
         );
-        let normal_data: Vec<i8> = normals
+        let normal_data: Vec<i16> = normals
             .nx
             .iter()
             .zip(normals.ny.iter())
             .flat_map(|(&nx, &ny)| {
                 [
-                    (nx.clamp(-1.0, 1.0) * 127.0).round() as i8,
-                    (ny.clamp(-1.0, 1.0) * 127.0).round() as i8,
-                    0i8,
-                    0i8,
+                    (nx.clamp(-1.0, 1.0) * 32767.0).round() as i16,
+                    (ny.clamp(-1.0, 1.0) * 32767.0).round() as i16,
                 ]
             })
             .collect();
@@ -169,7 +166,7 @@ impl GpuScene {
                     mip_level_count: 1,
                     sample_count: 1,
                     dimension: wgpu::TextureDimension::D2,
-                    format: wgpu::TextureFormat::R16Float,
+                    format: wgpu::TextureFormat::R32Float,
                     usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
                     view_formats: &[],
                 });
@@ -188,7 +185,7 @@ impl GpuScene {
                     mip_level_count: 1,
                     sample_count: 1,
                     dimension: wgpu::TextureDimension::D2,
-                    format: wgpu::TextureFormat::Rgba8Snorm,
+                    format: wgpu::TextureFormat::Rg16Snorm,
                     usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
                     view_formats: &[],
                 });
@@ -212,13 +209,12 @@ impl GpuScene {
             self.rebuild_bind_group();
         }
 
-        let hm_data: Vec<half::f16> = hm1m.data.iter().map(|&v| half::f16::from_f32(v)).collect();
         self.gpu_ctx.queue.write_texture(
             self._hm1m_texture.as_image_copy(),
-            bytemuck::cast_slice(&hm_data),
+            bytemuck::cast_slice(&hm1m.data),
             wgpu::TexelCopyBufferLayout {
                 offset: 0,
-                bytes_per_row: Some(cols * 2),
+                bytes_per_row: Some(cols * 4),
                 rows_per_image: None,
             },
             wgpu::Extent3d {
@@ -227,16 +223,14 @@ impl GpuScene {
                 depth_or_array_layers: 1,
             },
         );
-        let normal_data: Vec<i8> = normals
+        let normal_data: Vec<i16> = normals
             .nx
             .iter()
             .zip(normals.ny.iter())
             .flat_map(|(&nx, &ny)| {
                 [
-                    (nx.clamp(-1.0, 1.0) * 127.0).round() as i8,
-                    (ny.clamp(-1.0, 1.0) * 127.0).round() as i8,
-                    0i8,
-                    0i8,
+                    (nx.clamp(-1.0, 1.0) * 32767.0).round() as i16,
+                    (ny.clamp(-1.0, 1.0) * 32767.0).round() as i16,
                 ]
             })
             .collect();
