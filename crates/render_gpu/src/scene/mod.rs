@@ -792,7 +792,7 @@ impl GpuScene {
             hm1m_cols: self.hm1m_cols,
             hm1m_rows: self.hm1m_rows,
             max_terrain_h: self.max_terrain_h,
-            _pad9: 0,
+            smooth_radius_m: 2000.0,
         };
 
         self.gpu_ctx
@@ -860,6 +860,7 @@ impl GpuScene {
         fog_enabled: u32,
         vat_mode: u32,
         lod_mode: u32,
+        smooth_radius_m: f32,
     ) {
         let forward = crate::vector_utils::normalize(crate::vector_utils::sub(look_at, origin));
         let right =
@@ -910,7 +911,7 @@ impl GpuScene {
             hm1m_cols: self.hm1m_cols,
             hm1m_rows: self.hm1m_rows,
             max_terrain_h: self.max_terrain_h,
-            _pad9: 0,
+            smooth_radius_m,
         };
 
         self.gpu_ctx

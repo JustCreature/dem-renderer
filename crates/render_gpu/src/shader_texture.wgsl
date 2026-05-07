@@ -42,7 +42,7 @@ struct CameraUniforms {
     hm1m_cols: u32,
     hm1m_rows: u32,
     max_terrain_h: f32,
-    _pad9: u32,
+    smooth_radius_m: f32,
 }
 
 // camera uniforms struct
@@ -170,7 +170,7 @@ var<private> hbao_8x_kernel: array<vec2<f32>, 8> = array<vec2<f32>, 8>(
 fn unpack_normal(p: u32) -> vec3<f32> {
     let nx = f32(extractBits(i32(p), 16u, 16u)) / 32767.0;
     let ny = f32(extractBits(i32(p), 0u, 16u)) / 32767.0;
-    let nz = sqrt(max(0.0, 1.0 - nx*nx - ny*ny));
+    let nz = sqrt(max(0.0, 1.0 - nx * nx - ny * ny));
     return vec3<f32>(nx, ny, nz);
 }
 
@@ -182,6 +182,88 @@ fn close_tier_edge_dist(lx: f32, ly: f32) -> f32 {
 // Distance from (lx, ly) to the nearest edge of the 1m fine tier rectangle.
 fn fine_tier_edge_dist(lx: f32, ly: f32) -> f32 {
     return min(min(lx, cam.hm1m_extent_x - lx), min(ly, cam.hm1m_extent_y - ly));
+}
+
+// Catmull-Rom 1D weight vector for fractional offset t ∈ [0, 1].
+fn cr_w(t: f32) -> vec4<f32> {
+    let t2 = t * t;
+    let t3 = t2 * t;
+    return 0.5 * vec4<f32>(
+        -t3 + 2.0 * t2 - t,
+        3.0 * t3 - 5.0 * t2 + 2.0,
+        -3.0 * t3 + 4.0 * t2 + t,
+        t3 - t2,
+    );
+}
+
+// Derivative of Catmull-Rom weights w.r.t. t.
+fn cr_dw(t: f32) -> vec4<f32> {
+    let t2 = t * t;
+    return 0.5 * vec4<f32>(
+        -3.0 * t2 + 4.0 * t - 1.0,
+        9.0 * t2 - 10.0 * t,
+        -9.0 * t2 + 8.0 * t + 1.0,
+        3.0 * t2 - 2.0 * t,
+    );
+}
+
+// Bicubic (Catmull-Rom) height AND gradient for the 1m fine tier.
+// Returns vec3(h, dh/dlx, dh/dly). The gradient is in metres/metre (world slope).
+// Requires 16 texture samples; only call at hit-point refinement, not in the march loop.
+fn sample_h_grad_bicubic_1m(lx1: f32, ly1: f32) -> vec3<f32> {
+    let tex_w = f32(cam.hm1m_cols);
+    let tex_h = f32(cam.hm1m_rows);
+    let uv = vec2<f32>(lx1 / cam.hm1m_extent_x, ly1 / cam.hm1m_extent_y);
+    // Convert to pixel coordinates (texel centre at integer + 0.5).
+    let px = uv.x * tex_w - 0.5;
+    let py = uv.y * tex_h - 0.5;
+    let ix = floor(px);  let tx = px - ix;
+    let iy = floor(py);  let ty = py - iy;
+    let step = vec2<f32>(1.0 / tex_w, 1.0 / tex_h);
+    let base = vec2<f32>((ix + 0.5) / tex_w, (iy + 0.5) / tex_h);
+
+    // 4×4 neighbourhood: offsets -1, 0, 1, 2 from the base texel.
+    var g00 = textureSampleLevel(hm1m_tex, hm1m_samp, base + vec2<f32>(-1.0, -1.0) * step, 0.0).r;
+    var g10 = textureSampleLevel(hm1m_tex, hm1m_samp, base + vec2<f32>(0.0, -1.0) * step, 0.0).r;
+    var g20 = textureSampleLevel(hm1m_tex, hm1m_samp, base + vec2<f32>(1.0, -1.0) * step, 0.0).r;
+    var g30 = textureSampleLevel(hm1m_tex, hm1m_samp, base + vec2<f32>(2.0, -1.0) * step, 0.0).r;
+
+    var g01 = textureSampleLevel(hm1m_tex, hm1m_samp, base + vec2<f32>(-1.0, 0.0) * step, 0.0).r;
+    var g11 = textureSampleLevel(hm1m_tex, hm1m_samp, base + vec2<f32>(0.0, 0.0) * step, 0.0).r;
+    var g21 = textureSampleLevel(hm1m_tex, hm1m_samp, base + vec2<f32>(1.0, 0.0) * step, 0.0).r;
+    var g31 = textureSampleLevel(hm1m_tex, hm1m_samp, base + vec2<f32>(2.0, 0.0) * step, 0.0).r;
+
+    var g02 = textureSampleLevel(hm1m_tex, hm1m_samp, base + vec2<f32>(-1.0, 1.0) * step, 0.0).r;
+    var g12 = textureSampleLevel(hm1m_tex, hm1m_samp, base + vec2<f32>(0.0, 1.0) * step, 0.0).r;
+    var g22 = textureSampleLevel(hm1m_tex, hm1m_samp, base + vec2<f32>(1.0, 1.0) * step, 0.0).r;
+    var g32 = textureSampleLevel(hm1m_tex, hm1m_samp, base + vec2<f32>(2.0, 1.0) * step, 0.0).r;
+
+    var g03 = textureSampleLevel(hm1m_tex, hm1m_samp, base + vec2<f32>(-1.0, 2.0) * step, 0.0).r;
+    var g13 = textureSampleLevel(hm1m_tex, hm1m_samp, base + vec2<f32>(0.0, 2.0) * step, 0.0).r;
+    var g23 = textureSampleLevel(hm1m_tex, hm1m_samp, base + vec2<f32>(1.0, 2.0) * step, 0.0).r;
+    var g33 = textureSampleLevel(hm1m_tex, hm1m_samp, base + vec2<f32>(2.0, 2.0) * step, 0.0).r;
+
+    let wx = cr_w(tx);  let wy = cr_w(ty);
+    let dwx = cr_dw(tx); let dwy = cr_dw(ty);
+
+    // Horizontal reduce: interpolated value and x-derivative per row.
+    let r0_h = dot(vec4<f32>(g00, g10, g20, g30), wx);
+    let r1_h = dot(vec4<f32>(g01, g11, g21, g31), wx);
+    let r2_h = dot(vec4<f32>(g02, g12, g22, g32), wx);
+    let r3_h = dot(vec4<f32>(g03, g13, g23, g33), wx);
+    let r0_dx = dot(vec4<f32>(g00, g10, g20, g30), dwx);
+    let r1_dx = dot(vec4<f32>(g01, g11, g21, g31), dwx);
+    let r2_dx = dot(vec4<f32>(g02, g12, g22, g32), dwx);
+    let r3_dx = dot(vec4<f32>(g03, g13, g23, g33), dwx);
+
+    let rv = vec4<f32>(r0_h, r1_h, r2_h, r3_h);
+    let rdx = vec4<f32>(r0_dx, r1_dx, r2_dx, r3_dx);
+
+    let h = dot(rv, wy);
+    // Chain rule: ∂h/∂lx = (∂h/∂tx)(∂tx/∂lx), where ∂tx/∂lx = tex_w / extent_x.
+    let dh_dlx = dot(rdx, wy) * (tex_w / cam.hm1m_extent_x);
+    let dh_dly = dot(rv, dwy) * (tex_h / cam.hm1m_extent_y);
+    return vec3<f32>(h, dh_dlx, dh_dly);
 }
 
 // Height sample for the binary-search refinement pass (base → 5m → 1m).
@@ -391,8 +473,21 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
             if t1 > 0.0 {
                 // ── fine tier normals (texture sample) and shadow (buffer bilinear) ──
                 let fine_uv = vec2<f32>(lx1 / cam.hm1m_extent_x, ly1 / cam.hm1m_extent_y);
-                let n1_rg = textureSampleLevel(hm1m_normal_tex, hm1m_normal_samp, fine_uv, 0.0).rg;
-                let n1 = normalize(vec3<f32>(n1_rg.x, n1_rg.y, sqrt(max(0.0, 1.0 - dot(n1_rg, n1_rg)))));
+
+                // Within smooth_radius: derive normal analytically from bicubic gradient
+                // (C1-continuous → no slope discontinuities at cell boundaries).
+                // Outside: fall back to the pre-computed Rg16Snorm normal texture.
+                let dist_to_cam_hit = length(pos.xy - cam.origin.xy);
+                var n1: vec3<f32>;
+                if dist_to_cam_hit < cam.smooth_radius_m {
+                    let hg1 = sample_h_grad_bicubic_1m(lx1, ly1);
+                    // surface normal from gradient: N = normalize(-dh/dlx, -dh/dly, 1)
+                    n1 = normalize(vec3<f32>(-hg1.y, -hg1.z, 1.0));
+                } else {
+                    let n1_rg = textureSampleLevel(hm1m_normal_tex, hm1m_normal_samp, fine_uv, 0.0).rg;
+                    n1 = normalize(vec3<f32>(n1_rg.x, n1_rg.y, sqrt(max(0.0, 1.0 - dot(n1_rg, n1_rg)))));
+                }
+
                 let dx1 = cam.hm1m_extent_x / f32(cam.hm1m_cols);
                 let dy1 = cam.hm1m_extent_y / f32(cam.hm1m_rows);
                 let c1_f = lx1 / dx1;
