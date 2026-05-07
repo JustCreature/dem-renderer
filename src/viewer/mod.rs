@@ -37,8 +37,8 @@ struct Viewer {
     ao_mode: u32,
     shadows_enabled: bool,
     fog_enabled: bool,
-    vat_mode: u32, // 0=Ultra, 1=High, 2=Mid, 3=Low
-    lod_mode: u32, // 0=Ultra, 1=High, 2=Mid, 3=Low
+    vat_mode: u32,        // 0=Ultra, 1=High, 2=Mid, 3=Low
+    lod_mode: u32,        // 0=Ultra, 1=High, 2=Mid, 3=Low
     smooth_radius_m: f32, // close-range bicubic smoothing radius (f32::MAX = off)
     // fps counter
     fps_timer: std::time::Instant,
@@ -614,7 +614,10 @@ impl ApplicationHandler for Viewer {
                     if kc == KeyCode::KeyB && event.state == winit::event::ElementState::Pressed {
                         // 0.0 = off (dist < 0 never true), other values = active radius
                         let presets = [0.0_f32, 500.0, 1000.0, 2000.0, 5000.0];
-                        let cur = presets.iter().position(|&r| r >= self.smooth_radius_m).unwrap_or(0);
+                        let cur = presets
+                            .iter()
+                            .position(|&r| r >= self.smooth_radius_m)
+                            .unwrap_or(0);
                         self.smooth_radius_m = presets[(cur + 1) % presets.len()];
                         return;
                     }
