@@ -1,0 +1,819 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>DEM Renderer</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@300;400;500;600&family=JetBrains+Mono:wght@300;400;500&display=swap" rel="stylesheet">
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+  html, body {
+    width: 100%; height: 100%;
+    background: #050506;
+    font-family: 'Space Grotesk', system-ui, sans-serif;
+    color: #e8e4dc;
+    overflow: hidden;
+    user-select: none;
+  }
+
+  /* ── Root scene ── */
+  .scene {
+    position: relative;
+    width: 100%; height: 100%;
+    background: #050506;
+  }
+
+  .photo-bg {
+    position: absolute; inset: 0;
+    background-image: url('assets/mountain-bg.png');
+    background-size: cover;
+    background-position: center left;
+    background-repeat: no-repeat;
+  }
+  .photo-shade {
+    position: absolute; inset: 0;
+    background: linear-gradient(90deg,
+      rgba(0,0,0,0) 0%,
+      rgba(0,0,0,0) 38%,
+      rgba(8,8,10,0.55) 58%,
+      rgba(8,8,10,0.82) 100%);
+    pointer-events: none;
+  }
+  .photo-vignette {
+    position: absolute; inset: 0;
+    background: radial-gradient(ellipse at 25% 35%, transparent 30%, rgba(0,0,0,0.55) 100%);
+    pointer-events: none;
+  }
+
+  /* ── Corner registration marks ── */
+  .reg {
+    position: absolute;
+    width: 14px; height: 14px;
+    border: 1px solid rgba(232,228,220,0.4);
+    pointer-events: none;
+  }
+  .reg.tl { top: 24px; left: 24px; border-right: none; border-bottom: none; }
+  .reg.tr { top: 24px; right: 24px; border-left: none; border-bottom: none; }
+  .reg.bl { bottom: 24px; left: 24px; border-right: none; border-top: none; }
+  .reg.br { bottom: 24px; right: 24px; border-left: none; border-top: none; }
+
+  .meta-tl {
+    position: absolute; top: 28px; left: 48px;
+    font-family: 'JetBrains Mono', monospace; font-size: 10px;
+    letter-spacing: 0.18em; color: rgba(232,228,220,0.55);
+    pointer-events: none;
+  }
+  .meta-bl {
+    position: absolute; bottom: 28px; left: 48px;
+    font-family: 'JetBrains Mono', monospace; font-size: 10px;
+    letter-spacing: 0.14em; color: rgba(232,228,220,0.5);
+    display: flex; gap: 18px;
+    pointer-events: none;
+  }
+
+  /* ── Panel — unified 540px for all screens ── */
+  .panel {
+    position: absolute;
+    top: 50%;
+    right: 56px;
+    transform: translateY(-50%);
+    width: 540px;
+    min-height: 520px;
+    padding: 38px 40px 32px 40px;
+    background: rgba(14, 14, 16, 0.42);
+    border: 1px solid rgba(232,228,220,0.10);
+    box-shadow: 0 30px 80px rgba(0,0,0,0.5), inset 0 1px 0 rgba(255,255,255,0.06);
+    display: flex;
+    flex-direction: column;
+  }
+
+  /* ── Breadcrumb — fixed 26px height so brand always starts at the same y ── */
+  .crumbs {
+    height: 26px;
+    display: flex; align-items: center; gap: 8px;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 10px; letter-spacing: 0.18em;
+    text-transform: uppercase;
+    color: rgba(232,228,220,0.45);
+    margin-bottom: 12px;
+    flex-shrink: 0;
+  }
+  .crumbs .back { color: rgba(232,228,220,0.7); cursor: pointer; transition: color 0.15s; }
+  .crumbs .back:hover { color: #fff; }
+  .crumbs .sep { opacity: 0.4; }
+  .crumbs .here { color: #f4f0e8; }
+  /* spacer for screens without a breadcrumb */
+  .crumb-spacer { height: 26px; margin-bottom: 12px; flex-shrink: 0; }
+
+  /* ── Brand block ── */
+  .brand {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    padding-bottom: 18px;
+    border-bottom: 1px solid rgba(232,228,220,0.08);
+    margin-bottom: 8px;
+    flex-shrink: 0;
+  }
+  .brand .eyebrow {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 10px; letter-spacing: 0.22em;
+    text-transform: uppercase; color: rgba(232,228,220,0.5);
+  }
+  .brand h1 {
+    font-family: 'Space Grotesk', sans-serif;
+    font-weight: 300; font-size: 36px;
+    letter-spacing: 0.04em; text-transform: uppercase;
+    color: #f4f0e8; line-height: 1;
+  }
+  .brand h1 em { font-style: normal; font-weight: 500; }
+  .brand .ver {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 10px; color: rgba(232,228,220,0.35);
+    letter-spacing: 0.12em; margin-top: 2px;
+  }
+
+  /* ── Content area — grows to fill remaining space ── */
+  .content { flex: 1; display: flex; flex-direction: column; }
+
+  /* ── Menu rows ── */
+  .row {
+    display: flex; align-items: center; gap: 14px;
+    padding: 13px 0;
+    border-top: 1px solid rgba(232,228,220,0.08);
+    cursor: pointer;
+    transition: padding-left 0.2s, color 0.2s;
+    color: rgba(232,228,220,0.82);
+  }
+  .row:last-child { border-bottom: 1px solid rgba(232,228,220,0.08); }
+  .row:hover { padding-left: 8px; color: #fff; }
+  .row .num {
+    font-family: 'JetBrains Mono', monospace; font-size: 10px;
+    color: rgba(232,228,220,0.4);
+    min-width: 36px; flex-shrink: 0;
+  }
+  .row .label { font-size: 17px; font-weight: 400; flex: 1; }
+  .row .meta {
+    font-family: 'JetBrains Mono', monospace; font-size: 10px;
+    color: rgba(232,228,220,0.42); letter-spacing: 0.06em;
+  }
+  .row.primary .label { color: #f4f0e8; font-weight: 500; }
+  .row.danger:hover .label { color: #d99c7a; }
+  .row .arrow {
+    font-family: 'JetBrains Mono', monospace; font-size: 12px;
+    opacity: 0; transform: translateX(-6px);
+    transition: opacity 0.2s, transform 0.2s;
+    color: rgba(232,228,220,0.7);
+  }
+  .row:hover .arrow { opacity: 1; transform: translateX(0); }
+
+  /* ── Footer — always pinned to the bottom ── */
+  .footer {
+    display: flex; justify-content: space-between; align-items: center;
+    font-family: 'JetBrains Mono', monospace; font-size: 10px;
+    color: rgba(232,228,220,0.4); letter-spacing: 0.1em;
+    padding-top: 10px;
+    border-top: 1px solid rgba(232,228,220,0.08);
+    margin-top: 10px;
+    flex-shrink: 0;
+  }
+  .dot {
+    display: inline-block; width: 6px; height: 6px; border-radius: 50%;
+    background: #6cab7a; margin-right: 8px; vertical-align: middle;
+    box-shadow: 0 0 6px rgba(108,171,122,0.7);
+  }
+
+  /* ── Select DEM choices ── */
+  .choice {
+    display: flex; align-items: flex-start; gap: 16px;
+    padding: 18px 0;
+    border-top: 1px solid rgba(232,228,220,0.08);
+    cursor: pointer;
+    transition: padding-left 0.2s, color 0.2s;
+    color: rgba(232,228,220,0.82);
+  }
+  .choice:last-child { border-bottom: 1px solid rgba(232,228,220,0.08); }
+  .choice:hover { padding-left: 8px; color: #fff; }
+  .choice .num {
+    font-family: 'JetBrains Mono', monospace; font-size: 10px;
+    color: rgba(232,228,220,0.4); width: 22px; flex-shrink: 0; margin-top: 4px;
+  }
+  .choice .body { flex: 1; display: flex; flex-direction: column; gap: 4px; }
+  .choice .ttl { font-size: 18px; color: #f4f0e8; }
+  .choice .desc { font-size: 12px; color: rgba(232,228,220,0.55); line-height: 1.45; }
+  .choice .size {
+    font-family: 'JetBrains Mono', monospace; font-size: 10px;
+    letter-spacing: 0.06em; color: rgba(232,228,220,0.55); margin-top: 8px;
+  }
+  .choice .arrow-ch {
+    font-family: 'JetBrains Mono', monospace; font-size: 12px;
+    color: rgba(232,228,220,0.7); margin-top: 6px; flex-shrink: 0;
+    transition: transform 0.2s;
+  }
+  .choice:hover .arrow-ch { transform: translateX(4px); }
+
+  /* ── Settings option rows ── */
+  .opt {
+    display: flex; align-items: center; gap: 14px;
+    padding: 13px 0; min-height: 52px;
+    border-top: 1px solid rgba(232,228,220,0.08);
+  }
+  .opt:last-child { border-bottom: 1px solid rgba(232,228,220,0.08); }
+  .opt .num {
+    font-family: 'JetBrains Mono', monospace; font-size: 10px;
+    color: rgba(232,228,220,0.4); width: 22px; flex-shrink: 0;
+  }
+  .opt .label {
+    font-size: 15px; flex: 1; color: rgba(232,228,220,0.85);
+    display: flex; align-items: center; gap: 8px;
+  }
+
+  /* info bubble + tooltip */
+  .info-btn {
+    width: 13px; height: 13px; border-radius: 50%;
+    border: 1px solid rgba(232,228,220,0.4);
+    color: rgba(232,228,220,0.6);
+    font-family: 'JetBrains Mono', monospace; font-size: 9px;
+    text-align: center; cursor: help;
+    position: relative; display: inline-flex;
+    align-items: center; justify-content: center;
+    transition: color 0.15s, border-color 0.15s; flex-shrink: 0;
+  }
+  .info-btn:hover { color: #fff; border-color: #fff; }
+  .tooltip {
+    position: absolute; bottom: calc(100% + 8px); left: 50%;
+    transform: translateX(-50%); width: 240px;
+    background: rgba(20,20,22,0.96);
+    border: 1px solid rgba(232,228,220,0.18);
+    color: rgba(232,228,220,0.9);
+    font-family: 'Space Grotesk', sans-serif; font-size: 12px;
+    line-height: 1.45; letter-spacing: 0; text-transform: none;
+    padding: 10px 12px; border-radius: 4px;
+    pointer-events: none; opacity: 0; transition: opacity 0.15s;
+    z-index: 5; box-shadow: 0 10px 30px rgba(0,0,0,0.5);
+    white-space: normal;
+  }
+  .info-btn:hover .tooltip { opacity: 1; }
+  .tooltip::after {
+    content: ''; position: absolute; top: 100%; left: 50%;
+    transform: translateX(-50%);
+    border: 5px solid transparent; border-top-color: rgba(20,20,22,0.96);
+  }
+
+  /* segmented control */
+  .seg {
+    display: flex; border: 1px solid rgba(232,228,220,0.18);
+    border-radius: 2px; overflow: hidden; flex-shrink: 0;
+  }
+  .seg-item {
+    padding: 6px 10px;
+    font-family: 'JetBrains Mono', monospace; font-size: 10px;
+    letter-spacing: 0.14em; text-transform: uppercase;
+    color: rgba(232,228,220,0.55); cursor: pointer;
+    transition: background 0.15s, color 0.15s;
+    border-right: 1px solid rgba(232,228,220,0.1);
+    white-space: nowrap;
+  }
+  .seg-item:last-child { border-right: none; }
+  .seg-item:hover { color: #f4f0e8; }
+  .seg-item.active { background: rgba(232,228,220,0.18); color: #fff; }
+
+  /* dropdown (AO mode) */
+  .dropdown {
+    appearance: none;
+    background: transparent;
+    border: 1px solid rgba(232,228,220,0.18);
+    color: rgba(232,228,220,0.9);
+    font-family: 'JetBrains Mono', monospace; font-size: 10px;
+    letter-spacing: 0.12em;
+    padding: 6px 28px 6px 10px;
+    border-radius: 2px; cursor: pointer; flex-shrink: 0;
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6' viewBox='0 0 10 6'%3E%3Cpath d='M0 0l5 6 5-6z' fill='rgba(232,228,220,0.4)'/%3E%3C/svg%3E");
+    background-repeat: no-repeat; background-position: right 8px center;
+  }
+  .dropdown:focus { outline: none; border-color: rgba(232,228,220,0.5); }
+  .dropdown option { background: #12121a; color: #e8e4dc; }
+
+  /* checkbox */
+  .check {
+    display: flex; align-items: center; gap: 10px;
+    cursor: pointer; flex-shrink: 0;
+  }
+  .check-box {
+    width: 16px; height: 16px;
+    border: 1px solid rgba(232,228,220,0.5);
+    display: flex; align-items: center; justify-content: center;
+    color: #f4f0e8; transition: background 0.15s, border-color 0.15s; flex-shrink: 0;
+  }
+  .check.on .check-box { background: rgba(232,228,220,0.2); border-color: #f4f0e8; }
+
+  /* ── Loading progress ── */
+  .loading-body { justify-content: center; gap: 20px; }
+  .progress-track {
+    width: 100%; height: 2px;
+    background: rgba(232,228,220,0.1); overflow: hidden;
+  }
+  .progress-fill {
+    height: 100%; background: rgba(232,228,220,0.7);
+    transition: width 0.4s ease; width: 0%;
+  }
+  .load-status {
+    font-family: 'JetBrains Mono', monospace; font-size: 10px;
+    letter-spacing: 0.16em; color: rgba(232,228,220,0.55);
+  }
+
+  /* ── Download modal ── */
+  .modal-scrim {
+    position: absolute; inset: 0;
+    background: rgba(0,0,0,0.55);
+    display: flex; align-items: center; justify-content: center;
+    z-index: 10;
+  }
+  .modal {
+    width: 460px;
+    background: rgba(18,18,20,0.96);
+    border: 1px solid rgba(232,228,220,0.14);
+    box-shadow: 0 30px 80px rgba(0,0,0,0.6);
+    color: #e8e4dc;
+    padding: 28px 30px;
+    display: flex; flex-direction: column;
+  }
+  .modal-head {
+    display: flex; align-items: center; gap: 10px;
+    font-family: 'JetBrains Mono', monospace; font-size: 10px;
+    letter-spacing: 0.22em; text-transform: uppercase;
+    color: rgba(232,228,220,0.55); margin-bottom: 12px;
+  }
+  .modal-head .pulse {
+    width: 6px; height: 6px; border-radius: 50%;
+    background: #d99c7a; flex-shrink: 0;
+  }
+  .modal h2 {
+    font-family: 'Space Grotesk', sans-serif;
+    font-weight: 400; font-size: 22px; color: #f4f0e8;
+    line-height: 1.25; margin-bottom: 10px;
+  }
+  .modal p {
+    font-size: 13.5px; line-height: 1.55;
+    color: rgba(232,228,220,0.78); margin-bottom: 14px;
+  }
+  .modal-divider {
+    border: none; border-top: 1px solid rgba(232,228,220,0.1); margin-bottom: 10px;
+  }
+  .modal-stat {
+    display: grid; grid-template-columns: 1fr 1fr;
+    gap: 10px 22px; padding-bottom: 10px;
+  }
+  .modal-stat .k {
+    font-family: 'JetBrains Mono', monospace; font-size: 9.5px;
+    letter-spacing: 0.16em; text-transform: uppercase;
+    color: rgba(232,228,220,0.45);
+  }
+  .modal-stat .v {
+    font-family: 'JetBrains Mono', monospace; font-size: 12px;
+    color: #f4f0e8; margin-top: 2px;
+    display: flex; align-items: center; gap: 6px;
+  }
+  .modal-divider2 {
+    border: none; border-top: 1px solid rgba(232,228,220,0.1);
+    margin: 0 0 12px;
+  }
+  .modal-path {
+    font-family: 'JetBrains Mono', monospace; font-size: 11px;
+    color: rgba(232,228,220,0.6);
+    background: rgba(4,4,6,0.88);
+    padding: 8px 10px; border: 1px solid rgba(232,228,220,0.08);
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    margin-bottom: 16px;
+  }
+  .modal-actions { display: flex; gap: 10px; justify-content: flex-end; }
+  .mbtn {
+    appearance: none; background: transparent;
+    border: 1px solid rgba(232,228,220,0.4); color: #e8e4dc;
+    font-family: 'Space Grotesk', sans-serif; font-size: 13px;
+    letter-spacing: 0.14em; text-transform: uppercase;
+    padding: 10px 22px; cursor: pointer;
+    transition: background 0.15s, border-color 0.15s;
+    min-width: 90px; min-height: 38px;
+  }
+  .mbtn:hover { background: rgba(232,228,220,0.08); border-color: #fff; }
+  .mbtn.primary {
+    background: rgba(232,228,220,0.92); color: #111;
+    border-color: rgba(232,228,220,0.92); font-weight: 500; min-width: 160px;
+  }
+  .mbtn.primary:hover { background: #fff; border-color: #fff; }
+
+  /* ── Screen visibility ── */
+  .screen { display: none; }
+  .screen.active { display: contents; }
+</style>
+</head>
+<body>
+
+<div class="scene" id="scene">
+  <div class="photo-bg"></div>
+  <div class="photo-shade"></div>
+  <div class="photo-vignette"></div>
+
+  <div class="reg tl"></div>
+  <div class="reg tr"></div>
+  <div class="reg bl"></div>
+  <div class="reg br"></div>
+
+  <div class="meta-tl" id="meta-tl">DEM · MAIN MENU</div>
+  <div class="meta-bl">
+    <span>LAT 47.17°N</span>
+    <span>LON 11.44°E</span>
+  </div>
+
+  <!-- ══ SCREEN: Main Menu ══ -->
+  <div class="screen active" id="screen-main">
+    <div class="panel">
+      <div class="crumb-spacer"></div>
+
+      <div class="brand">
+        <span class="eyebrow">Digital Elevation Model · Renderer</span>
+        <h1>DEM Renderer<em>.</em></h1>
+        <span class="ver">v 0.4.2 · build 2026.05</span>
+      </div>
+
+      <div class="content">
+        <!-- Navigation rows — top-anchored -->
+        <div>
+          <div class="row" id="btn-select-dem">
+            <span class="num">01</span>
+            <span class="label">Select DEM Files</span>
+            <span class="meta">.tif · .hgt · .asc</span>
+            <span class="arrow">→</span>
+          </div>
+          <div class="row" id="btn-settings">
+            <span class="num">02</span>
+            <span class="label">Settings</span>
+            <span class="meta">render · view · export</span>
+            <span class="arrow">→</span>
+          </div>
+        </div>
+
+        <!-- Flexible gap pushes Start / Exit to the bottom -->
+        <div style="flex:1"></div>
+
+        <!-- Action rows — bottom-anchored -->
+        <div>
+          <div class="row primary" id="btn-start">
+            <span class="num">Enter</span>
+            <span class="label">Start</span>
+            <span class="meta">load &amp; render</span>
+            <span class="arrow">→</span>
+          </div>
+          <div class="row danger" id="btn-exit">
+            <span class="num">Esc</span>
+            <span class="label">Exit</span>
+            <span class="meta"></span>
+            <span class="arrow">→</span>
+          </div>
+        </div>
+      </div>
+
+      <div class="footer">
+        <span><span class="dot"></span>SYSTEM READY</span>
+        <span>47.17°N · 11.44°E</span>
+      </div>
+    </div>
+  </div>
+
+  <!-- ══ SCREEN: Select DEM Files ══ -->
+  <div class="screen" id="screen-select-dem">
+    <div class="panel">
+      <div class="crumbs">
+        <span class="back" id="back-from-select">← Back</span>
+        <span class="sep">/</span>
+        <span class="here">Select DEM Files</span>
+      </div>
+
+      <div class="brand">
+        <span class="eyebrow">Source · Step 01 of 02</span>
+        <h1>Choose Source<em>.</em></h1>
+        <span class="ver">how do you want to load terrain data</span>
+      </div>
+
+      <div class="content">
+        <div class="choice" id="btn-choose-files">
+          <span class="num">A</span>
+          <div class="body">
+            <span class="ttl">Choose files…</span>
+            <span class="desc">Open a file browser and pick local DEM tiles.
+              Supports .tif (GeoTIFF) · .hgt (SRTM) · .asc (ESRI ASCII Grid).</span>
+            <span class="size">LOCAL · ANY SIZE</span>
+          </div>
+          <span class="arrow-ch">→</span>
+        </div>
+
+        <div class="choice" id="btn-demo-view">
+          <span class="num">B</span>
+          <div class="body">
+            <span class="ttl">Recommended demo view</span>
+            <span class="desc">5m Austria BEV DEM + two 1m Tirol tiles (Innsbruck area).
+              Best way to test the full multi-resolution renderer.</span>
+            <span class="size">REMOTE · ~45 GB · DOWNLOAD ON START</span>
+          </div>
+          <span class="arrow-ch">→</span>
+        </div>
+      </div>
+
+      <div class="footer">
+        <span><span class="dot"></span>SYSTEM READY</span>
+        <span>FREE  —</span>
+      </div>
+    </div>
+
+    <!-- Download confirmation modal -->
+    <div class="modal-scrim" id="modal-download" style="display:none">
+      <div class="modal">
+        <div class="modal-head">
+          <span class="pulse"></span>Confirm Download
+        </div>
+        <h2>Download recommended demo dataset?</h2>
+        <p>~45 GB will be downloaded to the tiles/big_size/ directory.
+           The download resumes if interrupted and only runs once —
+           subsequent launches reuse the cached tiles.</p>
+        <hr class="modal-divider">
+        <div class="modal-stat">
+          <div>
+            <div class="k">Size</div>
+            <div class="v">~45 GB</div>
+          </div>
+          <div>
+            <div class="k">Tiles</div>
+            <div class="v">
+              28 tiles
+              <span class="info-btn">?
+                <span class="tooltip">
+                  25 Copernicus GLO-30 (5×5° grid, 30m)<br>
+                  1 whole-Austria BEV DEM (5m)<br>
+                  2 Tirol 1m tiles — Innsbruck area<br>
+                  + adjacent Salzburg (eastern) area
+                </span>
+              </span>
+            </div>
+          </div>
+          <div>
+            <div class="k">Region</div>
+            <div class="v">Austria · 46–50°N</div>
+          </div>
+          <div>
+            <div class="k">Free space</div>
+            <div class="v">—</div>
+          </div>
+        </div>
+        <hr class="modal-divider2">
+        <div class="modal-path">tiles/big_size/</div>
+        <div class="modal-actions">
+          <button class="mbtn" id="modal-cancel">Cancel</button>
+          <button class="mbtn primary" id="modal-confirm">Download &amp; Start</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ══ SCREEN: Settings ══ -->
+  <div class="screen" id="screen-settings">
+    <div class="panel">
+      <div class="crumbs">
+        <span class="back" id="back-from-settings">← Back</span>
+        <span class="sep">/</span>
+        <span class="here">Settings</span>
+      </div>
+
+      <div class="brand">
+        <span class="eyebrow">Render · View · Performance</span>
+        <h1>Settings<em>.</em></h1>
+        <span class="ver">tune output for your hardware</span>
+      </div>
+
+      <div class="content">
+        <div class="opt">
+          <span class="num">01</span>
+          <span class="label">Overall Quality</span>
+          <div class="seg" data-group="quality">
+            <span class="seg-item" data-value="0">Ultra</span>
+            <span class="seg-item active" data-value="1">High</span>
+            <span class="seg-item" data-value="2">Mid</span>
+            <span class="seg-item" data-value="3">Low</span>
+          </div>
+        </div>
+        <div class="opt">
+          <span class="num">02</span>
+          <span class="label">Level of Detail</span>
+          <div class="seg" data-group="lod">
+            <span class="seg-item active" data-value="0">Ultra</span>
+            <span class="seg-item" data-value="1">High</span>
+            <span class="seg-item" data-value="2">Mid</span>
+            <span class="seg-item" data-value="3">Low</span>
+          </div>
+        </div>
+        <div class="opt">
+          <span class="num">03</span>
+          <span class="label">Shadows</span>
+          <div class="seg" data-group="shadows">
+            <span class="seg-item" data-value="0">Off</span>
+            <span class="seg-item active" data-value="1">On</span>
+          </div>
+        </div>
+        <div class="opt">
+          <span class="num">04</span>
+          <span class="label">Fog</span>
+          <div class="seg" data-group="fog">
+            <span class="seg-item" data-value="0">Off</span>
+            <span class="seg-item active" data-value="1">On</span>
+          </div>
+        </div>
+        <div class="opt">
+          <span class="num">05</span>
+          <span class="label">Ambient Occlusion</span>
+          <select class="dropdown" id="ao-mode">
+            <option value="0">Off</option>
+            <option value="1">SSAO×8</option>
+            <option value="2">SSAO×16</option>
+            <option value="3" selected>HBAO×4</option>
+            <option value="4">HBAO×8</option>
+            <option value="5">True Hemi.</option>
+          </select>
+        </div>
+        <div class="opt">
+          <span class="num">06</span>
+          <span class="label">
+            Use tiles refinement
+            <span class="info-btn">?
+              <span class="tooltip">If a higher-resolution DEM is available for this region,
+                it will be used to refine the rendered world.</span>
+            </span>
+          </span>
+          <div class="check on" id="tiles-refinement">
+            <div class="check-box">
+              <svg width="11" height="11" viewBox="0 0 12 12" fill="none">
+                <path d="M2 6.5 L5 9.5 L10 3" stroke="currentColor"
+                      stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>
+              </svg>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="footer">
+        <span><span class="dot"></span>PRESET · CUSTOM</span>
+        <span>EST. 2.4 GB VRAM</span>
+      </div>
+    </div>
+  </div>
+
+  <!-- ══ SCREEN: Loading ══ -->
+  <div class="screen" id="screen-loading">
+    <div class="panel">
+      <div class="crumb-spacer"></div>
+
+      <div class="brand">
+        <span class="eyebrow">DEM · RENDERER</span>
+        <h1>Loading<em>.</em></h1>
+        <span class="ver">preparing terrain data</span>
+      </div>
+
+      <div class="content loading-body">
+        <div class="progress-track">
+          <div class="progress-fill" id="progress-fill"></div>
+        </div>
+        <div class="load-status" id="load-status">Reading terrain data…</div>
+      </div>
+
+      <div class="footer">
+        <span>LOADING</span>
+        <span></span>
+      </div>
+    </div>
+  </div>
+
+</div>
+
+<script>
+  const state = {
+    screen: 'main',
+    modalOpen: false,
+    settings: { quality: 1, lod: 0, shadows: 1, fog: 1, ao: 3, tilesRefinement: true },
+  };
+
+  const metaTitles = {
+    main: 'DEM · MAIN MENU',
+    'select-dem': 'DEM · SOURCE · SD-01',
+    settings: 'DEM · SETTINGS · ST-01',
+    loading: 'DEM · LOADING',
+  };
+
+  function showScreen(name) {
+    document.querySelectorAll('.screen').forEach(s => s.classList.remove('active'));
+    document.getElementById('screen-' + name).classList.add('active');
+    document.getElementById('meta-tl').textContent = metaTitles[name] || metaTitles.main;
+    state.screen = name;
+    state.modalOpen = false;
+    const m = document.getElementById('modal-download');
+    if (m) m.style.display = 'none';
+  }
+
+  document.getElementById('btn-select-dem').addEventListener('click', () => showScreen('select-dem'));
+  document.getElementById('btn-settings').addEventListener('click', () => showScreen('settings'));
+  document.getElementById('btn-start').addEventListener('click', () => {
+    showScreen('loading');
+    simulateLoading();
+  });
+  document.getElementById('btn-exit').addEventListener('click', () => window.close());
+
+  document.getElementById('back-from-select').addEventListener('click', () => showScreen('main'));
+  document.getElementById('back-from-settings').addEventListener('click', () => showScreen('main'));
+
+  document.getElementById('btn-choose-files').addEventListener('click', () => {
+    const input = document.createElement('input');
+    input.type = 'file'; input.accept = '.tif,.tiff,.hgt,.asc'; input.multiple = true;
+    input.click();
+  });
+
+  document.getElementById('btn-demo-view').addEventListener('click', () => {
+    state.modalOpen = true;
+    document.getElementById('modal-download').style.display = 'flex';
+  });
+
+  document.getElementById('modal-cancel').addEventListener('click', () => {
+    state.modalOpen = false;
+    document.getElementById('modal-download').style.display = 'none';
+  });
+  document.getElementById('modal-confirm').addEventListener('click', () => {
+    document.getElementById('modal-download').style.display = 'none';
+    showScreen('loading');
+    simulateLoading();
+  });
+
+  document.querySelectorAll('.seg').forEach(seg => {
+    seg.addEventListener('click', e => {
+      const item = e.target.closest('.seg-item');
+      if (!item) return;
+      seg.querySelectorAll('.seg-item').forEach(i => i.classList.remove('active'));
+      item.classList.add('active');
+      const group = seg.dataset.group;
+      if (group) state.settings[group] = parseInt(item.dataset.value);
+    });
+  });
+
+  document.getElementById('ao-mode').addEventListener('change', function () {
+    state.settings.ao = parseInt(this.value);
+  });
+
+  document.getElementById('tiles-refinement').addEventListener('click', function () {
+    state.settings.tilesRefinement = !state.settings.tilesRefinement;
+    this.classList.toggle('on', state.settings.tilesRefinement);
+    this.querySelector('.check-box').innerHTML = state.settings.tilesRefinement
+      ? `<svg width="11" height="11" viewBox="0 0 12 12" fill="none">
+           <path d="M2 6.5 L5 9.5 L10 3" stroke="currentColor"
+                 stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>`
+      : '';
+  });
+
+  function simulateLoading() {
+    const steps = [
+      [0.15, 'Reading terrain data…'],
+      [0.35, 'Computing normals…'],
+      [0.55, 'Calculating shadows…'],
+      [0.75, 'Computing ambient occlusion…'],
+      [0.90, 'Uploading to GPU…'],
+      [1.00, 'Ready'],
+    ];
+    const fill = document.getElementById('progress-fill');
+    const label = document.getElementById('load-status');
+    fill.style.width = '0%';
+    label.textContent = steps[0][1];
+    let i = 0;
+    function step() {
+      if (i >= steps.length) return;
+      const [frac, text] = steps[i++];
+      fill.style.width = (frac * 100) + '%';
+      label.textContent = text;
+      if (i < steps.length) setTimeout(step, 600);
+    }
+    setTimeout(step, 300);
+  }
+
+  document.addEventListener('keydown', e => {
+    if (state.screen === 'main') {
+      if (e.key === 'Enter') document.getElementById('btn-start').click();
+      if (e.key === 'Escape') document.getElementById('btn-exit').click();
+      if (e.key === '1') document.getElementById('btn-select-dem').click();
+      if (e.key === '2') document.getElementById('btn-settings').click();
+    } else if (state.modalOpen) {
+      if (e.key === 'Escape') document.getElementById('modal-cancel').click();
+      if (e.key === 'Enter') document.getElementById('modal-confirm').click();
+    } else if (state.screen !== 'loading') {
+      if (e.key === 'Escape') showScreen('main');
+    }
+  });
+</script>
+</body>
+</html>

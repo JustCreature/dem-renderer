@@ -1,6 +1,6 @@
 mod geo;
 mod hud_renderer;
-mod scene_init;
+pub mod scene_init;
 mod tiers;
 
 use std::path::Path;
@@ -10,11 +10,21 @@ use dem_io::Heightmap;
 use render_gpu::{GpuContext, GpuScene};
 use terrain::ShadowMask;
 
+/// Pre-computed terrain data produced by the loading thread.
+/// Passed from the launcher to the viewer so no loading work happens after
+/// the launcher window exits.
+pub struct PreparedScene {
+    pub scene: GpuScene,
+    pub hm: Arc<Heightmap>,
+    pub lat_rad: f32,
+    pub width: u32,
+    pub height: u32,
+}
+
 use winit::{
     application::ApplicationHandler,
     dpi::LogicalSize,
     event::WindowEvent,
-    event_loop::EventLoop,
     keyboard::KeyCode,
     window::{Window, WindowAttributes},
 };
@@ -22,12 +32,15 @@ use winit::{
 use crate::viewer::hud_renderer::HudRenderer;
 
 use self::geo::{laea_epsg3035_inverse, latlon_to_tile_metres, lcc_epsg31287, sun_position};
-use self::scene_init::{compute_ao_cropped, prepare_scene, INIT_SIM_DAY, INIT_SIM_HOUR};
+use self::scene_init::{compute_ao_cropped, INIT_SIM_DAY, INIT_SIM_HOUR};
 use self::tiers::{BevBaseState, Glo30State, AO_DRIFT_THRESHOLD_M};
 
-struct Viewer {
+pub(crate) struct Viewer {
     scene: Option<GpuScene>,
     window: Option<Arc<Window>>,
+    /// Surface handed over from the launcher — reconfigured in resumed() instead of
+    /// being recreated, which eliminates the visible flash during the transition.
+    pre_surface: Option<wgpu::Surface<'static>>,
     surface: Option<wgpu::Surface<'static>>,
     surface_config: Option<wgpu::SurfaceConfiguration>,
     width: u32,
@@ -81,30 +94,61 @@ struct Viewer {
 
 impl ApplicationHandler for Viewer {
     fn resumed(&mut self, event_loop: &winit::event_loop::ActiveEventLoop) {
-        let window: Arc<Window> = Arc::new(
-            event_loop
-                .create_window(
-                    WindowAttributes::default()
-                        .with_title("dem_renderer")
-                        .with_inner_size(LogicalSize::new(self.width, self.height)),
-                )
-                .expect("error creating a window from event loop in resumed method call"),
-        );
+        // Reuse a pre-built window (from launcher) if one was provided.
+        let window: Arc<Window> = if let Some(w) = &self.window {
+            // The launcher's event loop exit may have hidden the window on macOS.
+            w.set_visible(true);
+            w.focus_window();
+            w.clone()
+        } else {
+            let w = Arc::new(
+                event_loop
+                    .create_window(
+                        WindowAttributes::default()
+                            .with_title("dem_renderer")
+                            .with_inner_size(LogicalSize::new(self.width, self.height)),
+                    )
+                    .expect("error creating a window from event loop in resumed method call"),
+            );
+            self.window = Some(w.clone());
+            w
+        };
 
-        self.window = Some(window.clone());
+        // Sync dimensions with the actual window — the user may have resized the window
+        // between pressing Start and the viewer initialising.  Do this before any GPU
+        // allocations so the surface config, HUD, and scene buffer all use the right size.
+        {
+            let sz = window.inner_size();
+            let actual_w = sz.width.max(1);
+            let actual_h = sz.height.max(1);
+            if actual_w != self.width || actual_h != self.height {
+                self.width = actual_w;
+                self.render_width = (actual_w + 63) & !63;
+                self.height = actual_h;
+                self.scene
+                    .as_mut()
+                    .unwrap()
+                    .resize(self.render_width, actual_h);
+            }
+        }
 
         let scene: &GpuScene = &self
             .scene
             .as_ref()
             .expect("no scene to get ctx for resumed method run");
 
-        let instance: &wgpu::Instance = &scene.get_gpu_ctx().instance;
-
-        self.surface = Some(
-            instance
+        // Reuse the launcher's surface if one was handed over — reconfiguring in-place
+        // avoids the drop+recreate that would cause a visible flash during the transition.
+        let surface = if let Some(s) = self.pre_surface.take() {
+            s
+        } else {
+            scene
+                .get_gpu_ctx()
+                .instance
                 .create_surface(window.clone())
-                .expect("error creating a surface from default Instance in resumed method"),
-        );
+                .expect("error creating a surface from default Instance in resumed method")
+        };
+        self.surface = Some(surface);
 
         // surface configuration
         let ctx: &GpuContext = scene.get_gpu_ctx();
@@ -121,7 +165,7 @@ impl ApplicationHandler for Viewer {
             .copied()
             .unwrap_or(caps.formats[0]);
 
-        // HUD
+        // HUD — created with the correct (possibly resized) dimensions.
         let hud_renderer: HudRenderer = HudRenderer::new(
             &scene.get_gpu_ctx().device,
             &scene.get_gpu_ctx().queue,
@@ -735,143 +779,162 @@ fn bev_epsg_pos(cam_pos: [f32; 3], hm: &Heightmap) -> (f64, f64) {
     (easting, northing)
 }
 
-pub fn run(tile_path: &Path, width: u32, height: u32, vsync: bool, tiles_1m_dir: Option<&Path>) {
-    // Named camera position: Hintertux glacier tongue, WGS84.
-    // Converted to tile-local metres at runtime — works for any tile that contains this point.
-    const CAM_LAT: f64 = 47.076211; // 47°04'34.36"N
-    const CAM_LON: f64 = 11.687592; // 11°41'15.33"E
-    const CAM_ELEV: f32 = 3258.0;
+impl Viewer {
+    /// Build a fully wired `Viewer` from a pre-loaded scene (used by the combined
+    /// `App` handler in main.rs).  Surface configuration and HUD setup happen later
+    /// inside `resumed()`, which the combined handler calls immediately after this.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn from_launcher(
+        prepared: PreparedScene,
+        window: Arc<Window>,
+        surface: wgpu::Surface<'static>,
+        tile_path: &Path,
+        tiles_1m_dir: Option<&Path>,
+        vsync: bool,
+        shadows_enabled: bool,
+        fog_enabled: bool,
+        vat_mode: u32,
+        lod_mode: u32,
+        ao_mode: u32,
+    ) -> Self {
+        // Named camera position: Hintertux glacier tongue, WGS84.
+        // Converted to tile-local metres at runtime — works for any tile that contains this point.
+        const CAM_LAT: f64 = 47.076211; // 47°04'34.36"N
+        const CAM_LON: f64 = 11.687592; // 11°41'15.33"E
+        const CAM_ELEV: f32 = 3258.0;
 
-    let (mut scene, hm, lat_rad) = prepare_scene(tile_path, width, height, CAM_LAT, CAM_LON);
-    let dx: f32 = scene.get_dx_meters();
-    let dy: f32 = scene.get_dy_meters();
-
-    let init_cam_pos = latlon_to_tile_metres(CAM_LAT, CAM_LON, &hm)
-        .map(|(x, y)| [x, y, CAM_ELEV])
-        .unwrap_or([2457.0 * dx, 3328.0 * dy, 3341.0]);
-    let init_yaw = (19627.0_f32).atan2(1718.0_f32);
-    let init_pitch = (-3472.0_f32).atan2(19702.0_f32);
-
-    // shadow worker
-    let (shadow_tx, worker_rx) = mpsc::sync_channel::<(f32, f32)>(1);
-    let (worker_tx, shadow_rx) = mpsc::channel::<ShadowMask>();
-    {
-        let hm_w = Arc::clone(&hm);
-        std::thread::spawn(move || {
-            while let Ok((az, el)) = worker_rx.recv() {
-                let mask = terrain::compute_shadow_vector_par_with_azimuth(&hm_w, az, el, 200.0);
-                if worker_tx.send(mask).is_err() {
-                    break;
-                }
-            }
-        });
-    }
-
-    // AO worker
-    let (ao_tx, ao_worker_rx) = mpsc::sync_channel::<(f64, f64)>(1);
-    let (ao_worker_tx, ao_rx) = mpsc::channel::<Vec<f32>>();
-    {
-        let hm_ao = Arc::clone(&hm);
-        std::thread::spawn(move || {
-            while let Ok((cam_x, cam_y)) = ao_worker_rx.recv() {
-                let ao = compute_ao_cropped(&hm_ao, cam_x, cam_y);
-                if ao_worker_tx.send(ao).is_err() {
-                    break;
-                }
-            }
-        });
-    }
-
-    // Mode-specific state setup
-    let glo30: Option<Glo30State>;
-    let bev_base: Option<BevBaseState>;
-
-    if hm.crs_epsg == 31287 {
-        // BEV COG mode: three resolution tiers (base IFD-2/1, close 5m IFD-0, fine 1m tiles).
-        // IFD levels for this file:
-        //   IFD-0 = 5 m/px  — full resolution, always present by TIFF spec
-        //   IFD-1 ≈ 10 m/px — first overview (optional)
-        //   IFD-2 ≈ 20 m/px — second overview (optional)
-        // We render two tiers: a wide base at BEV_BASE_IFD (falls back to IFD-1 if absent)
-        // and a close 5 m window at IFD-0.  IFD-0 is NOT viable for the 60 km base window
-        // (~12 000×12 000 px at 5 m/px, exceeds the wgpu 8 192-pixel texture limit).
-        glo30 = None;
-        let (init_e, init_n) = lcc_epsg31287(CAM_LAT, CAM_LON);
-        bev_base = Some(BevBaseState::new(
-            tile_path,
+        let PreparedScene {
+            mut scene,
+            hm,
             lat_rad,
-            init_e,
-            init_n,
-            &hm,
-            tiles_1m_dir,
-            &mut scene,
-        ));
-    } else if hm.crs_epsg == 4326 {
-        // GLO-30 mode: sliding 3×3 Copernicus tile grid.
-        bev_base = None;
-        let tiles_dir = tile_path
-            .parent()
-            .and_then(|p| p.parent())
-            .unwrap_or(Path::new("tiles"))
-            .to_path_buf();
-        glo30 = Some(Glo30State::new(&tiles_dir, lat_rad, CAM_LAT, CAM_LON));
-    } else {
-        // EPSG:3035 single tile (Hintertux-style) — static, no sliding
-        glo30 = None;
-        bev_base = None;
+            width,
+            height,
+        } = prepared;
+        let dx: f32 = scene.get_dx_meters();
+        let dy: f32 = scene.get_dy_meters();
+
+        let init_cam_pos = latlon_to_tile_metres(CAM_LAT, CAM_LON, &hm)
+            .map(|(x, y)| [x, y, CAM_ELEV])
+            .unwrap_or([2457.0 * dx, 3328.0 * dy, 3341.0]);
+        let init_yaw = (19627.0_f32).atan2(1718.0_f32);
+        let init_pitch = (-3472.0_f32).atan2(19702.0_f32);
+
+        // shadow worker
+        let (shadow_tx, worker_rx) = mpsc::sync_channel::<(f32, f32)>(1);
+        let (worker_tx, shadow_rx) = mpsc::channel::<ShadowMask>();
+        {
+            let hm_w = Arc::clone(&hm);
+            std::thread::spawn(move || {
+                while let Ok((az, el)) = worker_rx.recv() {
+                    let mask =
+                        terrain::compute_shadow_vector_par_with_azimuth(&hm_w, az, el, 200.0);
+                    if worker_tx.send(mask).is_err() {
+                        break;
+                    }
+                }
+            });
+        }
+
+        // AO worker
+        let (ao_tx, ao_worker_rx) = mpsc::sync_channel::<(f64, f64)>(1);
+        let (ao_worker_tx, ao_rx) = mpsc::channel::<Vec<f32>>();
+        {
+            let hm_ao = Arc::clone(&hm);
+            std::thread::spawn(move || {
+                while let Ok((cam_x, cam_y)) = ao_worker_rx.recv() {
+                    let ao = compute_ao_cropped(&hm_ao, cam_x, cam_y);
+                    if ao_worker_tx.send(ao).is_err() {
+                        break;
+                    }
+                }
+            });
+        }
+
+        // Mode-specific state setup
+        let glo30: Option<Glo30State>;
+        let bev_base: Option<BevBaseState>;
+
+        if hm.crs_epsg == 31287 {
+            // BEV COG mode: three resolution tiers (base IFD-2/1, close 5m IFD-0, fine 1m tiles).
+            // IFD levels for this file:
+            //   IFD-0 = 5 m/px  — full resolution, always present by TIFF spec
+            //   IFD-1 ≈ 10 m/px — first overview (optional)
+            //   IFD-2 ≈ 20 m/px — second overview (optional)
+            // We render two tiers: a wide base at BEV_BASE_IFD (falls back to IFD-1 if absent)
+            // and a close 5 m window at IFD-0.  IFD-0 is NOT viable for the 60 km base window
+            // (~12 000×12 000 px at 5 m/px, exceeds the wgpu 8 192-pixel texture limit).
+            glo30 = None;
+            let (init_e, init_n) = lcc_epsg31287(CAM_LAT, CAM_LON);
+            bev_base = Some(BevBaseState::new(
+                tile_path,
+                lat_rad,
+                init_e,
+                init_n,
+                &hm,
+                tiles_1m_dir,
+                &mut scene,
+            ));
+        } else if hm.crs_epsg == 4326 {
+            // GLO-30 mode: sliding 3×3 Copernicus tile grid.
+            bev_base = None;
+            let tiles_dir = tile_path
+                .parent()
+                .and_then(|p| p.parent())
+                .unwrap_or(Path::new("tiles"))
+                .to_path_buf();
+            glo30 = Some(Glo30State::new(&tiles_dir, lat_rad, CAM_LAT, CAM_LON));
+        } else {
+            // EPSG:3035 single tile (Hintertux-style) — static, no sliding
+            glo30 = None;
+            bev_base = None;
+        }
+
+        Viewer {
+            scene: Some(scene),
+            window: Some(window),
+            pre_surface: Some(surface),
+            surface: None,
+            surface_config: None,
+            width,
+            height,
+            render_width: width,
+            vsync,
+            ao_mode,
+            shadows_enabled,
+            fog_enabled,
+            vat_mode,
+            lod_mode,
+            smooth_radius_m: 2000.0,
+            fps_timer: std::time::Instant::now(),
+            frame_count: 0,
+            fps: 0.0,
+            last_frame: std::time::Instant::now(),
+            cam_pos: init_cam_pos,
+            yaw: init_yaw,
+            pitch: init_pitch,
+            keys_held: std::collections::HashSet::new(),
+            mouse_look: false,
+            immersive_mode: false,
+            speed_boost: false,
+            hud_renderer: None,
+            hud_visible: true,
+            sim_day: INIT_SIM_DAY,
+            sim_hour: INIT_SIM_HOUR,
+            lat_rad,
+            day_accum: 0.0,
+            shadow_tx,
+            shadow_rx,
+            shadow_computing: false,
+            last_shadow_az: 0.0,
+            last_shadow_el: -1.0,
+            ao_tx,
+            ao_rx,
+            ao_computing: false,
+            ao_last_x: init_cam_pos[0] as f64,
+            ao_last_y: init_cam_pos[1] as f64,
+            hm,
+            glo30,
+            bev_base,
+        }
     }
-
-    let event_loop = EventLoop::new().expect("error creating winit event loop");
-
-    let mut viewer: Viewer = Viewer {
-        scene: Some(scene),
-        window: None,
-        surface: None,
-        surface_config: None,
-        width,
-        height,
-        render_width: width,
-        vsync,
-        ao_mode: 0,
-        shadows_enabled: true,
-        fog_enabled: true,
-        vat_mode: 2, // Mid
-        lod_mode: 1, // High
-        smooth_radius_m: 2000.0,
-        // fps counter
-        fps_timer: std::time::Instant::now(),
-        frame_count: 0,
-        fps: 0.0,
-        // initial cam pos
-        last_frame: std::time::Instant::now(),
-        cam_pos: init_cam_pos,
-        yaw: init_yaw,
-        pitch: init_pitch,
-        keys_held: std::collections::HashSet::new(),
-        mouse_look: false,
-        immersive_mode: false,
-        speed_boost: false,
-        hud_renderer: None,
-        hud_visible: true,
-        sim_day: INIT_SIM_DAY,
-        sim_hour: INIT_SIM_HOUR,
-        lat_rad,
-        day_accum: 0.0,
-        shadow_tx,
-        shadow_rx,
-        shadow_computing: false,
-        last_shadow_az: 0.0,
-        last_shadow_el: -1.0,
-        ao_tx,
-        ao_rx,
-        ao_computing: false,
-        ao_last_x: init_cam_pos[0] as f64,
-        ao_last_y: init_cam_pos[1] as f64,
-        hm,
-        glo30,
-        bev_base,
-    };
-    event_loop
-        .run_app(&mut viewer)
-        .expect("error running app from event loop in run viewer method");
 }

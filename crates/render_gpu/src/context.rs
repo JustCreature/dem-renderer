@@ -1,5 +1,10 @@
 use wgpu::{Adapter, Instance};
 
+// wgpu::Device and wgpu::Queue are internally Arc-backed.
+// Cloning one does not create a second GPU connection — it hands you a second Arc
+// pointer to the same underlying device.
+// So gpu_ctx.clone() is a cheap reference count bump, not a GPU re-init.
+#[derive(Clone)]
 pub struct GpuContext {
     pub instance: Instance,
     pub device: wgpu::Device,
