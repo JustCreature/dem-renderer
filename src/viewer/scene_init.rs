@@ -36,15 +36,20 @@ pub(super) fn compute_ao_cropped(hm: &Heightmap, cam_x: f64, cam_y: f64) -> Vec<
     ao
 }
 
-pub(super) fn prepare_scene(
+/// Like `prepare_scene` but reuses an existing `GpuContext` (for seamless surface handoff)
+/// and accepts a progress callback `report(fraction, label)` called after each major step.
+pub(crate) fn prepare_scene_with_ctx(
+    gpu_ctx: GpuContext,
     tile_path: &Path,
     width: u32,
     height: u32,
     cam_lat: f64,
     cam_lon: f64,
-) -> (GpuScene, Arc<Heightmap>, f32) {
+    report: impl Fn(f32, &str),
+) -> crate::viewer::PreparedScene {
     let scale = geotiff_pixel_scale(tile_path);
 
+    report(0.05, "Reading terrain data…");
     let hm = if scale >= 1.0 {
         // Projected DGM tile (EPSG:31287, BEV COG).
         // Try BEV_BASE_IFD (≈20 m/px) first; fall back to IFD-1 (≈10 m/px) if that
@@ -111,6 +116,7 @@ pub(super) fn prepare_scene(
         hm
     };
 
+    report(0.30, "Computing surface normals…");
     let t1 = std::time::Instant::now();
     let normal_map = terrain::compute_normals_vector_par(&hm);
     println!("normals:  {:.2?}", t1.elapsed());
@@ -118,6 +124,7 @@ pub(super) fn prepare_scene(
     let lat_rad = (cam_lat as f32).to_radians();
     let (init_az, init_el) = sun_position(lat_rad, INIT_SIM_DAY, INIT_SIM_HOUR);
 
+    report(0.50, "Computing sun shadows…");
     let t2 = std::time::Instant::now();
     let shadow_mask = terrain::compute_shadow_vector_par_with_azimuth(&hm, init_az, init_el, 200.0);
     println!("shadows:  {:.2?}", t2.elapsed());
@@ -129,11 +136,12 @@ pub(super) fn prepare_scene(
             hm.rows as f64 * hm.dy_meters * 0.5,
         ));
 
+    report(0.70, "Computing ambient occlusion…");
     let t3 = std::time::Instant::now();
     let ao_data_mask = compute_ao_cropped(&hm, cam_x, cam_y);
     println!("ao:       {:.2?}", t3.elapsed());
 
-    let gpu_ctx: GpuContext = GpuContext::new();
+    report(0.90, "Uploading to GPU…");
     let hm = Arc::new(hm);
     let scene: GpuScene = GpuScene::new(
         gpu_ctx,
@@ -145,5 +153,11 @@ pub(super) fn prepare_scene(
         height,
     );
 
-    (scene, hm, lat_rad)
+    crate::viewer::PreparedScene {
+        scene,
+        hm,
+        lat_rad,
+        width,
+        height,
+    }
 }

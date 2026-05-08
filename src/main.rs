@@ -1,3 +1,5 @@
+mod consts;
+mod launcher;
 mod system_info;
 mod utils;
 mod viewer;
@@ -16,36 +18,116 @@ pub static NvOptimusEnablement: u32 = 1;
 #[used]
 pub static AmdPowerXpressRequestHighPerformance: u32 = 1;
 
-use std::path::Path;
+use winit::application::ApplicationHandler;
+use winit::event::WindowEvent;
+use winit::event_loop::ActiveEventLoop;
+use winit::window::WindowId;
+
+// ── Phase state machine ──────────────────────────────────────────────────────
+// A single ApplicationHandler delegates to the active phase.  Switching from
+// Launcher to Viewer never calls el.exit(), so winit never hides the window and
+// the surface is transferred in-place — the platform layer (CAMetalLayer, etc.)
+// stays alive continuously, eliminating the visible flash.
+
+enum Phase {
+    Launcher(launcher::LauncherApp),
+    Viewer(viewer::Viewer),
+}
+
+struct App {
+    phase: Phase,
+    vsync_override: bool,
+}
+
+impl ApplicationHandler for App {
+    fn resumed(&mut self, el: &ActiveEventLoop) {
+        match &mut self.phase {
+            Phase::Launcher(l) => l.resumed(el),
+            Phase::Viewer(v) => v.resumed(el),
+        }
+    }
+
+    fn window_event(&mut self, el: &ActiveEventLoop, id: WindowId, event: WindowEvent) {
+        match &mut self.phase {
+            Phase::Launcher(l) => {
+                l.window_event(el, id, event);
+                self.try_transition(el);
+            }
+            Phase::Viewer(v) => v.window_event(el, id, event),
+        }
+    }
+
+    fn device_event(
+        &mut self,
+        el: &ActiveEventLoop,
+        id: winit::event::DeviceId,
+        event: winit::event::DeviceEvent,
+    ) {
+        if let Phase::Viewer(v) = &mut self.phase {
+            v.device_event(el, id, event);
+        }
+    }
+
+    fn about_to_wait(&mut self, el: &ActiveEventLoop) {
+        match &mut self.phase {
+            Phase::Launcher(l) => l.about_to_wait(el),
+            Phase::Viewer(v) => v.about_to_wait(el),
+        }
+    }
+}
+
+impl App {
+    /// Called after every launcher window_event.  If the launcher has set an outcome,
+    /// handle it: exit the loop (Exit) or switch to Viewer phase without restarting
+    /// the loop (Start) — the window stays on-screen the whole time.
+    fn try_transition(&mut self, el: &ActiveEventLoop) {
+        let Phase::Launcher(l) = &mut self.phase else {
+            return;
+        };
+        let Some(outcome) = l.outcome.take() else {
+            return;
+        };
+
+        match outcome {
+            launcher::LauncherOutcome::Exit => el.exit(),
+            launcher::LauncherOutcome::Start {
+                window,
+                settings,
+                prepared,
+                surface,
+            } => {
+                let viewer = viewer::Viewer::from_launcher(
+                    prepared,
+                    window,
+                    surface,
+                    settings.tile_5m_path.as_path(),
+                    Some(settings.tiles_1m_dir.as_path()),
+                    settings.vsync || self.vsync_override,
+                    settings.shadows_enabled,
+                    settings.fog_enabled,
+                    settings.vat_mode,
+                    settings.lod_mode,
+                    settings.ao_mode,
+                );
+                self.phase = Phase::Viewer(viewer);
+                // Drive resumed() manually so the surface and HUD are configured
+                // before the next RedrawRequested arrives.
+                if let Phase::Viewer(v) = &mut self.phase {
+                    v.resumed(el);
+                }
+            }
+        }
+    }
+}
 
 fn main() {
     let args: Vec<String> = std::env::args().collect();
-    // let tile_path = Path::new("n47_e011_1arc_v3_bil/n47_e011_1arc_v3.bil");
-    // let tile_path = Path::new("tiles/Copernicus_DSM_COG_10_N47_00_E011_00_DEM/Copernicus_DSM_COG_10_N47_00_E011_00_DEM.tif");
-    // let tile_path = Path::new("tiles/big_size/hintertux_5m.tif");
-    // let tile_path = Path::new("tiles/big_size/hintertux_18km_5m.tif");
-    // let tile_path = Path::new("tiles/big_size/hintertux_3km_1m.tif");
-    // let tile_path = Path::new("tiles/big_size/hintertux_8km_1m.tif");
-    // let tile_path = Path::new("tiles/big_size/salz_east_to_tux_base_8km_1m.tif");
-    let tile_path = Path::new("tiles/big_size/5m_whole_austria/DGM_R5.tif");
-    const WIDTH: u32 = 1600;
-    const HEIGHT: u32 = 533;
-    // const WIDTH: u32 = 8000;
-    // const HEIGHT: u32 = 2667;
-    let mut vsync: bool = false;
-    if args.contains(&"--vsync".to_string()) {
-        vsync = true;
-    }
-    let tiles_1m_dir: std::path::PathBuf = args
-        .windows(2)
-        .find(|w| w[0] == "--1m-tiles-dir")
-        .map(|w| std::path::PathBuf::from(&w[1]))
-        .unwrap_or_else(|| std::path::PathBuf::from("tiles/big_size/"));
-    viewer::run(
-        tile_path,
-        WIDTH,
-        HEIGHT,
-        vsync,
-        Some(tiles_1m_dir.as_path()),
-    );
+    let vsync = args.contains(&"--vsync".to_string());
+
+    let event_loop = winit::event_loop::EventLoop::new().expect("event loop");
+    let mut app = App {
+        phase: Phase::Launcher(launcher::LauncherApp::new()),
+        vsync_override: vsync,
+    };
+    event_loop.run_app(&mut app).expect("app run failed");
 }

@@ -525,6 +525,8 @@ impl HudRenderer {
         let season_current_buf = make_current_label(&mut font_system, "Day 172");
         let time_current_buf = make_current_label(&mut font_system, "10:00");
         let hud_bg: HudBackground = HudBackground::new(device, format);
+        // Vertex buffer is created without data; write it now before first draw.
+        hud_bg.update_size(queue, width, height);
         let mut sun_indicator = SunIndicator::new(device, format);
         // Write initial vertex + uniform data (requires queue, done here after construction)
         sun_indicator.update(queue, width, height, 172, 10.0);
