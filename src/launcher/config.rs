@@ -4,6 +4,14 @@ use winit::window::Window;
 
 use crate::consts::{DEFAULT_TILE_5M_PATH, TILES_BIG_PATH};
 
+#[derive(Clone, Debug, Default, PartialEq, serde::Serialize, serde::Deserialize)]
+pub enum SelectedView {
+    #[default]
+    None,
+    DemoView,
+    CustomFile,
+}
+
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct LauncherSettings {
     #[serde(default)]
@@ -26,6 +34,8 @@ pub struct LauncherSettings {
     pub tile_5m_path: PathBuf,
     #[serde(default = "default_tiles_dir")]
     pub tiles_1m_dir: PathBuf,
+    #[serde(default)]
+    pub selected_view: SelectedView,
 }
 
 impl Default for LauncherSettings {
@@ -41,6 +51,7 @@ impl Default for LauncherSettings {
             tiles_refinement: true,
             tile_5m_path: PathBuf::from(DEFAULT_TILE_5M_PATH),
             tiles_1m_dir: PathBuf::from(TILES_BIG_PATH),
+            selected_view: SelectedView::None,
         }
     }
 }

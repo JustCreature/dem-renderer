@@ -1,6 +1,7 @@
+use crate::launcher::config::SelectedView;
 use crate::launcher::style::*;
 use crate::launcher::widgets::*;
-use egui::{pos2, vec2, Color32, Id, Sense, Stroke, Ui};
+use egui::{Color32, Id, Sense, Stroke, Ui, pos2, vec2};
 
 use crate::consts::TILES_BIG_PATH;
 
@@ -23,6 +24,7 @@ pub fn show(
     modal_open: &mut bool,
     tile_display: &str,
     tile_is_custom: bool,
+    selected_view: &SelectedView,
 ) -> Option<SelectDemEvent> {
     let mut event = None;
 
@@ -39,6 +41,7 @@ pub fn show(
         "Choose files…",
         "Open a file browser and pick local DEM tiles.\nSupports .tif (GeoTIFF) · .hgt (SRTM) · .asc (ESRI ASCII Grid).",
         "LOCAL · ANY SIZE",
+        *selected_view == SelectedView::CustomFile,
         &mut anim.choice[0],
     ) {
         event = Some(SelectDemEvent::ChooseFiles);
@@ -77,6 +80,7 @@ pub fn show(
         "Recommended demo view",
         "5m Austria BEV DEM + two 1m Tirol tiles (Innsbruck area).\nBest way to test the full multi-resolution renderer.",
         "REMOTE · ~45 GB · DOWNLOAD ON START",
+        *selected_view == SelectedView::DemoView,
         &mut anim.choice[1],
     ) {
         *modal_open = true;
@@ -111,7 +115,7 @@ fn show_download_modal(ui: &mut Ui, modal_open: &mut bool) -> Option<SelectDemEv
     let mut event = None;
     let id = Id::new("download_modal");
 
-    let free_str: String = ui.ctx().data_mut(|d| {
+    let free_str: String = ui.ctx().data(|d| {
         d.get_temp::<String>(Id::new("free_space_cache"))
             .unwrap_or_else(|| "—".to_string())
     });
@@ -181,9 +185,8 @@ fn show_download_modal(ui: &mut Ui, modal_open: &mut bool) -> Option<SelectDemEv
                     ui.add_space(12.0);
 
                     // Path styled as a dark code block
-                    let path_str = TILES_BIG_PATH;
                     let path_galley = ui.ctx().fonts_mut(|f| {
-                        f.layout_no_wrap(path_str.to_string(), mono(11.0), TEXT_SECONDARY)
+                        f.layout_no_wrap(TILES_BIG_PATH.to_string(), mono(11.0), TEXT_SECONDARY)
                     });
                     let path_h = path_galley.size().y + 14.0;
                     let (path_resp, path_painter) =

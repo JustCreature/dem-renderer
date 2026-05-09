@@ -1,15 +1,20 @@
 mod background;
 mod config;
+mod downloader;
 mod renderer;
 mod screens;
 mod style;
 mod widgets;
 
-pub use config::{LauncherOutcome, LauncherSettings};
+pub use config::{LauncherOutcome, LauncherSettings, SelectedView};
 
 use crate::consts::{DEFAULT_CAM_LAT, DEFAULT_CAM_LON, DEFAULT_TILE_5M_PATH, WINDOW_H, WINDOW_W};
 
-use std::sync::{mpsc, Arc};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, mpsc};
+
+use downloader::DownloadProgress;
+use screens::download_card::{self, DownloadCardEvent};
 
 use winit::{
     application::ApplicationHandler,
@@ -69,6 +74,11 @@ pub struct LauncherApp {
     load_status: String,
     prepared: Option<crate::viewer::PreparedScene>,
 
+    // Download phase
+    dl_rx: Option<mpsc::Receiver<DownloadProgress>>,
+    dl_cancel: Option<Arc<AtomicBool>>,
+    dl_progress: Option<DownloadProgress>,
+
     // Final outcome — set when user confirms start or exit
     pub outcome: Option<LauncherOutcome>,
 }
@@ -88,6 +98,9 @@ impl LauncherApp {
             load_progress: 0.0,
             load_status: String::from("Preparing…"),
             prepared: None,
+            dl_rx: None,
+            dl_cancel: None,
+            dl_progress: None,
             outcome: None,
         }
     }
@@ -109,7 +122,7 @@ impl LauncherApp {
         }
     }
 
-    fn handle_select_event(&mut self, event: select_dem::SelectDemEvent, el: &ActiveEventLoop) {
+    fn handle_select_event(&mut self, event: select_dem::SelectDemEvent, _el: &ActiveEventLoop) {
         use select_dem::SelectDemEvent::*;
         match event {
             ChooseFiles => {
@@ -118,16 +131,43 @@ impl LauncherApp {
                     .pick_file()
                 {
                     self.settings.tile_5m_path = path;
+                    self.settings.selected_view = SelectedView::CustomFile;
                     self.settings.save();
                 }
             }
             Reset => {
                 self.settings.tile_5m_path = std::path::PathBuf::from(DEFAULT_TILE_5M_PATH);
+                self.settings.selected_view = SelectedView::None;
                 self.settings.save();
             }
             DemoView => {
+                self.settings.tile_5m_path = std::path::PathBuf::from(DEFAULT_TILE_5M_PATH);
+                self.settings.selected_view = SelectedView::DemoView;
                 self.settings.save();
-                self.begin_loading(el);
+                self.begin_download();
+            }
+        }
+    }
+
+    fn begin_download(&mut self) {
+        let dest_root = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+        let (rx, cancel) = downloader::begin_download(dest_root);
+        self.dl_rx = Some(rx);
+        self.dl_cancel = Some(cancel);
+        self.dl_progress = None;
+    }
+
+    fn poll_download(&mut self) {
+        let Some(rx) = &self.dl_rx else { return };
+        let mut latest = None;
+        while let Ok(msg) = rx.try_recv() {
+            latest = Some(msg);
+        }
+        if let Some(msg) = latest {
+            let done = msg.is_complete || msg.error.is_some();
+            self.dl_progress = Some(msg);
+            if done {
+                self.dl_rx = None;
             }
         }
     }
@@ -354,6 +394,7 @@ impl ApplicationHandler for LauncherApp {
                 if self.screen == Screen::Loading {
                     self.poll_loading(el);
                 }
+                self.poll_download();
 
                 let Some(egui_renderer) = &mut self.egui else {
                     return;
@@ -383,9 +424,12 @@ impl ApplicationHandler for LauncherApp {
                     .map(|f| f.to_string_lossy().into_owned())
                     .unwrap_or_else(|| settings.tile_5m_path.to_string_lossy().into_owned());
 
+                let dl_progress_snap = self.dl_progress.clone();
+                let selected_view_snap = settings.selected_view.clone();
                 let mut main_evt: Option<main_menu::MainMenuEvent> = None;
                 let mut sel_evt: Option<select_dem::SelectDemEvent> = None;
                 let mut back_clicked = false;
+                let mut dl_card_evt: Option<DownloadCardEvent> = None;
 
                 egui_renderer.render(window, |ctx| {
                     // Background layers
@@ -487,6 +531,7 @@ impl ApplicationHandler for LauncherApp {
                                                 modal_open,
                                                 &tile_5m_display,
                                                 tile_5m_is_custom,
+                                                &selected_view_snap,
                                             );
                                         }
                                         Screen::Settings => {
@@ -533,10 +578,13 @@ impl ApplicationHandler for LauncherApp {
                                                     "",
                                                     false,
                                                     true,
+                                                    true,
                                                     &mut main_anim.row[3],
                                                 ) {
                                                     main_evt = Some(main_menu::MainMenuEvent::Exit);
                                                 }
+                                                let start_enabled =
+                                                    selected_view_snap != SelectedView::None;
                                                 if menu_row(
                                                     ui,
                                                     "Enter",
@@ -544,16 +592,54 @@ impl ApplicationHandler for LauncherApp {
                                                     "load & render",
                                                     true,
                                                     false,
+                                                    start_enabled,
                                                     &mut main_anim.row[2],
                                                 ) {
                                                     main_evt =
                                                         Some(main_menu::MainMenuEvent::Start);
+                                                }
+                                                // Source line shown above Start (bottom_up → add after Start)
+                                                let source_text = match &selected_view_snap {
+                                                    SelectedView::DemoView => {
+                                                        Some("▸  Tirol Demo View".to_string())
+                                                    }
+                                                    SelectedView::CustomFile => {
+                                                        let name = settings
+                                                            .tile_5m_path
+                                                            .file_name()
+                                                            .map(|f| {
+                                                                f.to_string_lossy().into_owned()
+                                                            })
+                                                            .unwrap_or_else(|| "—".to_string());
+                                                        Some(format!("▸  File: {name}"))
+                                                    }
+                                                    SelectedView::None => None,
+                                                };
+                                                ui.add_space(2.0);
+                                                if let Some(text) = source_text {
+                                                    ui.label(
+                                                        egui::RichText::new(text)
+                                                            .font(style::mono(10.0))
+                                                            .color(style::TEXT_SECONDARY),
+                                                    );
+                                                } else {
+                                                    ui.label(
+                                                        egui::RichText::new(
+                                                            "▸  no source selected",
+                                                        )
+                                                        .font(style::mono(10.0))
+                                                        .color(style::TEXT_MUTED_55),
+                                                    );
                                                 }
                                             }
                                         },
                                     );
                                 });
                         });
+
+                    if let Some(prog) = &dl_progress_snap {
+                        dl_card_evt = download_card::show(ctx, prog);
+                    }
                 });
 
                 if back_clicked {
@@ -567,6 +653,22 @@ impl ApplicationHandler for LauncherApp {
                 }
                 if let Some(e) = sel_evt {
                     self.handle_select_event(e, el);
+                }
+                if let Some(evt) = dl_card_evt {
+                    match evt {
+                        DownloadCardEvent::Cancel => {
+                            if let Some(c) = &self.dl_cancel {
+                                c.store(true, Ordering::Relaxed);
+                            }
+                            self.dl_rx = None;
+                            self.dl_progress = None;
+                            self.dl_cancel = None;
+                        }
+                        DownloadCardEvent::Dismiss => {
+                            self.dl_progress = None;
+                            self.dl_cancel = None;
+                        }
+                    }
                 }
                 if let Some(w) = &self.window {
                     w.request_redraw();

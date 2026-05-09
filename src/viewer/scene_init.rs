@@ -1,7 +1,7 @@
 use std::path::Path;
 use std::sync::Arc;
 
-use dem_io::{crop, extract_window, geotiff_pixel_scale, load_grid, Heightmap};
+use dem_io::{Heightmap, crop, extract_window, geotiff_pixel_scale, load_grid};
 use render_gpu::{GpuContext, GpuScene};
 
 use super::geo::{latlon_to_tile_metres, lcc_epsg31287, sun_position};

@@ -1,4 +1,4 @@
-use egui::{pos2, vec2, Color32, Id, Rect, Sense, Stroke, Ui};
+use egui::{Color32, Id, Rect, Sense, Stroke, Ui, pos2, vec2};
 
 use super::style::*;
 
@@ -12,14 +12,19 @@ pub fn menu_row(
     meta: &str,
     primary: bool,
     danger: bool,
+    enabled: bool,
     anim: &mut f32,
 ) -> bool {
     let row_h = 44.0_f32;
-    let (response, painter) =
-        ui.allocate_painter(vec2(ui.available_width(), row_h), Sense::click());
+    let sense = if enabled {
+        Sense::click()
+    } else {
+        Sense::hover()
+    };
+    let (response, painter) = ui.allocate_painter(vec2(ui.available_width(), row_h), sense);
     let rect = response.rect;
 
-    let hovered = response.hovered();
+    let hovered = enabled && response.hovered();
     // target is 1.0 when hovered, 0.0 when not — the value we're animating toward
     let target = if hovered { 1.0_f32 } else { 0.0 };
     // lerp: close 22% of the gap each frame → fast ease-out that slows near the target
@@ -39,17 +44,20 @@ pub fn menu_row(
         Stroke::new(1.0, HAIRLINE),
     );
 
+    let dim = !enabled;
     // number
     painter.text(
         pos2(rect.min.x + pad, rect.min.y + 14.0),
         egui::Align2::LEFT_TOP,
         num,
         mono(10.0),
-        TEXT_MUTED,
+        if dim { TEXT_MUTED_55 } else { TEXT_MUTED },
     );
 
     // label — color depends on hover/danger/primary flags
-    let label_color = if danger && hovered {
+    let label_color = if dim {
+        TEXT_MUTED_55
+    } else if danger && hovered {
         DANGER
     } else if hovered {
         Color32::WHITE
@@ -82,20 +90,22 @@ pub fn menu_row(
         );
     }
 
-    // arrow fades in (alpha 0→178) and slides right (x offset 0→6px) on hover
-    let arrow_alpha = (*anim * 178.0) as u8;
-    let arrow_x_offset = *anim * 6.0;
-    if arrow_alpha > 2 {
-        painter.text(
-            pos2(rect.max.x - 8.0 + arrow_x_offset - 16.0, rect.min.y + 14.0),
-            egui::Align2::RIGHT_TOP,
-            "→",
-            mono(12.0),
-            Color32::from_rgba_premultiplied(178, 175, 170, arrow_alpha),
-        );
+    if !dim {
+        // arrow fades in (alpha 0→178) and slides right (x offset 0→6px) on hover
+        let arrow_alpha = (*anim * 178.0) as u8;
+        let arrow_x_offset = *anim * 6.0;
+        if arrow_alpha > 2 {
+            painter.text(
+                pos2(rect.max.x - 8.0 + arrow_x_offset - 16.0, rect.min.y + 14.0),
+                egui::Align2::RIGHT_TOP,
+                "→",
+                mono(12.0),
+                Color32::from_rgba_premultiplied(178, 175, 170, arrow_alpha),
+            );
+        }
     }
 
-    response.clicked()
+    enabled && response.clicked()
 }
 
 /// Larger choice card (A / B style) with title, description, and size badge.
@@ -105,6 +115,7 @@ pub fn choice_item(
     title: &str,
     desc: &str,
     size_badge: &str,
+    checked: bool,
     anim: &mut f32,
 ) -> bool {
     let min_h = 88.0_f32;
@@ -127,9 +138,18 @@ pub fn choice_item(
 
     let pad = *anim * 8.0;
 
+    // Subtle green tint when this option is selected
+    if checked {
+        painter.rect_filled(
+            rect,
+            egui::CornerRadius::same(0),
+            Color32::from_rgba_unmultiplied(GREEN_CHECKED.r(), GREEN_CHECKED.g(), GREEN_CHECKED.b(), 18),
+        );
+    }
+
     painter.line_segment(
         [rect.left_top(), rect.right_top()],
-        Stroke::new(1.0, HAIRLINE),
+        Stroke::new(1.0, if checked { GREEN_CHECKED } else { HAIRLINE }),
     );
 
     painter.text(
@@ -137,11 +157,13 @@ pub fn choice_item(
         egui::Align2::LEFT_TOP,
         num,
         mono(10.0),
-        TEXT_MUTED,
+        if checked { GREEN_CHECKED } else { TEXT_MUTED },
     );
 
     let text_color = if hovered {
         Color32::WHITE
+    } else if checked {
+        TEXT_PRIMARY
     } else {
         TEXT_SECONDARY
     };
@@ -169,17 +191,29 @@ pub fn choice_item(
         TEXT_MUTED_55,
     );
 
-    // arrow
-    let arrow_alpha = (*anim * 178.0) as u8;
-    let arrow_x = *anim * 4.0;
-    if arrow_alpha > 2 {
-        painter.text(
-            pos2(rect.max.x - 10.0 + arrow_x, rect.min.y + 22.0),
-            egui::Align2::RIGHT_TOP,
-            "→",
-            mono(12.0),
-            Color32::from_rgba_premultiplied(178, 175, 170, arrow_alpha),
+    // Checked indicator (replaces arrow) or animated arrow on hover
+    if checked {
+        let cx = rect.max.x - 18.0;
+        let cy = rect.min.y + 20.0;
+        painter.circle_filled(egui::pos2(cx, cy), 4.0, GREEN_CHECKED);
+        painter.circle_stroke(
+            egui::pos2(cx, cy),
+            6.5,
+            Stroke::new(1.0, Color32::from_rgba_unmultiplied(GREEN_CHECKED.r(), GREEN_CHECKED.g(), GREEN_CHECKED.b(), 80)),
         );
+    } else {
+        // arrow
+        let arrow_alpha = (*anim * 178.0) as u8;
+        let arrow_x = *anim * 4.0;
+        if arrow_alpha > 2 {
+            painter.text(
+                pos2(rect.max.x - 10.0 + arrow_x, rect.min.y + 22.0),
+                egui::Align2::RIGHT_TOP,
+                "→",
+                mono(12.0),
+                Color32::from_rgba_premultiplied(178, 175, 170, arrow_alpha),
+            );
+        }
     }
 
     response.clicked()
