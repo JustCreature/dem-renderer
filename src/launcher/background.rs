@@ -1,6 +1,6 @@
-use egui::{epaint::Vertex, pos2, vec2, Color32, Mesh, Painter, Rect, TextureId};
+use egui::{Color32, Mesh, Painter, Rect, TextureId, epaint::Vertex, pos2, vec2};
 
-use super::style::{mono, TEXT_MUTED};
+use super::style::{TEXT_MUTED, mono};
 
 /// Full-window background photo, cover-filled and left-anchored.
 pub fn draw_background(painter: &Painter, texture_id: TextureId, img_w: f32, img_h: f32) {

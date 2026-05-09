@@ -11,6 +11,6 @@ pub(super) const DEFAULT_CAM_LON: f64 = 11.687592;
 // pub(super) const DEFAULT_TILE_5M_PATH: &str = "tiles/big_size/hintertux_3km_1m.tif";
 // pub(super) const DEFAULT_TILE_5M_PATH: &str = "tiles/big_size/hintertux_8km_1m.tif";
 // pub(super) const DEFAULT_TILE_5M_PATH: &str = "tiles/big_size/salz_east_to_tux_base_8km_1m.tif";
-pub(super) const DEFAULT_TILE_5M_PATH: &str = "tiles/big_size/5m_whole_austria/DGM_R5.tif";
+pub(super) const DEFAULT_TILE_5M_PATH: &str = "tiles/big_size/DGM_R5.tif";
 
 pub(super) const TILES_BIG_PATH: &str = "tiles/big_size/";

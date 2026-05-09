@@ -1,7 +1,7 @@
 use crate::launcher::config::LauncherSettings;
 use crate::launcher::style::*;
 use crate::launcher::widgets::*;
-use egui::{vec2, Id, Sense, Stroke, Ui};
+use egui::{Id, Sense, Stroke, Ui, vec2};
 
 /// Renders only the six option rows. Header and footer are owned by mod.rs.
 pub fn show(ui: &mut Ui, settings: &mut LauncherSettings) {
@@ -47,7 +47,9 @@ pub fn show(ui: &mut Ui, settings: &mut LauncherSettings) {
     });
 
     opt_row_with_info(
-        ui, "06", "Use tiles refinement",
+        ui,
+        "06",
+        "Use tiles refinement",
         "If a higher-resolution DEM is available for this region, it will be used to refine the rendered world.",
         |ui| {
             styled_checkbox(ui, &mut settings.tiles_refinement);

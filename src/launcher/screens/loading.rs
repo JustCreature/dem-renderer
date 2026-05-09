@@ -1,5 +1,5 @@
 use crate::launcher::style::*;
-use egui::{vec2, Rect, Ui};
+use egui::{Rect, Ui, vec2};
 
 pub fn show(ui: &mut Ui, progress: f32, status: &str) {
     ui.label(

@@ -188,11 +188,7 @@ pub(super) fn sun_position(lat_rad: f32, day: i32, hour: f32) -> (f32, f32) {
     } else {
         let cos_az = (decl.sin() - sin_el * lat_rad.sin()) / (cos_el * lat_rad.cos());
         let az = cos_az.clamp(-1.0, 1.0).acos();
-        if h > 0.0 {
-            TAU - az
-        } else {
-            az
-        }
+        if h > 0.0 { TAU - az } else { az }
     };
     (azimuth, elevation)
 }

@@ -10,6 +10,7 @@ pub const HAIRLINE: Color32 = Color32::from_rgba_premultiplied(17, 17, 15, 20);
 pub const SEG_ACTIVE: Color32 = Color32::from_rgba_premultiplied(40, 40, 38, 46);
 pub const SEG_BORDER: Color32 = Color32::from_rgba_premultiplied(40, 40, 38, 46);
 pub const GREEN_DOT: Color32 = Color32::from_rgb(108, 171, 122);
+pub const GREEN_CHECKED: Color32 = Color32::from_rgb(62, 100, 72);
 pub const DANGER: Color32 = Color32::from_rgb(217, 156, 122);
 pub const SCRIM: Color32 = Color32::from_rgba_premultiplied(0, 0, 0, 140);
 pub const TOOLTIP_BG: Color32 = Color32::from_rgba_premultiplied(18, 18, 19, 245);

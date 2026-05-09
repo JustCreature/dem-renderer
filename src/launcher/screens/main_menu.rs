@@ -25,6 +25,7 @@ pub fn show(ui: &mut Ui, anim: &mut MainMenuAnim) -> Option<MainMenuEvent> {
         ".tif · .hgt · .asc",
         false,
         false,
+        true,
         &mut anim.row[0],
     ) {
         event = Some(MainMenuEvent::SelectDem);
@@ -36,6 +37,7 @@ pub fn show(ui: &mut Ui, anim: &mut MainMenuAnim) -> Option<MainMenuEvent> {
         "render · view · export",
         false,
         false,
+        true,
         &mut anim.row[1],
     ) {
         event = Some(MainMenuEvent::Settings);

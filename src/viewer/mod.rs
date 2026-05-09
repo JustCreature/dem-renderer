@@ -4,7 +4,7 @@ pub mod scene_init;
 mod tiers;
 
 use std::path::Path;
-use std::sync::{mpsc, Arc};
+use std::sync::{Arc, mpsc};
 
 use dem_io::Heightmap;
 use render_gpu::{GpuContext, GpuScene};
@@ -32,8 +32,8 @@ use winit::{
 use crate::viewer::hud_renderer::HudRenderer;
 
 use self::geo::{laea_epsg3035_inverse, latlon_to_tile_metres, lcc_epsg31287, sun_position};
-use self::scene_init::{compute_ao_cropped, INIT_SIM_DAY, INIT_SIM_HOUR};
-use self::tiers::{BevBaseState, Glo30State, AO_DRIFT_THRESHOLD_M};
+use self::scene_init::{INIT_SIM_DAY, INIT_SIM_HOUR, compute_ao_cropped};
+use self::tiers::{AO_DRIFT_THRESHOLD_M, BevBaseState, Glo30State};
 
 pub(crate) struct Viewer {
     scene: Option<GpuScene>,
@@ -180,7 +180,9 @@ impl ApplicationHandler for Viewer {
             present_mode = wgpu::PresentMode::Fifo;
         } else if !caps.present_modes.contains(&wgpu::PresentMode::Immediate) {
             present_mode = wgpu::PresentMode::Fifo;
-            println!("present mode in capabilities not fount: wgpu::PresentMode::Immediate; FALLBACK to wgpu::PresentMode::Fifo")
+            println!(
+                "present mode in capabilities not fount: wgpu::PresentMode::Immediate; FALLBACK to wgpu::PresentMode::Fifo"
+            )
         }
 
         let config: wgpu::SurfaceConfiguration = wgpu::SurfaceConfiguration {

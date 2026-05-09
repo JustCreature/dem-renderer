@@ -1,12 +1,12 @@
 use std::path::Path;
-use std::sync::{mpsc, Arc};
+use std::sync::{Arc, mpsc};
 
-use dem_io::{extract_window, load_grid, parse_geotiff, stitch_windows, Heightmap};
+use dem_io::{Heightmap, extract_window, load_grid, parse_geotiff, stitch_windows};
 use render_gpu::GpuScene;
 use terrain::{NormalMap, ShadowMask};
 
 use super::geo::{laea_epsg3035, lcc_epsg31287_inverse, sun_position};
-use super::scene_init::{compute_ao_cropped, INIT_SIM_DAY, INIT_SIM_HOUR};
+use super::scene_init::{INIT_SIM_DAY, INIT_SIM_HOUR, compute_ao_cropped};
 
 // BEV COG (DGM_R5.tif) tier geometry.
 // IFD-0 = 5 m/px  (full resolution, always present)
