@@ -143,7 +143,12 @@ pub fn choice_item(
         painter.rect_filled(
             rect,
             egui::CornerRadius::same(0),
-            Color32::from_rgba_unmultiplied(GREEN_CHECKED.r(), GREEN_CHECKED.g(), GREEN_CHECKED.b(), 18),
+            Color32::from_rgba_unmultiplied(
+                GREEN_CHECKED.r(),
+                GREEN_CHECKED.g(),
+                GREEN_CHECKED.b(),
+                18,
+            ),
         );
     }
 
@@ -199,7 +204,15 @@ pub fn choice_item(
         painter.circle_stroke(
             egui::pos2(cx, cy),
             6.5,
-            Stroke::new(1.0, Color32::from_rgba_unmultiplied(GREEN_CHECKED.r(), GREEN_CHECKED.g(), GREEN_CHECKED.b(), 80)),
+            Stroke::new(
+                1.0,
+                Color32::from_rgba_unmultiplied(
+                    GREEN_CHECKED.r(),
+                    GREEN_CHECKED.g(),
+                    GREEN_CHECKED.b(),
+                    80,
+                ),
+            ),
         );
     } else {
         // arrow

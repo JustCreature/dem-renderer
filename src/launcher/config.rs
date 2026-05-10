@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 use winit::window::Window;
@@ -10,6 +11,23 @@ pub enum SelectedView {
     None,
     DemoView,
     CustomFile,
+}
+
+/// Per-tile/per-view alignment correction stored under a named key in config.toml.
+#[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
+pub struct TierAlignment {
+    #[serde(default)]
+    pub tier5m_dx: f32,
+    #[serde(default)]
+    pub tier5m_dy: f32,
+    #[serde(default)]
+    pub tier5m_rot_deg: f32,
+    #[serde(default)]
+    pub tier1m_dx: f32,
+    #[serde(default)]
+    pub tier1m_dy: f32,
+    #[serde(default)]
+    pub tier1m_rot_deg: f32,
 }
 
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
@@ -36,6 +54,9 @@ pub struct LauncherSettings {
     pub tiles_1m_dir: PathBuf,
     #[serde(default)]
     pub selected_view: SelectedView,
+    /// Per-tile/per-view alignment corrections keyed by view name or file stem.
+    #[serde(default)]
+    pub alignment: HashMap<String, TierAlignment>,
 }
 
 impl Default for LauncherSettings {
@@ -52,6 +73,7 @@ impl Default for LauncherSettings {
             tile_5m_path: PathBuf::from(DEFAULT_TILE_5M_PATH),
             tiles_1m_dir: PathBuf::from(TILES_BIG_PATH),
             selected_view: SelectedView::None,
+            alignment: HashMap::new(),
         }
     }
 }
@@ -82,6 +104,32 @@ fn default_tiles_dir() -> PathBuf {
 }
 
 impl LauncherSettings {
+    /// Stable key used to look up / store alignment for the current view.
+    /// Demo view → "tirol_demo_view"; single file → stem of the selected file path.
+    pub fn alignment_key(&self) -> String {
+        match &self.selected_view {
+            SelectedView::DemoView | SelectedView::None => "tirol_demo_view".to_string(),
+            SelectedView::CustomFile => self
+                .tile_5m_path
+                .file_stem()
+                .map(|s| s.to_string_lossy().into_owned())
+                .unwrap_or_else(|| "custom".to_string()),
+        }
+    }
+
+    /// Return (align5m, align1m) tuples for the current view, defaulting to zero.
+    pub fn current_alignment(&self) -> ((f32, f32, f32), (f32, f32, f32)) {
+        let a = self
+            .alignment
+            .get(&self.alignment_key())
+            .cloned()
+            .unwrap_or_default();
+        (
+            (a.tier5m_dx, a.tier5m_dy, a.tier5m_rot_deg),
+            (a.tier1m_dx, a.tier1m_dy, a.tier1m_rot_deg),
+        )
+    }
+
     pub fn config_path() -> Option<PathBuf> {
         dirs::config_dir().map(|d| d.join("dem_renderer").join("config.toml"))
     }

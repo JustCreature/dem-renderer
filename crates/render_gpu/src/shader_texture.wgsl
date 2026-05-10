@@ -32,8 +32,8 @@ struct CameraUniforms {
     hm5m_extent_y: f32,
     hm5m_cols: u32,
     hm5m_rows: u32,
-    _pad6: u32,
-    _pad7: u32,
+    hm5m_cos_rot: f32,
+    hm5m_sin_rot: f32,
     // 1m fine tier (extent_x == 0.0 means inactive)
     hm1m_origin_x: f32,
     hm1m_origin_y: f32,
@@ -43,6 +43,10 @@ struct CameraUniforms {
     hm1m_rows: u32,
     max_terrain_h: f32,
     smooth_radius_m: f32,
+    hm1m_cos_rot: f32,
+    hm1m_sin_rot: f32,
+    _pad8: f32,
+    _pad9: f32,
 }
 
 // camera uniforms struct
@@ -184,6 +188,22 @@ fn fine_tier_edge_dist(lx: f32, ly: f32) -> f32 {
     return min(min(lx, cam.hm1m_extent_x - lx), min(ly, cam.hm1m_extent_y - ly));
 }
 
+// Rotate tile-local coords around the tile centre to correct datum misalignment.
+fn align5m(lx: f32, ly: f32) -> vec2<f32> {
+    let cx = cam.hm5m_extent_x * 0.5;
+    let cy = cam.hm5m_extent_y * 0.5;
+    let rx = lx - cx;  let ry = ly - cy;
+    return vec2<f32>(rx * cam.hm5m_cos_rot - ry * cam.hm5m_sin_rot + cx,
+                     rx * cam.hm5m_sin_rot + ry * cam.hm5m_cos_rot + cy);
+}
+fn align1m(lx: f32, ly: f32) -> vec2<f32> {
+    let cx = cam.hm1m_extent_x * 0.5;
+    let cy = cam.hm1m_extent_y * 0.5;
+    let rx = lx - cx;  let ry = ly - cy;
+    return vec2<f32>(rx * cam.hm1m_cos_rot - ry * cam.hm1m_sin_rot + cx,
+                     rx * cam.hm1m_sin_rot + ry * cam.hm1m_cos_rot + cy);
+}
+
 // Catmull-Rom 1D weight vector for fractional offset t ∈ [0, 1].
 fn cr_w(t: f32) -> vec4<f32> {
     let t2 = t * t;
@@ -277,7 +297,8 @@ fn sample_h_exact(pos_xy: vec2<f32>) -> f32 {
         let lx5 = pos_xy.x - cam.hm5m_origin_x;
         let ly5 = pos_xy.y - cam.hm5m_origin_y;
         if lx5 >= 0.0 && lx5 < cam.hm5m_extent_x && ly5 >= 0.0 && ly5 < cam.hm5m_extent_y {
-            let uv5 = vec2<f32>(lx5 / cam.hm5m_extent_x, ly5 / cam.hm5m_extent_y);
+            let a5 = align5m(lx5, ly5);
+            let uv5 = vec2<f32>(a5.x / cam.hm5m_extent_x, a5.y / cam.hm5m_extent_y);
             let h5 = textureSampleLevel(hm5m_tex, hm5m_samp, uv5, 0.0).r;
             h = mix(h, h5, smoothstep(0.0, BLEND_MARGIN, close_tier_edge_dist(lx5, ly5)));
         }
@@ -286,7 +307,8 @@ fn sample_h_exact(pos_xy: vec2<f32>) -> f32 {
         let lx1 = pos_xy.x - cam.hm1m_origin_x;
         let ly1 = pos_xy.y - cam.hm1m_origin_y;
         if lx1 >= 0.0 && lx1 < cam.hm1m_extent_x && ly1 >= 0.0 && ly1 < cam.hm1m_extent_y {
-            let uv1 = vec2<f32>(lx1 / cam.hm1m_extent_x, ly1 / cam.hm1m_extent_y);
+            let a1 = align1m(lx1, ly1);
+            let uv1 = vec2<f32>(a1.x / cam.hm1m_extent_x, a1.y / cam.hm1m_extent_y);
             let h1 = textureSampleLevel(hm1m_tex, hm1m_samp, uv1, 0.0).r;
             h = mix(h, h1, smoothstep(0.0, BLEND_MARGIN, fine_tier_edge_dist(lx1, ly1)));
         }
@@ -366,7 +388,8 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
         let ly_loop = pos.y - cam.hm5m_origin_y;
         let in_close_l = cam.hm5m_extent_x > 0.0 && lx_loop >= 0.0 && lx_loop < cam.hm5m_extent_x && ly_loop >= 0.0 && ly_loop < cam.hm5m_extent_y;
         if in_close_l {
-            let uv5 = vec2<f32>(lx_loop / cam.hm5m_extent_x, ly_loop / cam.hm5m_extent_y);
+            let al = align5m(lx_loop, ly_loop);
+            let uv5 = vec2<f32>(al.x / cam.hm5m_extent_x, al.y / cam.hm5m_extent_y);
             let h5 = textureSampleLevel(hm5m_tex, hm5m_samp, uv5, 0.0).r;
             h = mix(h, h5, smoothstep(0.0, BLEND_MARGIN, close_tier_edge_dist(lx_loop, ly_loop)));
         }
@@ -374,7 +397,8 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
             let lx1 = pos.x - cam.hm1m_origin_x;
             let ly1 = pos.y - cam.hm1m_origin_y;
             if lx1 >= 0.0 && lx1 < cam.hm1m_extent_x && ly1 >= 0.0 && ly1 < cam.hm1m_extent_y {
-                let uv1 = vec2<f32>(lx1 / cam.hm1m_extent_x, ly1 / cam.hm1m_extent_y);
+                let a1 = align1m(lx1, ly1);
+                let uv1 = vec2<f32>(a1.x / cam.hm1m_extent_x, a1.y / cam.hm1m_extent_y);
                 let h1 = textureSampleLevel(hm1m_tex, hm1m_samp, uv1, 0.0).r;
                 h = mix(h, h1, smoothstep(0.0, BLEND_MARGIN, fine_tier_edge_dist(lx1, ly1)));
             }
@@ -437,13 +461,14 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
 
         if t5 > 0.0 {
             // ── close tier normals (texture sample) and shadow (buffer bilinear) ──
-            let close_uv = vec2<f32>(lx_hit / cam.hm5m_extent_x, ly_hit / cam.hm5m_extent_y);
+            let ah5 = align5m(lx_hit, ly_hit);
+            let close_uv = vec2<f32>(ah5.x / cam.hm5m_extent_x, ah5.y / cam.hm5m_extent_y);
             let n5_rg = textureSampleLevel(hm5m_normal_tex, hm5m_normal_samp, close_uv, 0.0).rg;
             let n5 = normalize(vec3<f32>(n5_rg.x, n5_rg.y, sqrt(max(0.0, 1.0 - dot(n5_rg, n5_rg)))));
             let dx5 = cam.hm5m_extent_x / f32(cam.hm5m_cols);
             let dy5 = cam.hm5m_extent_y / f32(cam.hm5m_rows);
-            let c5_f = lx_hit / dx5;
-            let r5_f = ly_hit / dy5;
+            let c5_f = ah5.x / dx5;
+            let r5_f = ah5.y / dy5;
             let c5 = clamp(i32(c5_f), 0, i32(cam.hm5m_cols) - 2);
             let r5 = clamp(i32(r5_f), 0, i32(cam.hm5m_rows) - 2);
             let fx5 = c5_f - f32(c5);
@@ -472,7 +497,8 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
             let t1 = select(0.0, smoothstep(0.0, BLEND_MARGIN, fine_tier_edge_dist(lx1, ly1)), in_1m);
             if t1 > 0.0 {
                 // ── fine tier normals (texture sample) and shadow (buffer bilinear) ──
-                let fine_uv = vec2<f32>(lx1 / cam.hm1m_extent_x, ly1 / cam.hm1m_extent_y);
+                let a1h = align1m(lx1, ly1);
+                let fine_uv = vec2<f32>(a1h.x / cam.hm1m_extent_x, a1h.y / cam.hm1m_extent_y);
 
                 // Within smooth_radius: derive normal analytically from bicubic gradient
                 // (C1-continuous → no slope discontinuities at cell boundaries).
@@ -480,7 +506,7 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
                 let dist_to_cam_hit = length(pos.xy - cam.origin.xy);
                 var n1: vec3<f32>;
                 if dist_to_cam_hit < cam.smooth_radius_m {
-                    let hg1 = sample_h_grad_bicubic_1m(lx1, ly1);
+                    let hg1 = sample_h_grad_bicubic_1m(a1h.x, a1h.y);
                     // surface normal from gradient: N = normalize(-dh/dlx, -dh/dly, 1)
                     n1 = normalize(vec3<f32>(-hg1.y, -hg1.z, 1.0));
                 } else {
@@ -490,8 +516,8 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
 
                 let dx1 = cam.hm1m_extent_x / f32(cam.hm1m_cols);
                 let dy1 = cam.hm1m_extent_y / f32(cam.hm1m_rows);
-                let c1_f = lx1 / dx1;
-                let r1_f = ly1 / dy1;
+                let c1_f = a1h.x / dx1;
+                let r1_f = a1h.y / dy1;
                 let c1 = clamp(i32(c1_f), 0, i32(cam.hm1m_cols) - 2);
                 let r1 = clamp(i32(r1_f), 0, i32(cam.hm1m_rows) - 2);
                 let fx1 = c1_f - f32(c1);

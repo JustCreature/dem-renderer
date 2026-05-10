@@ -1,7 +1,9 @@
 use std::path::Path;
 use std::sync::{Arc, mpsc};
 
-use dem_io::{Heightmap, extract_window, load_grid, parse_geotiff, stitch_windows};
+use dem_io::{
+    Heightmap, extract_window, geotiff_pixel_scale, load_grid, parse_geotiff, stitch_windows,
+};
 use render_gpu::GpuScene;
 use terrain::{NormalMap, ShadowMask};
 
@@ -205,41 +207,66 @@ pub(super) struct BevBaseState {
 
 impl BevBaseState {
     /// Spawn all three background worker threads and return the populated state.
-    /// Also performs a blocking initial 5m load so the viewer starts with close detail visible.
-    /// `hm` is the already-loaded base heightmap; `scene` receives the initial 5m upload.
+    /// Also performs a blocking initial close-tier load so the viewer starts with detail visible.
+    ///
+    /// `crs_epsg` — the projected CRS used by `tile_path` (31287 or 3035).
+    /// `single_file_fine` — when true, the fine tier is streamed from `tile_path` at IFD-0
+    ///   rather than from external `tiles_1m_dir`.
     pub(super) fn new(
         tile_path: &Path,
+        crs_epsg: u32,
+        single_file_fine: bool,
         lat_rad: f32,
         init_e: f64,
         init_n: f64,
         hm: &Arc<Heightmap>,
         tiles_1m_dir: Option<&Path>,
+        align5m: (f32, f32, f32),
+        _align1m: (f32, f32, f32),
         scene: &mut GpuScene,
     ) -> Self {
+        // Choose IFD levels and radii based on native pixel scale.
+        // Each IFD halves the resolution (doubles m/px).
+        let native_px_m = geotiff_pixel_scale(tile_path);
+        // Base tier: minimum doublings so the window fits within 8192 px.
+        let base_ifd = {
+            let doublings = (BEV_BASE_RADIUS_M * 2.0 / 8000.0 / native_px_m)
+                .log2()
+                .ceil()
+                .max(0.0) as usize;
+            doublings
+        };
+        // Close tier: target ~5 m/px.  For a 1 m native file IFD-0 would produce
+        // a 40 000 px window — over the 8192 limit — so use IFD-3 (~8 m/px) with
+        // a radius that stays within 4000 px.
+        let (close_ifd, close_radius_m) = if native_px_m <= 1.5 {
+            (3usize, 16_000.0_f64)
+        } else {
+            (0usize, BEV_5M_RADIUS_M)
+        };
+
         // ── base drift worker ──────────────────────────────────────────────────────────
-        // base drift worker: loads a BEV_BASE_RADIUS_M window at BEV_BASE_IFD each time
-        // the camera drifts BEV_BASE_DRIFT_THRESHOLD_M from the last window centre
         let tile_path_base = tile_path.to_path_buf();
         let (base_tx, base_worker_rx) = mpsc::sync_channel::<(f64, f64)>(1);
         let (base_worker_tx, base_rx) = mpsc::channel::<TierData>();
         let lat_rad_w = lat_rad;
+        let crs_base = crs_epsg;
         std::thread::spawn(move || {
             while let Ok((easting, northing)) = base_worker_rx.recv() {
-                // try BEV_BASE_IFD first; fall back to IFD-1 if that overview is absent
                 let hm_result = extract_window(
                     &tile_path_base,
                     (easting, northing),
                     BEV_BASE_RADIUS_M,
-                    BEV_BASE_IFD,
-                    31287,
+                    base_ifd,
+                    crs_base,
                 )
                 .or_else(|_| {
                     extract_window(
                         &tile_path_base,
                         (easting, northing),
                         BEV_BASE_RADIUS_M,
-                        1,
-                        31287,
+                        base_ifd.saturating_sub(1),
+                        crs_base,
                     )
                 });
                 let Ok(hm) = hm_result else { continue };
@@ -266,22 +293,23 @@ impl BevBaseState {
             }
         });
 
-        // ── 5m close-tier drift worker ─────────────────────────────────────────────────
-        // 5m close-tier drift worker: loads a BEV_5M_RADIUS_M window at IFD-0 (5 m/px)
+        // ── (5 m-equivalent) close-tier drift worker ─────────────────────────────────────────────────
+        // 5 m-equivalent close-tier drift worker: loads a BEV_5M_RADIUS_M window at IFD-0 (5 m/px)
         // each time the camera drifts BEV_5M_DRIFT_THRESHOLD_M from the last window centre.
         // IFD-0 is always present so no fallback is needed here.
         let tile_path_5m = tile_path.to_path_buf();
         let (hm5m_tx, hm5m_worker_rx) = mpsc::sync_channel::<(f64, f64)>(1);
         let (hm5m_worker_tx, hm5m_rx) = mpsc::channel::<TierData>();
         let lat_rad_5m = lat_rad;
+        let crs_close = crs_epsg;
         std::thread::spawn(move || {
             while let Ok((easting, northing)) = hm5m_worker_rx.recv() {
                 let Ok(hm5m) = extract_window(
                     &tile_path_5m,
                     (easting, northing),
-                    BEV_5M_RADIUS_M,
-                    0,
-                    31287,
+                    close_radius_m,
+                    close_ifd,
+                    crs_close,
                 ) else {
                     continue;
                 };
@@ -289,17 +317,18 @@ impl BevBaseState {
                 let normals = terrain::compute_normals_vector_par(&hm5m);
                 let (az, el) = sun_position(lat_rad_5m, INIT_SIM_DAY, INIT_SIM_HOUR);
                 let shadow = terrain::compute_shadow_vector_par_with_azimuth(&hm5m, az, el, 200.0);
-                // worker computes the window centre so try_recv() can update last_cx/cy generically
-                let centre_e = hm5m.crs_origin_x + hm5m.cols as f64 * hm5m.dx_meters * 0.5;
-                let centre_n = hm5m.crs_origin_y - hm5m.rows as f64 * hm5m.dy_meters * 0.5;
+                // Use the requested (easting, northing), not the geometric centre of the
+                // returned window. The window may be clipped when smaller than close_radius_m
+                // (tile boundary), and the geometric centre would then differ from the camera
+                // position — causing the drift check to fire again on the next frame.
                 if hm5m_worker_tx
                     .send(TierData {
                         hm: hm5m,
                         normals,
                         shadow,
                         ao: vec![],
-                        centre_e,
-                        centre_n,
+                        centre_e: easting,
+                        centre_n: northing,
                     })
                     .is_err()
                 {
@@ -308,14 +337,18 @@ impl BevBaseState {
             }
         });
 
-        // ── blocking initial 5m load ───────────────────────────────────────────────────
+        // ── blocking initial  (close-tier) load ───────────────────────────────────────────────────
         // Loads synchronously so the viewer starts with close-range detail immediately
         // rather than waiting for the first drift threshold to fire.
         let mut last_5m_cx = 0.0_f64;
         let mut last_5m_cy = 0.0_f64;
-        if let Ok(hm5m_init) =
-            extract_window(tile_path, (init_e, init_n), BEV_5M_RADIUS_M, 0, 31287)
-        {
+        if let Ok(hm5m_init) = extract_window(
+            tile_path,
+            (init_e, init_n),
+            close_radius_m,
+            close_ifd,
+            crs_epsg,
+        ) {
             let hm5m_init = Arc::new(hm5m_init);
             // tile-local offset of the 5m window's top-left corner within the base heightmap:
             // X = difference in left-edge eastings (both in same CRS, so direct subtraction)
@@ -326,39 +359,77 @@ impl BevBaseState {
             let (az, el) = sun_position(lat_rad, INIT_SIM_DAY, INIT_SIM_HOUR);
             let shadow5 =
                 terrain::compute_shadow_vector_par_with_azimuth(&hm5m_init, az, el, 200.0);
-            last_5m_cx = hm5m_init.crs_origin_x + hm5m_init.cols as f64 * hm5m_init.dx_meters * 0.5;
-            last_5m_cy = hm5m_init.crs_origin_y - hm5m_init.rows as f64 * hm5m_init.dy_meters * 0.5;
+            // Same reasoning as the worker: use requested position, not geometric window centre.
+            last_5m_cx = init_e;
+            last_5m_cy = init_n;
             println!(
-                "5m IFD-0 initial: {}×{} at {:.1}m/px",
-                hm5m_init.cols, hm5m_init.rows, hm5m_init.dx_meters
+                "close tier initial: {}×{} at {:.1}m/px (IFD-{})",
+                hm5m_init.cols, hm5m_init.rows, hm5m_init.dx_meters, close_ifd
             );
-            scene.upload_hm5m(origin_x, origin_y, &hm5m_init, &normals5, &shadow5);
+            scene.upload_hm5m(
+                origin_x,
+                origin_y,
+                align5m.0,
+                align5m.1,
+                align5m.2.to_radians(),
+                &hm5m_init,
+                &normals5,
+                &shadow5,
+            );
         } else {
-            println!("warning: could not load initial 5m IFD-0 window");
+            println!("warning: could not load initial close-tier window");
         }
 
         // ── 1m fine-tier worker ────────────────────────────────────────────────────────
-        // 1m fine-tier worker: loads a BEV_1M_RADIUS_M window from 1m tiles (EPSG:3035)
-        // each time the camera drifts BEV_1M_DRIFT_THRESHOLD_M from the last window centre.
-        // Tiles are discovered dynamically on each reload; multiple tiles are stitched
-        // together when the window straddles a tile boundary at easting 4450000.
-        let fine = tiles_1m_dir.map(|dir| {
+        enum Fine1mSource {
+            SingleFile { path: std::path::PathBuf, crs: u32 },
+            Directory(std::path::PathBuf),
+        }
+
+        let fine_source: Option<Fine1mSource> = if single_file_fine {
+            Some(Fine1mSource::SingleFile {
+                path: tile_path.to_path_buf(),
+                crs: crs_epsg,
+            })
+        } else {
+            tiles_1m_dir.map(|dir| Fine1mSource::Directory(dir.to_path_buf()))
+        };
+
+        let fine = fine_source.map(|source| {
             let (hm1m_tx, hm1m_worker_rx) = mpsc::sync_channel::<(f64, f64)>(1);
             let (hm1m_worker_tx, hm1m_rx) = mpsc::channel::<TierData>();
             let lat_rad_1m = lat_rad;
-            let dir_1m = dir.to_path_buf();
             std::thread::spawn(move || {
                 while let Ok((easting, northing)) = hm1m_worker_rx.recv() {
-                    let (lat, lon) = lcc_epsg31287_inverse(easting, northing);
-                    let (e3035, n3035) = laea_epsg3035(lat, lon);
-                    let tile_paths = find_1m_tiles(&dir_1m, e3035, n3035, BEV_1M_RADIUS_M);
+                    let (tile_paths, window_easting, window_northing, window_crs) = match &source {
+                        Fine1mSource::SingleFile { path, crs } => {
+                            (vec![path.clone()], easting, northing, *crs)
+                        }
+                        Fine1mSource::Directory(dir) => {
+                            let (lat, lon) = lcc_epsg31287_inverse(easting, northing);
+                            let (e3035, n3035) = laea_epsg3035(lat, lon);
+                            (
+                                find_1m_tiles(dir, e3035, n3035, BEV_1M_RADIUS_M),
+                                e3035,
+                                n3035,
+                                3035u32,
+                            )
+                        }
+                    };
                     if tile_paths.is_empty() {
                         continue;
                     }
                     let windows: Vec<_> = tile_paths
                         .iter()
                         .filter_map(|p| {
-                            extract_window(p, (e3035, n3035), BEV_1M_RADIUS_M, 0, 3035).ok()
+                            extract_window(
+                                p,
+                                (window_easting, window_northing),
+                                BEV_1M_RADIUS_M,
+                                0,
+                                window_crs,
+                            )
+                            .ok()
                         })
                         .collect();
                     if windows.is_empty() {
@@ -367,7 +438,7 @@ impl BevBaseState {
                     let hm1m = Arc::new(if windows.len() == 1 {
                         windows.into_iter().next().unwrap()
                     } else {
-                        stitch_windows(windows, e3035, n3035, BEV_1M_RADIUS_M)
+                        stitch_windows(windows, window_easting, window_northing, BEV_1M_RADIUS_M)
                     });
                     let normals = terrain::compute_normals_vector_par(&hm1m);
                     let (az, el) = sun_position(lat_rad_1m, INIT_SIM_DAY, INIT_SIM_HOUR);

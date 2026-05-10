@@ -9,6 +9,9 @@ impl GpuScene {
         &mut self,
         origin_x: f32,
         origin_y: f32,
+        align_dx: f32,
+        align_dy: f32,
+        rot_rad: f32,
         hm5m: &dem_io::Heightmap,
         normals: &terrain::NormalMap,
         shadow: &terrain::ShadowMask,
@@ -122,12 +125,14 @@ impl GpuScene {
             bytemuck::cast_slice(&shadow.data),
         );
 
-        self.hm5m_origin_x = origin_x;
-        self.hm5m_origin_y = origin_y;
+        self.hm5m_origin_x = origin_x + align_dx;
+        self.hm5m_origin_y = origin_y + align_dy;
         self.hm5m_extent_x = hm5m.cols as f32 * hm5m.dx_meters as f32;
         self.hm5m_extent_y = hm5m.rows as f32 * hm5m.dy_meters as f32;
         self.hm5m_cols = cols;
         self.hm5m_rows = rows;
+        self.hm5m_cos_rot = rot_rad.cos();
+        self.hm5m_sin_rot = rot_rad.sin();
     }
 
     /// Disables the 5 m close-tier in the shader by zeroing hm5m_extent_x.
@@ -141,6 +146,9 @@ impl GpuScene {
         &mut self,
         origin_x: f32,
         origin_y: f32,
+        align_dx: f32,
+        align_dy: f32,
+        rot_rad: f32,
         hm1m: &dem_io::Heightmap,
         normals: &terrain::NormalMap,
         shadow: &terrain::ShadowMask,
@@ -254,12 +262,14 @@ impl GpuScene {
             bytemuck::cast_slice(&shadow.data),
         );
 
-        self.hm1m_origin_x = origin_x;
-        self.hm1m_origin_y = origin_y;
+        self.hm1m_origin_x = origin_x + align_dx;
+        self.hm1m_origin_y = origin_y + align_dy;
         self.hm1m_extent_x = hm1m.cols as f32 * hm1m.dx_meters as f32;
         self.hm1m_extent_y = hm1m.rows as f32 * hm1m.dy_meters as f32;
         self.hm1m_cols = cols;
         self.hm1m_rows = rows;
+        self.hm1m_cos_rot = rot_rad.cos();
+        self.hm1m_sin_rot = rot_rad.sin();
     }
 
     /// Disables the 1m fine-tier by zeroing hm1m_extent_x.
