@@ -24,6 +24,58 @@ pub fn geotiff_pixel_scale(path: &Path) -> f64 {
     scale[0]
 }
 
+/// Read the projected CRS EPSG code directly from the GeoKey directory (tag 34735).
+/// Looks for ProjectedCSTypeGeoKey (key ID 3072), whose inline value IS the EPSG code.
+pub fn detect_projected_crs(path: &Path) -> Result<u32, String> {
+    let file = File::open(path).map_err(|e| format!("cannot open {:?}: {e}", path))?;
+    let mut decoder = Decoder::new(std::io::BufReader::new(file))
+        .map_err(|e| format!("not a valid TIFF {:?}: {e}", path))?;
+    let keys: Vec<u16> = decoder
+        .get_tag(Tag::Unknown(34735))
+        .and_then(|v| v.into_u16_vec())
+        .map_err(|e| format!("GeoKeyDirectory tag missing in {:?}: {e}", path))?;
+    // Layout: [version, key_rev, minor_rev, n_keys, then n_keys×4 shorts]
+    let n = keys
+        .get(3)
+        .copied()
+        .ok_or_else(|| format!("GeoKeyDirectory too short in {:?}", path))? as usize;
+    for i in 0..n {
+        let base = 4 + i * 4;
+        let key_id = keys.get(base).copied().unwrap_or(0);
+        let tiff_tag_location = keys.get(base + 1).copied().unwrap_or(0);
+        let value_offset = keys.get(base + 3).copied().unwrap_or(0);
+        if key_id == 3072 && tiff_tag_location == 0 {
+            return Ok(value_offset as u32);
+        }
+    }
+    Err(format!(
+        "ProjectedCSTypeGeoKey (3072) not found in {:?}",
+        path
+    ))
+}
+
+/// Count how many IFD levels the file contains (IFD-0 = full res, IFD-1 = first overview, …).
+/// Returns 1 on failure.
+pub fn count_available_ifds(path: &Path) -> usize {
+    let Ok(file) = File::open(path) else {
+        return 1;
+    };
+    let Ok(mut decoder) =
+        Decoder::new(std::io::BufReader::new(file)).map(|d| d.with_limits(Limits::unlimited()))
+    else {
+        return 1;
+    };
+    let mut count = 1usize;
+    loop {
+        if decoder.seek_to_image(count).is_ok() {
+            count += 1;
+        } else {
+            break;
+        }
+    }
+    count
+}
+
 pub fn parse_geotiff(path: &Path) -> Result<Heightmap, DemError> {
     let file: File = File::open(path)?;
     let mut decoder: Decoder<std::io::BufReader<File>> =

@@ -40,8 +40,8 @@ pub struct CameraUniforms {
     pub hm5m_extent_y: f32,
     pub hm5m_cols: u32,
     pub hm5m_rows: u32,
-    pub _pad6: u32,
-    pub _pad7: u32,
+    pub hm5m_cos_rot: f32, // cos(align_rot) for 5m tier; default 1.0
+    pub hm5m_sin_rot: f32, // sin(align_rot) for 5m tier; default 0.0
     // 1m fine tier (extent_x == 0.0 means inactive)
     pub hm1m_origin_x: f32,
     pub hm1m_origin_y: f32,
@@ -51,6 +51,10 @@ pub struct CameraUniforms {
     pub hm1m_rows: u32,
     pub max_terrain_h: f32,
     pub smooth_radius_m: f32,
+    pub hm1m_cos_rot: f32, // cos(align_rot) for 1m tier; default 1.0
+    pub hm1m_sin_rot: f32, // sin(align_rot) for 1m tier; default 0.0
+    pub _pad8: f32,
+    pub _pad9: f32,
 }
 
 impl CameraUniforms {
@@ -111,8 +115,8 @@ impl CameraUniforms {
             hm5m_extent_y: 0.0,
             hm5m_cols: 0,
             hm5m_rows: 0,
-            _pad6: 0,
-            _pad7: 0,
+            hm5m_cos_rot: 1.0,
+            hm5m_sin_rot: 0.0,
             hm1m_origin_x: 0.0,
             hm1m_origin_y: 0.0,
             hm1m_extent_x: 0.0,
@@ -121,6 +125,10 @@ impl CameraUniforms {
             hm1m_rows: 0,
             max_terrain_h: hm.data.iter().cloned().fold(f32::NEG_INFINITY, f32::max),
             smooth_radius_m: 2000.0,
+            hm1m_cos_rot: 1.0,
+            hm1m_sin_rot: 0.0,
+            _pad8: 0.0,
+            _pad9: 0.0,
         }
     }
 }

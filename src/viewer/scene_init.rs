@@ -1,10 +1,12 @@
 use std::path::Path;
 use std::sync::Arc;
 
-use dem_io::{Heightmap, crop, extract_window, geotiff_pixel_scale, load_grid};
+use dem_io::{
+    Heightmap, crop, detect_projected_crs, extract_window, geotiff_pixel_scale, load_grid,
+};
 use render_gpu::{GpuContext, GpuScene};
 
-use super::geo::{latlon_to_tile_metres, lcc_epsg31287, sun_position};
+use super::geo::{laea_epsg3035, latlon_to_tile_metres, lcc_epsg31287, sun_position};
 use super::tiers::{AO_RADIUS_M, BEV_BASE_IFD, BEV_BASE_RADIUS_M};
 
 // Day 172 = June 21 (summer solstice). Must match sim_day / sim_hour in the Viewer init
@@ -45,30 +47,37 @@ pub(crate) fn prepare_scene_with_ctx(
     height: u32,
     cam_lat: f64,
     cam_lon: f64,
+    single_file_mode: bool,
     report: impl Fn(f32, &str),
 ) -> crate::viewer::PreparedScene {
     let scale = geotiff_pixel_scale(tile_path);
 
     report(0.05, "Reading terrain data…");
     let hm = if scale >= 1.0 {
-        // Projected DGM tile (EPSG:31287, BEV COG).
-        // Try BEV_BASE_IFD (≈20 m/px) first; fall back to IFD-1 (≈10 m/px) if that
-        // overview is absent.  If both fail we assume the file is an EPSG:3035 single tile
-        // (e.g. Hintertux) and load it in full.
-        let centre_crs = lcc_epsg31287(cam_lat, cam_lon);
+        // Projected DGM tile — detect actual CRS from tiepoint coordinates.
+        // EPSG:31287 (Austria Lambert) easting ~ 100k–700k.
+        // EPSG:3035 (LAEA Europe) easting ~ 4M–5M.
+        let crs_epsg = detect_projected_crs(tile_path)
+            .unwrap_or_else(|e| panic!("cannot determine CRS for {:?}: {e}", tile_path));
+        let centre_crs = if crs_epsg == 3035 {
+            laea_epsg3035(cam_lat, cam_lon)
+        } else {
+            lcc_epsg31287(cam_lat, cam_lon)
+        };
         let t0 = std::time::Instant::now();
         match extract_window(
             tile_path,
             centre_crs,
             BEV_BASE_RADIUS_M,
             BEV_BASE_IFD,
-            31287,
+            crs_epsg,
         )
-        .or_else(|_| extract_window(tile_path, centre_crs, BEV_BASE_RADIUS_M, 1, 31287))
+        .or_else(|_| extract_window(tile_path, centre_crs, BEV_BASE_RADIUS_M, 1, crs_epsg))
         {
             Ok(hm) => {
                 println!(
-                    "BEV base window: {}×{} at {:.1}m/px, elev {:.0}–{:.0}m  ({:.2?})",
+                    "BEV base window (EPSG:{}): {}×{} at {:.1}m/px, elev {:.0}–{:.0}m  ({:.2?})",
+                    crs_epsg,
                     hm.cols,
                     hm.rows,
                     hm.dx_meters,
@@ -79,11 +88,17 @@ pub(crate) fn prepare_scene_with_ctx(
                 hm
             }
             Err(_) => {
-                // Single-tile EPSG:3035 (e.g. Hintertux) — load the full tile
-                let hm = dem_io::parse_geotiff_epsg_3035(tile_path)
-                    .expect("parse_geotiff_epsg_3035 failed — check tile path and CRS");
+                // Small single tile — load the full IFD-0 (fits in memory at ~50km×50km)
+                let hm = if crs_epsg == 3035 {
+                    dem_io::parse_geotiff_epsg_3035(tile_path)
+                        .expect("parse_geotiff_epsg_3035 failed — check tile path and CRS")
+                } else {
+                    dem_io::parse_geotiff_epsg_31287(tile_path)
+                        .expect("parse_geotiff_epsg_31287 failed — check tile path and CRS")
+                };
                 println!(
-                    "EPSG:3035 tile: {}×{} at {:.1}m/px, elev {:.0}–{:.0}m  ({:.2?})",
+                    "single tile (EPSG:{}): {}×{} at {:.1}m/px, elev {:.0}–{:.0}m  ({:.2?})",
+                    crs_epsg,
                     hm.cols,
                     hm.rows,
                     hm.dx_meters,
@@ -95,25 +110,39 @@ pub(crate) fn prepare_scene_with_ctx(
             }
         }
     } else {
-        // GLO-30: stitch 3×3 Copernicus tiles
-        let tiles_dir = tile_path
-            .parent()
-            .and_then(|p| p.parent())
-            .unwrap_or(Path::new("tiles"));
-        let centre_lat = cam_lat.floor() as i32;
-        let centre_lon = cam_lon.floor() as i32;
         let t0 = std::time::Instant::now();
-        let hm = load_grid(tiles_dir, centre_lat, centre_lon, |p| {
-            dem_io::parse_geotiff(p).ok()
-        });
-        println!(
-            "GLO-30 3×3 grid: {}×{} at {:.4}°/px  ({:.2?})",
-            hm.cols,
-            hm.rows,
-            hm.dx_deg,
-            t0.elapsed()
-        );
-        hm
+        if single_file_mode {
+            // Custom single GLO-30 tile — load only this one file, no 3×3 grid.
+            let hm =
+                dem_io::parse_geotiff(tile_path).expect("parse_geotiff failed — check tile path");
+            println!(
+                "single GLO-30 tile: {}×{} at {:.4}°/px  ({:.2?})",
+                hm.cols,
+                hm.rows,
+                hm.dx_deg,
+                t0.elapsed()
+            );
+            hm
+        } else {
+            // Demo / DemoView: stitch 3×3 Copernicus tiles around camera position.
+            let tiles_dir = tile_path
+                .parent()
+                .and_then(|p| p.parent())
+                .unwrap_or(Path::new("tiles"));
+            let centre_lat = cam_lat.floor() as i32;
+            let centre_lon = cam_lon.floor() as i32;
+            let hm = load_grid(tiles_dir, centre_lat, centre_lon, |p| {
+                dem_io::parse_geotiff(p).ok()
+            });
+            println!(
+                "GLO-30 3×3 grid: {}×{} at {:.4}°/px  ({:.2?})",
+                hm.cols,
+                hm.rows,
+                hm.dx_deg,
+                t0.elapsed()
+            );
+            hm
+        }
     };
 
     report(0.30, "Computing surface normals…");

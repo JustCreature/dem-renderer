@@ -38,6 +38,8 @@ pub struct GpuScene {
     pub(super) hm5m_extent_y: f32,
     pub(super) hm5m_cols: u32,
     pub(super) hm5m_rows: u32,
+    pub(super) hm5m_cos_rot: f32,
+    pub(super) hm5m_sin_rot: f32,
     pub(super) hm5m_buf_elems: u64,
 
     // hm1m fine tier (placeholder until upload_hm1m; extent_x==0 means inactive)
@@ -54,6 +56,8 @@ pub struct GpuScene {
     pub(super) hm1m_extent_y: f32,
     pub(super) hm1m_cols: u32,
     pub(super) hm1m_rows: u32,
+    pub(super) hm1m_cos_rot: f32,
+    pub(super) hm1m_sin_rot: f32,
     pub(super) hm1m_buf_elems: u64,
 
     // Mutable per-frame / per-sun-update
@@ -699,6 +703,8 @@ impl GpuScene {
             hm5m_extent_y: 0.0,
             hm5m_cols: 0,
             hm5m_rows: 0,
+            hm5m_cos_rot: 1.0,
+            hm5m_sin_rot: 0.0,
             hm5m_buf_elems: 1,
             _hm1m_texture: hm1m_texture,
             _hm1m_view: hm1m_view,
@@ -713,6 +719,8 @@ impl GpuScene {
             hm1m_extent_y: 0.0,
             hm1m_cols: 0,
             hm1m_rows: 0,
+            hm1m_cos_rot: 1.0,
+            hm1m_sin_rot: 0.0,
             hm1m_buf_elems: 1,
             shadow_buf,
             cam_buf,
@@ -787,8 +795,8 @@ impl GpuScene {
             hm5m_extent_y: self.hm5m_extent_y,
             hm5m_cols: self.hm5m_cols,
             hm5m_rows: self.hm5m_rows,
-            _pad6: 0,
-            _pad7: 0,
+            hm5m_cos_rot: self.hm5m_cos_rot,
+            hm5m_sin_rot: self.hm5m_sin_rot,
             hm1m_origin_x: self.hm1m_origin_x,
             hm1m_origin_y: self.hm1m_origin_y,
             hm1m_extent_x: self.hm1m_extent_x,
@@ -797,6 +805,10 @@ impl GpuScene {
             hm1m_rows: self.hm1m_rows,
             max_terrain_h: self.max_terrain_h,
             smooth_radius_m: 2000.0,
+            hm1m_cos_rot: self.hm1m_cos_rot,
+            hm1m_sin_rot: self.hm1m_sin_rot,
+            _pad8: 0.0,
+            _pad9: 0.0,
         };
 
         self.gpu_ctx
@@ -906,8 +918,8 @@ impl GpuScene {
             hm5m_extent_y: self.hm5m_extent_y,
             hm5m_cols: self.hm5m_cols,
             hm5m_rows: self.hm5m_rows,
-            _pad6: 0,
-            _pad7: 0,
+            hm5m_cos_rot: self.hm5m_cos_rot,
+            hm5m_sin_rot: self.hm5m_sin_rot,
             hm1m_origin_x: self.hm1m_origin_x,
             hm1m_origin_y: self.hm1m_origin_y,
             hm1m_extent_x: self.hm1m_extent_x,
@@ -916,6 +928,10 @@ impl GpuScene {
             hm1m_rows: self.hm1m_rows,
             max_terrain_h: self.max_terrain_h,
             smooth_radius_m,
+            hm1m_cos_rot: self.hm1m_cos_rot,
+            hm1m_sin_rot: self.hm1m_sin_rot,
+            _pad8: 0.0,
+            _pad9: 0.0,
         };
 
         self.gpu_ctx

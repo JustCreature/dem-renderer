@@ -96,18 +96,25 @@ impl App {
                 prepared,
                 surface,
             } => {
+                let alignment_key = settings.alignment_key();
+                let (align5m, align1m) = settings.current_alignment();
                 let viewer = viewer::Viewer::from_launcher(
                     prepared,
                     window,
                     surface,
                     settings.tile_5m_path.as_path(),
                     Some(settings.tiles_1m_dir.as_path()),
+                    settings.tiles_refinement,
+                    settings.selected_view.clone(),
                     settings.vsync || self.vsync_override,
                     settings.shadows_enabled,
                     settings.fog_enabled,
                     settings.vat_mode,
                     settings.lod_mode,
                     settings.ao_mode,
+                    align5m,
+                    align1m,
+                    alignment_key,
                 );
                 self.phase = Phase::Viewer(viewer);
                 // Drive resumed() manually so the surface and HUD are configured

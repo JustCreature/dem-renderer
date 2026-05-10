@@ -189,6 +189,7 @@ impl LauncherApp {
             .expect("gpu_ctx must be initialised before begin_loading")
             .clone();
         let tile_path = self.settings.tile_5m_path.clone();
+        let single_file_mode = self.settings.selected_view == SelectedView::CustomFile;
 
         std::thread::spawn(move || {
             let prepared = crate::viewer::scene_init::prepare_scene_with_ctx(
@@ -198,6 +199,7 @@ impl LauncherApp {
                 WINDOW_H,
                 DEFAULT_CAM_LAT,
                 DEFAULT_CAM_LON,
+                single_file_mode,
                 |frac, label| {
                     let _ = tx.send(LoadProgress {
                         frac,

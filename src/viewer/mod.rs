@@ -90,6 +90,11 @@ pub(crate) struct Viewer {
     // mode-specific sliding state (only one is Some)
     glo30: Option<Glo30State>,
     bev_base: Option<BevBaseState>,
+    // tier alignment correction: (dx_m, dy_m, rot_deg)
+    align5m: (f32, f32, f32),
+    align1m: (f32, f32, f32),
+    // key under which alignment is saved in config.toml (view name or file stem)
+    alignment_key: String,
 }
 
 impl ApplicationHandler for Viewer {
@@ -460,6 +465,9 @@ impl ApplicationHandler for Viewer {
                         self.scene.as_mut().unwrap().upload_hm5m(
                             origin_x,
                             origin_y,
+                            self.align5m.0,
+                            self.align5m.1,
+                            self.align5m.2.to_radians(),
                             &data.hm,
                             &data.normals,
                             &data.shadow,
@@ -479,15 +487,31 @@ impl ApplicationHandler for Viewer {
                     // ── 1 m fine tier ──
                     if let Some(ref mut fine) = bev_base.fine {
                         if let Some(data) = fine.try_recv() {
-                            // data.hm.crs_origin_x/y is in EPSG:3035; convert to EPSG:31287 tile-local
-                            let (lat, lon) =
-                                laea_epsg3035_inverse(data.hm.crs_origin_x, data.hm.crs_origin_y);
-                            let (e31287, n31287) = lcc_epsg31287(lat, lon);
-                            let origin_x = (e31287 - self.hm.crs_origin_x) as f32;
-                            let origin_y = (self.hm.crs_origin_y - n31287) as f32;
+                            // Compute fine-tier origin relative to the base heightmap.
+                            // Same-CRS: direct subtraction (single-file mode, both in same EPSG).
+                            // Cross-CRS: 1m tile is in EPSG:3035, base is in EPSG:31287 — convert.
+                            let (origin_x, origin_y) = if data.hm.crs_epsg == self.hm.crs_epsg {
+                                (
+                                    (data.hm.crs_origin_x - self.hm.crs_origin_x) as f32,
+                                    (self.hm.crs_origin_y - data.hm.crs_origin_y) as f32,
+                                )
+                            } else {
+                                let (lat, lon) = laea_epsg3035_inverse(
+                                    data.hm.crs_origin_x,
+                                    data.hm.crs_origin_y,
+                                );
+                                let (e31287, n31287) = lcc_epsg31287(lat, lon);
+                                (
+                                    (e31287 - self.hm.crs_origin_x) as f32,
+                                    (self.hm.crs_origin_y - n31287) as f32,
+                                )
+                            };
                             self.scene.as_mut().unwrap().upload_hm1m(
                                 origin_x,
                                 origin_y,
+                                self.align1m.0,
+                                self.align1m.1,
+                                self.align1m.2.to_radians(),
                                 &data.hm,
                                 &data.normals,
                                 &data.shadow,
@@ -579,6 +603,8 @@ impl ApplicationHandler for Viewer {
                         self.vat_mode,
                         self.lod_mode,
                         self.smooth_radius_m,
+                        self.align5m,
+                        self.align1m,
                     );
                 }
 
@@ -675,6 +701,141 @@ impl ApplicationHandler for Viewer {
                             winit::event::ElementState::Released => {
                                 self.speed_boost = false;
                             }
+                        }
+                        return;
+                    }
+                    // 5m tier: Ctrl+I/J/K/L → translation, Ctrl+[/] → rotation.
+                    // 1m tier: Ctrl+Alt+Arrows → translation, Ctrl+Alt+[/] → rotation.
+                    // Ctrl+S → save to config.toml.
+                    // (Ctrl+Arrows is macOS-reserved for Mission Control — not usable.)
+                    let ctrl = self.keys_held.contains(&KeyCode::ControlLeft)
+                        || self.keys_held.contains(&KeyCode::ControlRight);
+                    // speed_boost is set by AltLeft/SuperLeft handler above.
+                    let alt = self.speed_boost;
+                    if ctrl && event.state == winit::event::ElementState::Pressed {
+                        let step_m = 10.0_f32;
+                        let step_rot = 0.01_f32; // degrees
+                        let mut realign = false;
+                        match kc {
+                            // 5m translation: I=north, K=south, J=west, L=east
+                            KeyCode::KeyI => {
+                                self.align5m.1 += step_m;
+                                realign = true;
+                            }
+                            KeyCode::KeyK => {
+                                self.align5m.1 -= step_m;
+                                realign = true;
+                            }
+                            KeyCode::KeyJ => {
+                                self.align5m.0 -= step_m;
+                                realign = true;
+                            }
+                            KeyCode::KeyL => {
+                                self.align5m.0 += step_m;
+                                realign = true;
+                            }
+                            // 1m translation: Ctrl+Alt+Arrows
+                            KeyCode::ArrowRight => {
+                                if alt {
+                                    self.align1m.0 += step_m;
+                                    realign = true;
+                                }
+                            }
+                            KeyCode::ArrowLeft => {
+                                if alt {
+                                    self.align1m.0 -= step_m;
+                                    realign = true;
+                                }
+                            }
+                            KeyCode::ArrowUp => {
+                                if alt {
+                                    self.align1m.1 += step_m;
+                                    realign = true;
+                                }
+                            }
+                            KeyCode::ArrowDown => {
+                                if alt {
+                                    self.align1m.1 -= step_m;
+                                    realign = true;
+                                }
+                            }
+                            // Rotation: [/] → 5m, Alt+[/] → 1m
+                            KeyCode::BracketLeft => {
+                                if alt {
+                                    self.align1m.2 -= step_rot;
+                                } else {
+                                    self.align5m.2 -= step_rot;
+                                }
+                                realign = true;
+                            }
+                            KeyCode::BracketRight => {
+                                if alt {
+                                    self.align1m.2 += step_rot;
+                                } else {
+                                    self.align5m.2 += step_rot;
+                                }
+                                realign = true;
+                            }
+                            KeyCode::KeyS => {
+                                // Save alignment to config.toml under the current view/tile key.
+                                let mut settings = crate::launcher::LauncherSettings::load();
+                                let entry = settings
+                                    .alignment
+                                    .entry(self.alignment_key.clone())
+                                    .or_default();
+                                entry.tier5m_dx = self.align5m.0;
+                                entry.tier5m_dy = self.align5m.1;
+                                entry.tier5m_rot_deg = self.align5m.2;
+                                entry.tier1m_dx = self.align1m.0;
+                                entry.tier1m_dy = self.align1m.1;
+                                entry.tier1m_rot_deg = self.align1m.2;
+                                settings.save();
+                                println!(
+                                    "alignment saved [{}]  5m=({:.0}m, {:.0}m, {:.3}°)  1m=({:.0}m, {:.0}m, {:.3}°)",
+                                    self.alignment_key,
+                                    self.align5m.0,
+                                    self.align5m.1,
+                                    self.align5m.2,
+                                    self.align1m.0,
+                                    self.align1m.1,
+                                    self.align1m.2,
+                                );
+                            }
+                            KeyCode::KeyR => {
+                                // Reset alignment to zero
+                                self.align5m = (0.0, 0.0, 0.0);
+                                self.align1m = (0.0, 0.0, 0.0);
+                                if let Some(ref mut bev) = self.bev_base {
+                                    bev.close.invalidate();
+                                    if let Some(ref mut fine) = bev.fine {
+                                        fine.invalidate();
+                                    }
+                                }
+                                println!("alignment reset to zero");
+                            }
+                            _ => {}
+                        }
+                        if realign {
+                            // Immediately re-upload both tiers with new alignment so the
+                            // change is visible without waiting for the next drift reload.
+                            // The scene stores the last-uploaded data but we only have the
+                            // alignment params here — the next drift cycle will apply them.
+                            // For immediate feedback, invalidate tiers to force a reload.
+                            if let Some(ref mut bev) = self.bev_base {
+                                bev.close.invalidate();
+                                if let Some(ref mut fine) = bev.fine {
+                                    fine.invalidate();
+                                }
+                            }
+                            println!(
+                                "align  5m=({:.0}m, {:.0}m, {:.3}°)  1m=({:.0}m, {:.0}m, {:.3}°)",
+                                self.align5m.0,
+                                self.align5m.1,
+                                self.align5m.2,
+                                self.align1m.0,
+                                self.align1m.1,
+                                self.align1m.2,
+                            );
                         }
                         return;
                     }
@@ -792,12 +953,17 @@ impl Viewer {
         surface: wgpu::Surface<'static>,
         tile_path: &Path,
         tiles_1m_dir: Option<&Path>,
+        tiles_refinement: bool,
+        selected_view: crate::launcher::SelectedView,
         vsync: bool,
         shadows_enabled: bool,
         fog_enabled: bool,
         vat_mode: u32,
         lod_mode: u32,
         ao_mode: u32,
+        align5m: (f32, f32, f32),
+        align1m: (f32, f32, f32),
+        alignment_key: String,
     ) -> Self {
         // Named camera position: Hintertux glacier tongue, WGS84.
         // Converted to tile-local metres at runtime — works for any tile that contains this point.
@@ -856,37 +1022,62 @@ impl Viewer {
         let glo30: Option<Glo30State>;
         let bev_base: Option<BevBaseState>;
 
-        if hm.crs_epsg == 31287 {
-            // BEV COG mode: three resolution tiers (base IFD-2/1, close 5m IFD-0, fine 1m tiles).
-            // IFD levels for this file:
-            //   IFD-0 = 5 m/px  — full resolution, always present by TIFF spec
-            //   IFD-1 ≈ 10 m/px — first overview (optional)
-            //   IFD-2 ≈ 20 m/px — second overview (optional)
-            // We render two tiers: a wide base at BEV_BASE_IFD (falls back to IFD-1 if absent)
-            // and a close 5 m window at IFD-0.  IFD-0 is NOT viable for the 60 km base window
-            // (~12 000×12 000 px at 5 m/px, exceeds the wgpu 8 192-pixel texture limit).
+        let is_tirol_demo_view = selected_view == crate::launcher::SelectedView::DemoView;
+        let is_single_file = selected_view == crate::launcher::SelectedView::CustomFile;
+
+        if is_tirol_demo_view {
+            // Tirol demo view: BEV DGM covering all of Austria (EPSG:31287), Hintertux hardcoded.
+            // IFD-0 = 5 m/px (close tier), wider IFD levels for the base panorama.
+            // This block is stable — never add single_file_mode guards here.
             glo30 = None;
             let (init_e, init_n) = lcc_epsg31287(CAM_LAT, CAM_LON);
+            let effective_1m_dir = if tiles_refinement { tiles_1m_dir } else { None };
             bev_base = Some(BevBaseState::new(
                 tile_path,
+                31287,
+                false,
                 lat_rad,
                 init_e,
                 init_n,
                 &hm,
-                tiles_1m_dir,
+                effective_1m_dir,
+                align5m,
+                align1m,
                 &mut scene,
             ));
-        } else if hm.crs_epsg == 4326 {
-            // GLO-30 mode: sliding 3×3 Copernicus tile grid.
-            bev_base = None;
-            let tiles_dir = tile_path
-                .parent()
-                .and_then(|p| p.parent())
-                .unwrap_or(Path::new("tiles"))
-                .to_path_buf();
-            glo30 = Some(Glo30State::new(&tiles_dir, lat_rad, CAM_LAT, CAM_LON));
+        } else if is_single_file {
+            // Single-file mode: user picked one tile; CRS and position are derived from the file.
+            glo30 = None;
+            match hm.crs_epsg {
+                31287 | 3035 => {
+                    // Projected tile (BEV DGM 5m or 1m LiDAR): all tiers from the same file
+                    // at different IFD levels.  Position anchored to tile geometry, not Hintertux.
+                    let (init_e, init_n) = (
+                        hm.crs_origin_x + init_cam_pos[0] as f64,
+                        hm.crs_origin_y - init_cam_pos[1] as f64,
+                    );
+                    let native_px_m = dem_io::geotiff_pixel_scale(tile_path);
+                    let is_1m_native = native_px_m <= 1.5;
+                    bev_base = Some(BevBaseState::new(
+                        tile_path,
+                        hm.crs_epsg,
+                        is_1m_native,
+                        lat_rad,
+                        init_e,
+                        init_n,
+                        &hm,
+                        None,
+                        align5m,
+                        align1m,
+                        &mut scene,
+                    ));
+                }
+                _ => {
+                    // Single GLO-30 (EPSG:4326) or unknown CRS — static base tier, no streaming.
+                    bev_base = None;
+                }
+            }
         } else {
-            // EPSG:3035 single tile (Hintertux-style) — static, no sliding
             glo30 = None;
             bev_base = None;
         }
@@ -937,6 +1128,9 @@ impl Viewer {
             hm,
             glo30,
             bev_base,
+            align5m,
+            align1m,
+            alignment_key,
         }
     }
 }
