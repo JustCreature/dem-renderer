@@ -1080,4 +1080,7 @@ impl GpuScene {
     pub fn get_dy_meters(&self) -> f32 {
         self.dy_meters
     }
+    pub fn max_texture_dim(&self) -> usize {
+        self.gpu_ctx.device.limits().max_texture_dimension_2d as usize
+    }
 }
