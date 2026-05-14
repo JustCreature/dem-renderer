@@ -314,21 +314,35 @@ pub fn extract_window(
     let dx_meters = scale[0] * (full_cols as f64 / cols as f64);
     let dy_meters = scale[1] * (full_rows as f64 / rows as f64);
 
-    let cx = (centre_crs.0 - crs_origin_x) / dx_meters;
-    let cy = (crs_origin_y - centre_crs.1) / dy_meters;
-
-    let (lat, lon) = match crs_epsg {
-        3035 => laea_epsg3035_inverse(centre_crs.0, centre_crs.1),
-        31287 => laea_epsg31287_inverse(centre_crs.0, centre_crs.1),
-        v => panic!("not supporger geo format received: {:?}", v),
-    };
-
     let radius_px_x = (radius_m / dx_meters) as isize;
     let radius_px_y = (radius_m / dy_meters) as isize;
+
+    let mut cx = (centre_crs.0 - crs_origin_x) / dx_meters;
+    let mut cy = (crs_origin_y - centre_crs.1) / dy_meters;
+
+    // If the requested window misses the tile entirely (CRS mismatch or wrong region),
+    // snap to the tile centre so the function always returns valid terrain data.
+    if (cx as isize + radius_px_x) <= 0 || (cx as isize - radius_px_x) >= cols as isize {
+        cx = cols as f64 / 2.0;
+    }
+    if (cy as isize + radius_px_y) <= 0 || (cy as isize - radius_px_y) >= rows as isize {
+        cy = rows as f64 / 2.0;
+    }
+
+    // Derive lat/lon from the actual (possibly snapped) CRS position so the
+    // returned Heightmap records the centre of the data that was loaded.
+    let actual_crs_x = crs_origin_x + cx * dx_meters;
+    let actual_crs_y = crs_origin_y - cy * dy_meters;
+    let (lat, lon) = match crs_epsg {
+        3035 => laea_epsg3035_inverse(actual_crs_x, actual_crs_y),
+        31287 => laea_epsg31287_inverse(actual_crs_x, actual_crs_y),
+        v => panic!("unsupported CRS: {v}"),
+    };
+
     let px0 = (cx as isize - radius_px_x).max(0) as usize;
-    let px1 = (cx as isize + radius_px_x).min(cols as isize) as usize;
+    let px1 = (cx as isize + radius_px_x).max(0).min(cols as isize) as usize;
     let py0 = (cy as isize - radius_px_y).max(0) as usize;
-    let py1 = (cy as isize + radius_px_y).min(rows as isize) as usize;
+    let py1 = (cy as isize + radius_px_y).max(0).min(rows as isize) as usize;
 
     let out_w = px1 - px0;
     let out_h = py1 - py0;

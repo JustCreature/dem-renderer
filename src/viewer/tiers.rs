@@ -1,7 +1,7 @@
 use std::path::Path;
 use std::sync::{Arc, mpsc};
 
-use dem_io::{Heightmap, extract_window, load_grid, parse_geotiff, stitch_windows};
+use dem_io::{Heightmap, crop, extract_window, load_grid, parse_geotiff, stitch_windows};
 use render_gpu::GpuScene;
 use terrain::{NormalMap, ShadowMask};
 
@@ -203,6 +203,19 @@ pub(super) struct BevBaseState {
     pub(super) fine: Option<StreamingTier>, // fine window, 1 m/px (1m tile IFD-0); None if no 1m tiles available
 }
 
+/// Crop a heightmap to fit within the GPU texture dimension limit.
+/// Trims equally from both sides so the loaded area stays centred.
+fn crop_to_gpu_limit(hm: Heightmap, max_dim: usize) -> Heightmap {
+    if hm.cols <= max_dim && hm.rows <= max_dim {
+        return hm;
+    }
+    let crop_cols = hm.cols.min(max_dim);
+    let crop_rows = hm.rows.min(max_dim);
+    let col_start = (hm.cols - crop_cols) / 2;
+    let row_start = (hm.rows - crop_rows) / 2;
+    crop(&hm, row_start, col_start, crop_rows, crop_cols)
+}
+
 impl BevBaseState {
     /// Spawn all three background worker threads and return the populated state.
     /// Also performs a blocking initial 5m load so the viewer starts with close detail visible.
@@ -266,6 +279,8 @@ impl BevBaseState {
             }
         });
 
+        let max_tex_dim = scene.max_texture_dim();
+
         // ── 5m close-tier drift worker ─────────────────────────────────────────────────
         // 5m close-tier drift worker: loads a BEV_5M_RADIUS_M window at IFD-0 (5 m/px)
         // each time the camera drifts BEV_5M_DRIFT_THRESHOLD_M from the last window centre.
@@ -285,6 +300,7 @@ impl BevBaseState {
                 ) else {
                     continue;
                 };
+                let hm5m = crop_to_gpu_limit(hm5m, max_tex_dim);
                 let hm5m = Arc::new(hm5m);
                 let normals = terrain::compute_normals_vector_par(&hm5m);
                 let (az, el) = sun_position(lat_rad_5m, INIT_SIM_DAY, INIT_SIM_HOUR);
@@ -316,7 +332,7 @@ impl BevBaseState {
         if let Ok(hm5m_init) =
             extract_window(tile_path, (init_e, init_n), BEV_5M_RADIUS_M, 0, 31287)
         {
-            let hm5m_init = Arc::new(hm5m_init);
+            let hm5m_init = Arc::new(crop_to_gpu_limit(hm5m_init, max_tex_dim));
             // tile-local offset of the 5m window's top-left corner within the base heightmap:
             // X = difference in left-edge eastings (both in same CRS, so direct subtraction)
             // Y = base top-northing minus 5m top-northing (flips axis: CRS Y↑ → tile Y↓)
