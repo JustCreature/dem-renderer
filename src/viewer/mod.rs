@@ -31,7 +31,9 @@ use winit::{
 
 use crate::viewer::hud_renderer::HudRenderer;
 
-use self::geo::{laea_epsg3035_inverse, latlon_to_tile_metres, lcc_epsg31287, sun_position};
+use dem_io::{Wgs84Identity, estimate_alignment, read_projection};
+
+use self::geo::{latlon_to_tile_metres, sun_position};
 use self::scene_init::{INIT_SIM_DAY, INIT_SIM_HOUR, compute_ao_cropped};
 use self::tiers::{AO_DRIFT_THRESHOLD_M, BevBaseState, Glo30State};
 
@@ -346,9 +348,12 @@ impl ApplicationHandler for Viewer {
                             scene.update_shadow(&bundle.shadow);
                             scene.set_hm5m_inactive();
                         }
-                        if let Some((nx, ny)) =
-                            latlon_to_tile_metres(bundle.cam_lat, bundle.cam_lon, &bundle.hm)
-                        {
+                        if let Some((nx, ny)) = latlon_to_tile_metres(
+                            bundle.cam_lat,
+                            bundle.cam_lon,
+                            &bundle.hm,
+                            &Wgs84Identity,
+                        ) {
                             self.cam_pos[0] = nx;
                             self.cam_pos[1] = ny;
                         }
@@ -408,8 +413,8 @@ impl ApplicationHandler for Viewer {
                 if let Some(ref mut bev_base) = self.bev_base {
                     // ── base tier ──
                     if let Some(data) = bev_base.base.try_recv() {
-                        // re-project camera to new heightmap coords using absolute EPSG:31287 position
-                        let (easting, northing) = bev_epsg_pos(self.cam_pos, &self.hm);
+                        // re-project camera to new heightmap coords using absolute CRS position
+                        let (easting, northing) = bev_abs_pos(self.cam_pos, &self.hm);
                         self.cam_pos[0] = (easting - data.hm.crs_origin_x) as f32;
                         self.cam_pos[1] = (data.hm.crs_origin_y - northing) as f32;
                         {
@@ -452,7 +457,7 @@ impl ApplicationHandler for Viewer {
                         );
                     }
                     if !bev_base.base.computing {
-                        let (e, n) = bev_epsg_pos(self.cam_pos, &self.hm);
+                        let (e, n) = bev_abs_pos(self.cam_pos, &self.hm);
                         if bev_base.base.needs_reload(e, n) && bev_base.base.try_trigger(e, n) {
                             println!("BEV base reload triggered at ({e:.0}, {n:.0})");
                         }
@@ -462,6 +467,8 @@ impl ApplicationHandler for Viewer {
                     if let Some(data) = bev_base.close.try_recv() {
                         let origin_x = (data.hm.crs_origin_x - self.hm.crs_origin_x) as f32;
                         let origin_y = (self.hm.crs_origin_y - data.hm.crs_origin_y) as f32;
+                        bev_base.last_close_hm = Some(Arc::clone(&data.hm));
+                        bev_base.last_close_proj = Arc::clone(&data.proj);
                         self.scene.as_mut().unwrap().upload_hm5m(
                             origin_x,
                             origin_y,
@@ -478,7 +485,7 @@ impl ApplicationHandler for Viewer {
                         );
                     }
                     if !bev_base.close.computing {
-                        let (e, n) = bev_epsg_pos(self.cam_pos, &self.hm);
+                        let (e, n) = bev_abs_pos(self.cam_pos, &self.hm);
                         if bev_base.close.needs_reload(e, n) && bev_base.close.try_trigger(e, n) {
                             println!("5m reload triggered at ({e:.0}, {n:.0})");
                         }
@@ -487,30 +494,47 @@ impl ApplicationHandler for Viewer {
                     // ── 1 m fine tier ──
                     if let Some(ref mut fine) = bev_base.fine {
                         if let Some(data) = fine.try_recv() {
-                            // Compute fine-tier origin relative to the base heightmap.
-                            // Same-CRS: direct subtraction (single-file mode, both in same EPSG).
-                            // Cross-CRS: 1m tile is in EPSG:3035, base is in EPSG:31287 — convert.
-                            let (origin_x, origin_y) = if data.hm.crs_epsg == self.hm.crs_epsg {
-                                (
-                                    (data.hm.crs_origin_x - self.hm.crs_origin_x) as f32,
-                                    (self.hm.crs_origin_y - data.hm.crs_origin_y) as f32,
-                                )
-                            } else {
-                                let (lat, lon) = laea_epsg3035_inverse(
-                                    data.hm.crs_origin_x,
-                                    data.hm.crs_origin_y,
-                                );
-                                let (e31287, n31287) = lcc_epsg31287(lat, lon);
-                                (
-                                    (e31287 - self.hm.crs_origin_x) as f32,
-                                    (self.hm.crs_origin_y - n31287) as f32,
-                                )
-                            };
+                            // Convert fine-tier top-left corner from its own CRS to the base CRS.
+                            // Works for same-CRS (round-trip is identity) and cross-CRS alike.
+                            let (fine_lat, fine_lon) = data
+                                .proj
+                                .inverse(data.hm.crs_origin_x, data.hm.crs_origin_y);
+                            let (e_base, n_base) = bev_base.proj.forward(fine_lat, fine_lon);
+                            let origin_x = (e_base - self.hm.crs_origin_x) as f32;
+                            let origin_y = (self.hm.crs_origin_y - n_base) as f32;
+
+                            // Auto-align 1m against the most recent close-tier snapshot.
+                            let close_hm_snap = bev_base.last_close_hm.clone();
+                            let close_proj_snap = Arc::clone(&bev_base.last_close_proj);
+                            let computed_align1m =
+                                close_hm_snap.as_ref().and_then(|close_hm| {
+                                    let t = std::time::Instant::now();
+                                    let r = estimate_alignment(
+                                        close_hm,
+                                        &*close_proj_snap,
+                                        &data.hm,
+                                        &*data.proj,
+                                    );
+                                    match r {
+                                        Some((dx, dy)) => println!(
+                                            "auto-align 1m: ({:.1}m, {:.1}m)  ({:.2?})",
+                                            dx, dy, t.elapsed()
+                                        ),
+                                        None => println!(
+                                            "auto-align 1m: no overlap  ({:.2?})",
+                                            t.elapsed()
+                                        ),
+                                    }
+                                    r
+                                });
+                            let (eff1m_dx, eff1m_dy) =
+                                computed_align1m.unwrap_or((self.align1m.0, self.align1m.1));
+
                             self.scene.as_mut().unwrap().upload_hm1m(
                                 origin_x,
                                 origin_y,
-                                self.align1m.0,
-                                self.align1m.1,
+                                eff1m_dx,
+                                eff1m_dy,
                                 self.align1m.2.to_radians(),
                                 &data.hm,
                                 &data.normals,
@@ -522,7 +546,7 @@ impl ApplicationHandler for Viewer {
                             );
                         }
                         if !fine.computing {
-                            let (e, n) = bev_epsg_pos(self.cam_pos, &self.hm);
+                            let (e, n) = bev_abs_pos(self.cam_pos, &self.hm);
                             if fine.needs_reload(e, n) && fine.try_trigger(e, n) {
                                 println!("1m reload triggered at ({e:.0}, {n:.0})");
                             }
@@ -934,9 +958,8 @@ impl ApplicationHandler for Viewer {
     }
 }
 
-/// Convert tile-local camera position to absolute EPSG:31287 (easting, northing).
-/// Used for BEV drift detection; extracted to avoid repeating the same two lines.
-fn bev_epsg_pos(cam_pos: [f32; 3], hm: &Heightmap) -> (f64, f64) {
+/// Convert tile-local camera position to absolute CRS coordinates (easting, northing).
+fn bev_abs_pos(cam_pos: [f32; 3], hm: &Heightmap) -> (f64, f64) {
     let easting = cam_pos[0] as f64 + hm.crs_origin_x;
     let northing = hm.crs_origin_y - cam_pos[1] as f64;
     (easting, northing)
@@ -981,7 +1004,9 @@ impl Viewer {
         let dx: f32 = scene.get_dx_meters();
         let dy: f32 = scene.get_dy_meters();
 
-        let init_cam_pos = latlon_to_tile_metres(CAM_LAT, CAM_LON, &hm)
+        let hm_proj =
+            read_projection(tile_path).unwrap_or_else(|_| std::sync::Arc::new(Wgs84Identity));
+        let init_cam_pos = latlon_to_tile_metres(CAM_LAT, CAM_LON, &hm, &*hm_proj)
             .map(|(x, y)| [x, y, CAM_ELEV])
             .unwrap_or([2457.0 * dx, 3328.0 * dy, 3341.0]);
         let init_yaw = (19627.0_f32).atan2(1718.0_f32);
@@ -1025,16 +1050,24 @@ impl Viewer {
         let is_tirol_demo_view = selected_view == crate::launcher::SelectedView::DemoView;
         let is_single_file = selected_view == crate::launcher::SelectedView::CustomFile;
 
+        // For cross-CRS setups (e.g. GLO-30 base + BEV close), the base heightmap uses
+        // a different projection than the close/fine tiles.
+        let base_proj: std::sync::Arc<dyn dem_io::Projection> = if hm.dx_deg != 0.0 {
+            std::sync::Arc::new(Wgs84Identity)
+        } else {
+            std::sync::Arc::clone(&hm_proj)
+        };
+
         if is_tirol_demo_view {
-            // Tirol demo view: BEV DGM covering all of Austria (EPSG:31287), Hintertux hardcoded.
-            // IFD-0 = 5 m/px (close tier), wider IFD levels for the base panorama.
+            // Tirol demo view: BEV DGM covering all of Austria, Hintertux hardcoded.
             // This block is stable — never add single_file_mode guards here.
             glo30 = None;
-            let (init_e, init_n) = lcc_epsg31287(CAM_LAT, CAM_LON);
+            let (init_e, init_n) = hm_proj.forward(CAM_LAT, CAM_LON);
             let effective_1m_dir = if tiles_refinement { tiles_1m_dir } else { None };
             bev_base = Some(BevBaseState::new(
                 tile_path,
-                31287,
+                std::sync::Arc::clone(&hm_proj),
+                std::sync::Arc::clone(&base_proj),
                 false,
                 lat_rad,
                 init_e,
@@ -1046,41 +1079,46 @@ impl Viewer {
                 &mut scene,
             ));
         } else if is_single_file {
-            // Single-file mode: user picked one tile; CRS and position are derived from the file.
+            // Single-file mode: CRS and position derived from the file.
             glo30 = None;
-            match hm.crs_epsg {
-                31287 | 3035 => {
-                    // Projected tile (BEV DGM 5m or 1m LiDAR): all tiers from the same file
-                    // at different IFD levels.  Position anchored to tile geometry, not Hintertux.
-                    let (init_e, init_n) = (
-                        hm.crs_origin_x + init_cam_pos[0] as f64,
-                        hm.crs_origin_y - init_cam_pos[1] as f64,
-                    );
-                    let native_px_m = dem_io::geotiff_pixel_scale(tile_path);
-                    let is_1m_native = native_px_m <= 1.5;
-                    bev_base = Some(BevBaseState::new(
-                        tile_path,
-                        hm.crs_epsg,
-                        is_1m_native,
-                        lat_rad,
-                        init_e,
-                        init_n,
-                        &hm,
-                        None,
-                        align5m,
-                        align1m,
-                        &mut scene,
-                    ));
-                }
-                _ => {
-                    // Single GLO-30 (EPSG:4326) or unknown CRS — static base tier, no streaming.
-                    bev_base = None;
-                }
+            let native_px_m = dem_io::geotiff_pixel_scale(tile_path);
+            if native_px_m >= 1.0 {
+                // Projected tile: all tiers from the same file at different IFD levels.
+                let (init_e, init_n) = (
+                    hm.crs_origin_x + init_cam_pos[0] as f64,
+                    hm.crs_origin_y - init_cam_pos[1] as f64,
+                );
+                let is_1m_native = native_px_m <= 1.5;
+                bev_base = Some(BevBaseState::new(
+                    tile_path,
+                    std::sync::Arc::clone(&hm_proj),
+                    std::sync::Arc::clone(&base_proj),
+                    is_1m_native,
+                    lat_rad,
+                    init_e,
+                    init_n,
+                    &hm,
+                    None,
+                    align5m,
+                    align1m,
+                    &mut scene,
+                ));
+            } else {
+                // Geographic (GLO-30) or unknown CRS — static base tier, no streaming.
+                bev_base = None;
             }
         } else {
             glo30 = None;
             bev_base = None;
         }
+
+        // Auto-computed alignment always wins for dx/dy; saved config is only the fallback
+        // when phase correlation fails (no overlap between tiles).
+        // Rotation is not auto-detected — keep whatever was saved.
+        let align5m = match bev_base.as_ref().and_then(|b| b.computed_align5m) {
+            Some((dx, dy)) => (dx, dy, align5m.2),
+            None => align5m,
+        };
 
         Viewer {
             scene: Some(scene),

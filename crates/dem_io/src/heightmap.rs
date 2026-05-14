@@ -15,10 +15,11 @@ pub struct Heightmap {
     pub dy_meters: f64,  // real-world cell height (for normals in Phase 2)
     /// Raw tiepoint from the file in its native CRS units.
     /// Geographic (EPSG:4326): same as origin_lon / origin_lat (degrees).
-    /// Projected (EPSG:31287): easting / northing of the top-left corner (metres).
+    /// Projected: easting / northing of the top-left corner (metres).
+    /// Geographic: same as origin_lon / origin_lat.
     pub crs_origin_x: f64,
     pub crs_origin_y: f64,
-    pub crs_epsg: u32, // 4326 = geographic, 31287 = Austria Lambert, 3035 = LAEA Europe
+    pub crs_epsg: u32, // 4326 = geographic; 0 = projected (use Arc<dyn Projection> from read_projection)
 }
 
 #[derive(Debug)]
