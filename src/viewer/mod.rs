@@ -19,6 +19,8 @@ pub struct PreparedScene {
     pub lat_rad: f32,
     pub width: u32,
     pub height: u32,
+    /// Overview cache built during loading (for projected high-res tiles).
+    pub cache_path: Option<std::path::PathBuf>,
 }
 
 use winit::{
@@ -33,7 +35,7 @@ use crate::viewer::hud_renderer::HudRenderer;
 
 use self::geo::{latlon_to_tile_metres, sun_position};
 use self::scene_init::{INIT_SIM_DAY, INIT_SIM_HOUR, compute_ao_cropped};
-use self::tiers::{AO_DRIFT_THRESHOLD_M, BevBaseState, Glo30State};
+use self::tiers::{AO_DRIFT_THRESHOLD_M, BEV_BASE_DRIFT_THRESHOLD_M, BevBaseState, Glo30State};
 use crate::consts::GPU_SAFE_PX;
 
 pub(crate) struct Viewer {
@@ -419,6 +421,14 @@ impl ApplicationHandler for Viewer {
                             scene.set_hm1m_inactive();
                         }
                         self.hm = data.hm;
+                        // Recalibrate drift threshold to match the actual loaded window so we
+                        // don't reload more often than the window half-extent requires.
+                        let new_half_m = (self.hm.cols as f64 * self.hm.dx_meters)
+                            .min(self.hm.rows as f64 * self.hm.dy_meters)
+                            * 0.5;
+                        bev_base
+                            .base
+                            .update_threshold(BEV_BASE_DRIFT_THRESHOLD_M.min(new_half_m * 0.5));
                         // close and fine tier offsets were relative to the old base origin — must reload
                         bev_base.close.invalidate();
                         if let Some(ref mut fine) = bev_base.fine {
@@ -818,6 +828,7 @@ impl Viewer {
             lat_rad,
             width,
             height,
+            cache_path: prepared_cache_path,
         } = prepared;
         let dx: f32 = scene.get_dx_meters();
         let dy: f32 = scene.get_dy_meters();
@@ -880,26 +891,77 @@ impl Viewer {
         let is_projected = !dem_io::crs::is_geographic(&hm.crs_proj4);
 
         if is_projected {
-            // Projected-CRS COG: multi-tier streaming.  Read all IFD scales and pick the
-            // finest IFD that meets each tier's resolution + texture-size constraints.
-            let scales = dem_io::ifd_scales(tile_path)
+            // Projected-CRS COG: multi-tier streaming.
+            // The overview cache was built (if needed) during prepare_scene_with_ctx;
+            // pick it up from PreparedScene so we don't re-open the source tile here.
+            let orig_scales = dem_io::ifd_scales(tile_path)
                 .unwrap_or_else(|_| vec![dem_io::geotiff_pixel_scale(tile_path)]);
+
+            let cache_path = prepared_cache_path;
+
+            let tier_path: &Path = cache_path.as_deref().unwrap_or(tile_path);
+            let tier_scales = if cache_path.is_some() {
+                dem_io::ifd_scales(tier_path).unwrap_or_else(|_| orig_scales.clone())
+            } else {
+                orig_scales.clone()
+            };
+
+            // Close tier uses the cache only when the cache contains a sub-5m-equivalent
+            // IFD (i.e. the source was sub-5m and we built both close+base levels).
+            // For 5–20m sources the cache has only a single coarse base IFD; close
+            // continues to use the original file at its native resolution.
+            let use_cache_for_close = cache_path.is_some() && orig_scales[0] < 5.0;
+            let close_path: &Path = if use_cache_for_close {
+                tier_path
+            } else {
+                tile_path
+            };
+            let close_scales: Vec<f64> = if use_cache_for_close {
+                tier_scales.clone()
+            } else {
+                orig_scales.clone()
+            };
+
             // Close tier: pixel scale ≥ 5 m/px AND window fits in GPU_SAFE_PX
-            let close_ifd =
-                tiers::select_ifd(&scales, 5.0, tiers::BEV_5M_RADIUS_M, GPU_SAFE_PX as u32);
-            // Base tier: pixel scale ≥ 30 m/px AND window fits in GPU_SAFE_PX
-            let base_ifd =
-                tiers::select_ifd(&scales, 30.0, tiers::BEV_BASE_RADIUS_M, GPU_SAFE_PX as u32);
-            // Fine tier: when the tile itself is sub-5 m, use it directly at IFD-0.
-            // This takes priority over the separate 1m-tiles directory — they both serve
-            // the same purpose and a direct extract is simpler and always correct.
-            // The directory scan (variant a) is only used when the main tile is coarser.
-            let fine_ifd = if scales[0] < 5.0 { Some(0usize) } else { None };
-            println!(
-                "streaming IFDs: base={base_ifd} ({:.1}m), close={close_ifd} ({:.1}m), fine={fine_ifd:?}",
-                scales.get(base_ifd).copied().unwrap_or(0.0),
-                scales.get(close_ifd).copied().unwrap_or(0.0),
+            let close_ifd = tiers::select_ifd(
+                &close_scales,
+                5.0,
+                tiers::BEV_5M_RADIUS_M,
+                GPU_SAFE_PX as u32,
             );
+            // Base tier: pixel scale ≥ 30 m/px AND window fits in GPU_SAFE_PX
+            let base_ifd = tiers::select_ifd(
+                &tier_scales,
+                30.0,
+                tiers::BEV_BASE_RADIUS_M,
+                GPU_SAFE_PX as u32,
+            );
+            // Fine tier: always uses the original file at IFD-0 when source is sub-5m.
+            let fine_ifd = if orig_scales[0] < 5.0 {
+                Some(0usize)
+            } else {
+                None
+            };
+
+            let base_src = if cache_path.is_some() {
+                "cache"
+            } else {
+                "orig"
+            };
+            let close_src = if use_cache_for_close { "cache" } else { "orig" };
+            let fine_str = match fine_ifd {
+                Some(ifd) => format!(
+                    "orig[{ifd}] ({:.1}m)",
+                    orig_scales.get(ifd).copied().unwrap_or(0.0)
+                ),
+                None => "none".to_string(),
+            };
+            println!(
+                "streaming IFDs: base={base_src}[{base_ifd}] ({:.1}m), close={close_src}[{close_ifd}] ({:.1}m), fine={fine_str}",
+                tier_scales.get(base_ifd).copied().unwrap_or(0.0),
+                close_scales.get(close_ifd).copied().unwrap_or(0.0),
+            );
+
             glo30 = None;
             let tile_min_e = hm.crs_origin_x;
             let tile_max_e = hm.crs_origin_x + hm.cols as f64 * hm.dx_meters;
@@ -916,6 +978,8 @@ impl Viewer {
                 ));
             bev_base = Some(BevBaseState::new(
                 tile_path,
+                tier_path,
+                close_path,
                 lat_rad,
                 init_e,
                 init_n,

@@ -2,6 +2,7 @@ pub mod crs;
 mod geotiff;
 mod grid;
 mod heightmap;
+mod overview;
 
 pub use crs::get_tile_epsg;
 pub use geotiff::{
@@ -9,5 +10,6 @@ pub use geotiff::{
 };
 pub use grid::{assemble_grid, crop, load_grid, stitch_windows};
 pub use heightmap::{Heightmap, parse_bil};
+pub use overview::{BASE_OVERVIEW_TARGET_M, CLOSE_OVERVIEW_TARGET_M, ensure_overview_cache};
 
 pub(crate) type DemError = Box<dyn std::error::Error>;

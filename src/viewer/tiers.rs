@@ -214,6 +214,13 @@ impl StreamingTier {
         self.last_cx = 0.0;
         self.last_cy = 0.0;
     }
+
+    /// Update the drift threshold to match the actual loaded window half-extent.
+    /// Called after a base tier reload so the threshold reflects the real window size
+    /// rather than the initial (potentially much smaller) estimate.
+    pub(super) fn update_threshold(&mut self, new_threshold_m: f64) {
+        self.drift_threshold_m = new_threshold_m;
+    }
 }
 
 /// Result sent by the GLO-30 background tile-slide worker to the event loop when
@@ -267,7 +274,9 @@ impl BevBaseState {
     /// `fine_ifd`: Some(ifd) → use `tile_path` at that IFD level for the 1m fine tier
     ///             (used when `tile_path` is itself a sub-5m tile and no separate 1m dir exists).
     pub(super) fn new(
-        tile_path: &Path,
+        tile_path: &Path,  // original file — always used by the fine worker
+        base_path: &Path,  // overview cache or original — used by the base worker
+        close_path: &Path, // overview cache (sub-5m sources) or original — used by the close worker
         lat_rad: f32,
         init_e: f64,
         init_n: f64,
@@ -281,7 +290,7 @@ impl BevBaseState {
         // ── base drift worker ──────────────────────────────────────────────────────────
         // loads BEV_BASE_RADIUS_M at the dynamically selected base_ifd each time
         // the camera drifts past the effective base threshold (see below)
-        let tile_path_base = tile_path.to_path_buf();
+        let tile_path_base = base_path.to_path_buf();
         let (base_tx, base_worker_rx) = mpsc::sync_channel::<(f64, f64)>(1);
         let (base_worker_tx, base_rx) = mpsc::channel::<TierData>();
         let lat_rad_w = lat_rad;
@@ -321,7 +330,7 @@ impl BevBaseState {
         // ── close-tier drift worker ────────────────────────────────────────────────────
         // loads BEV_5M_RADIUS_M at the dynamically selected close_ifd each time
         // the camera drifts past the effective close threshold (see below)
-        let tile_path_5m = tile_path.to_path_buf();
+        let tile_path_5m = close_path.to_path_buf();
         let (hm5m_tx, hm5m_worker_rx) = mpsc::sync_channel::<(f64, f64)>(1);
         let (hm5m_worker_tx, hm5m_rx) = mpsc::channel::<TierData>();
         let lat_rad_5m = lat_rad;
@@ -366,7 +375,7 @@ impl BevBaseState {
         // Adjusted below once the close window is known; falls back to constant if load fails.
         let mut effective_close_threshold = BEV_5M_DRIFT_THRESHOLD_M;
         if let Ok(hm5m_init) =
-            extract_window(tile_path, (init_e, init_n), BEV_5M_RADIUS_M, close_ifd)
+            extract_window(close_path, (init_e, init_n), BEV_5M_RADIUS_M, close_ifd)
         {
             let hm5m_init = cap_to_gpu_limit(hm5m_init, init_e, init_n);
             // When the GPU cap shrinks the window below BEV_5M_RADIUS_M (e.g. 1m tiles with no
