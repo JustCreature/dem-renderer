@@ -18,7 +18,8 @@ pub struct Heightmap {
     /// Projected (EPSG:31287): easting / northing of the top-left corner (metres).
     pub crs_origin_x: f64,
     pub crs_origin_y: f64,
-    pub crs_epsg: u32, // 4326 = geographic, 31287 = Austria Lambert, 3035 = LAEA Europe
+    pub crs_epsg: u32,
+    pub crs_proj4: String, // proj4 string for the tile's native CRS
 }
 
 #[derive(Debug)]
@@ -248,6 +249,7 @@ pub fn parse_bil(bil_path: &Path) -> Result<Heightmap, DemError> {
         crs_origin_x: hdr_map.origin_lon,
         crs_origin_y: hdr_map.origin_lat,
         crs_epsg: 4326,
+        crs_proj4: "+proj=longlat +datum=WGS84 +no_defs".to_string(),
     };
 
     build_grayscale_png(&heightmap, hdr_map.cols, hdr_map.rows);

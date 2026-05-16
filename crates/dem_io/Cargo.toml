@@ -6,4 +6,7 @@ edition = "2024"
 [dependencies]
 image = "0.25"
 tiff = "0.11.3"
+proj4rs = "0.1"
+proj4wkt = "0.1"
+crs-definitions = "0.4"
 

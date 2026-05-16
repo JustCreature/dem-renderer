@@ -1,11 +1,12 @@
 use std::path::Path;
 use std::sync::Arc;
 
-use dem_io::{Heightmap, crop, extract_window, geotiff_pixel_scale, load_grid};
+use dem_io::{Heightmap, crop, extract_window, load_grid};
 use render_gpu::{GpuContext, GpuScene};
 
-use super::geo::{latlon_to_tile_metres, lcc_epsg31287, sun_position};
-use super::tiers::{AO_RADIUS_M, BEV_BASE_IFD, BEV_BASE_RADIUS_M};
+use super::geo::{latlon_to_tile_metres, sun_position};
+use super::tiers::{AO_RADIUS_M, BEV_BASE_RADIUS_M, cap_to_gpu_limit, select_ifd};
+use crate::consts::GPU_SAFE_PX;
 
 // Day 172 = June 21 (summer solstice). Must match sim_day / sim_hour in the Viewer init
 // and the initial shadow computed by prepare_scene — changing one without the others
@@ -47,28 +48,50 @@ pub(crate) fn prepare_scene_with_ctx(
     cam_lon: f64,
     report: impl Fn(f32, &str),
 ) -> crate::viewer::PreparedScene {
-    let scale = geotiff_pixel_scale(tile_path);
-
     report(0.05, "Reading terrain data…");
-    let hm = if scale >= 1.0 {
-        // Projected DGM tile (EPSG:31287, BEV COG).
-        // Try BEV_BASE_IFD (≈20 m/px) first; fall back to IFD-1 (≈10 m/px) if that
-        // overview is absent.  If both fail we assume the file is an EPSG:3035 single tile
-        // (e.g. Hintertux) and load it in full.
-        let centre_crs = lcc_epsg31287(cam_lat, cam_lon);
+
+    // Detect GLO-30 by directory naming convention, not pixel scale.
+    let is_glo30 = tile_path
+        .to_str()
+        .map_or(false, |s| s.contains("Copernicus_DSM_COG_"));
+
+    let hm = if is_glo30 {
+        let tiles_dir = tile_path
+            .parent()
+            .and_then(|p| p.parent())
+            .unwrap_or(Path::new("tiles"));
+        let centre_lat = cam_lat.floor() as i32;
+        let centre_lon = cam_lon.floor() as i32;
         let t0 = std::time::Instant::now();
-        match extract_window(
-            tile_path,
-            centre_crs,
-            BEV_BASE_RADIUS_M,
-            BEV_BASE_IFD,
-            31287,
-        )
-        .or_else(|_| extract_window(tile_path, centre_crs, BEV_BASE_RADIUS_M, 1, 31287))
-        {
+        let hm = load_grid(tiles_dir, centre_lat, centre_lon, |p| {
+            dem_io::parse_geotiff_auto(p).ok()
+        });
+        println!(
+            "GLO-30 3×3 grid: {}×{} at {:.4}°/px  ({:.2?})",
+            hm.cols,
+            hm.rows,
+            hm.dx_deg,
+            t0.elapsed()
+        );
+        hm
+    } else {
+        let proj4 = dem_io::crs::tile_proj4(tile_path).expect("failed to resolve CRS from tile");
+        let centre_crs = dem_io::crs::from_wgs84(cam_lat, cam_lon, &proj4)
+            .or_else(|_| dem_io::tile_centre_crs(tile_path))
+            .unwrap_or_else(|_| (0.0, 0.0)); // unreachable in practice; or_else third arm handles it
+        let t0 = std::time::Instant::now();
+        let scales = dem_io::ifd_scales(tile_path).unwrap_or_else(|_| vec![1.0]);
+        let base_ifd = select_ifd(&scales, 30.0, BEV_BASE_RADIUS_M, GPU_SAFE_PX as u32);
+        let loaded = match extract_window(tile_path, centre_crs, BEV_BASE_RADIUS_M, base_ifd)
+            .or_else(|_| extract_window(tile_path, centre_crs, BEV_BASE_RADIUS_M, 1))
+            .or_else(|_| {
+                // Camera outside tile — retry from tile geographic centre
+                dem_io::tile_centre_crs(tile_path)
+                    .and_then(|tc| extract_window(tile_path, tc, BEV_BASE_RADIUS_M, base_ifd))
+            }) {
             Ok(hm) => {
                 println!(
-                    "BEV base window: {}×{} at {:.1}m/px, elev {:.0}–{:.0}m  ({:.2?})",
+                    "window: {}×{} at {:.1}m/px, elev {:.0}–{:.0}m  ({:.2?})",
                     hm.cols,
                     hm.rows,
                     hm.dx_meters,
@@ -79,11 +102,10 @@ pub(crate) fn prepare_scene_with_ctx(
                 hm
             }
             Err(_) => {
-                // Single-tile EPSG:3035 (e.g. Hintertux) — load the full tile
-                let hm = dem_io::parse_geotiff_epsg_3035(tile_path)
-                    .expect("parse_geotiff_epsg_3035 failed — check tile path and CRS");
+                let hm = dem_io::parse_geotiff_auto(tile_path)
+                    .expect("parse_geotiff_auto failed — check tile path");
                 println!(
-                    "EPSG:3035 tile: {}×{} at {:.1}m/px, elev {:.0}–{:.0}m  ({:.2?})",
+                    "full tile: {}×{} at {:.1}m/px, elev {:.0}–{:.0}m  ({:.2?})",
                     hm.cols,
                     hm.rows,
                     hm.dx_meters,
@@ -93,27 +115,30 @@ pub(crate) fn prepare_scene_with_ctx(
                 );
                 hm
             }
+        };
+        // Crop to GPU-safe size when tile or clipped window still exceeds the limit.
+        // This happens for high-res tiles with no overviews (e.g. 1m NZ LiDAR, 24000 px wide).
+        if loaded.cols > GPU_SAFE_PX || loaded.rows > GPU_SAFE_PX {
+            println!(
+                "cropping oversized tile {}×{} → {}×{}",
+                loaded.cols,
+                loaded.rows,
+                GPU_SAFE_PX.min(loaded.cols),
+                GPU_SAFE_PX.min(loaded.rows)
+            );
         }
-    } else {
-        // GLO-30: stitch 3×3 Copernicus tiles
-        let tiles_dir = tile_path
-            .parent()
-            .and_then(|p| p.parent())
-            .unwrap_or(Path::new("tiles"));
-        let centre_lat = cam_lat.floor() as i32;
-        let centre_lon = cam_lon.floor() as i32;
-        let t0 = std::time::Instant::now();
-        let hm = load_grid(tiles_dir, centre_lat, centre_lon, |p| {
-            dem_io::parse_geotiff(p).ok()
-        });
-        println!(
-            "GLO-30 3×3 grid: {}×{} at {:.4}°/px  ({:.2?})",
-            hm.cols,
-            hm.rows,
-            hm.dx_deg,
-            t0.elapsed()
-        );
-        hm
+        let (centre_e, centre_n) = latlon_to_tile_metres(cam_lat, cam_lon, &loaded)
+            .map(|(x, y)| {
+                (
+                    loaded.crs_origin_x + x as f64,
+                    loaded.crs_origin_y - y as f64,
+                )
+            })
+            .unwrap_or((
+                loaded.crs_origin_x + loaded.cols as f64 * loaded.dx_meters * 0.5,
+                loaded.crs_origin_y - loaded.rows as f64 * loaded.dy_meters * 0.5,
+            ));
+        cap_to_gpu_limit(loaded, centre_e, centre_n)
     };
 
     report(0.30, "Computing surface normals…");

@@ -31,9 +31,10 @@ use winit::{
 
 use crate::viewer::hud_renderer::HudRenderer;
 
-use self::geo::{laea_epsg3035_inverse, latlon_to_tile_metres, lcc_epsg31287, sun_position};
+use self::geo::{latlon_to_tile_metres, sun_position};
 use self::scene_init::{INIT_SIM_DAY, INIT_SIM_HOUR, compute_ao_cropped};
 use self::tiers::{AO_DRIFT_THRESHOLD_M, BevBaseState, Glo30State};
+use crate::consts::GPU_SAFE_PX;
 
 pub(crate) struct Viewer {
     scene: Option<GpuScene>,
@@ -480,11 +481,17 @@ impl ApplicationHandler for Viewer {
                     if let Some(ref mut fine) = bev_base.fine {
                         if let Some(data) = fine.try_recv() {
                             // data.hm.crs_origin_x/y is in EPSG:3035; convert to EPSG:31287 tile-local
-                            let (lat, lon) =
-                                laea_epsg3035_inverse(data.hm.crs_origin_x, data.hm.crs_origin_y);
-                            let (e31287, n31287) = lcc_epsg31287(lat, lon);
-                            let origin_x = (e31287 - self.hm.crs_origin_x) as f32;
-                            let origin_y = (self.hm.crs_origin_y - n31287) as f32;
+                            let (lat, lon) = dem_io::crs::to_wgs84(
+                                data.hm.crs_origin_x,
+                                data.hm.crs_origin_y,
+                                &data.hm.crs_proj4,
+                            )
+                            .expect("1m tile origin to WGS84");
+                            let (e_base, n_base) =
+                                dem_io::crs::from_wgs84(lat, lon, &self.hm.crs_proj4)
+                                    .expect("1m tile origin to base CRS");
+                            let origin_x = (e_base - self.hm.crs_origin_x) as f32;
+                            let origin_y = (self.hm.crs_origin_y - n_base) as f32;
                             self.scene.as_mut().unwrap().upload_hm1m(
                                 origin_x,
                                 origin_y,
@@ -773,8 +780,8 @@ impl ApplicationHandler for Viewer {
     }
 }
 
-/// Convert tile-local camera position to absolute EPSG:31287 (easting, northing).
-/// Used for BEV drift detection; extracted to avoid repeating the same two lines.
+/// Convert tile-local camera position to absolute CRS coordinates (easting, northing).
+/// Used for drift detection; extracted to avoid repeating the same two lines.
 fn bev_epsg_pos(cam_pos: [f32; 3], hm: &Heightmap) -> (f64, f64) {
     let easting = cam_pos[0] as f64 + hm.crs_origin_x;
     let northing = hm.crs_origin_y - cam_pos[1] as f64;
@@ -817,7 +824,18 @@ impl Viewer {
 
         let init_cam_pos = latlon_to_tile_metres(CAM_LAT, CAM_LON, &hm)
             .map(|(x, y)| [x, y, CAM_ELEV])
-            .unwrap_or([2457.0 * dx, 3328.0 * dy, 3341.0]);
+            .unwrap_or_else(|| {
+                let cx = hm.cols as f32 * dx * 0.5;
+                let cy = hm.rows as f32 * dy * 0.5;
+                let center_i = (hm.rows / 2) * hm.cols + hm.cols / 2;
+                let elev = hm
+                    .data
+                    .get(center_i)
+                    .copied()
+                    .filter(|&v| v > -1000.0)
+                    .unwrap_or(1000.0);
+                [cx, cy, elev + 2000.0]
+            });
         let init_yaw = (19627.0_f32).atan2(1718.0_f32);
         let init_pitch = (-3472.0_f32).atan2(19702.0_f32);
 
@@ -856,17 +874,46 @@ impl Viewer {
         let glo30: Option<Glo30State>;
         let bev_base: Option<BevBaseState>;
 
-        if hm.crs_epsg == 31287 {
-            // BEV COG mode: three resolution tiers (base IFD-2/1, close 5m IFD-0, fine 1m tiles).
-            // IFD levels for this file:
-            //   IFD-0 = 5 m/px  — full resolution, always present by TIFF spec
-            //   IFD-1 ≈ 10 m/px — first overview (optional)
-            //   IFD-2 ≈ 20 m/px — second overview (optional)
-            // We render two tiers: a wide base at BEV_BASE_IFD (falls back to IFD-1 if absent)
-            // and a close 5 m window at IFD-0.  IFD-0 is NOT viable for the 60 km base window
-            // (~12 000×12 000 px at 5 m/px, exceeds the wgpu 8 192-pixel texture limit).
+        let is_glo30 = tile_path
+            .to_str()
+            .map_or(false, |s| s.contains("Copernicus_DSM_COG_"));
+        let is_projected = !dem_io::crs::is_geographic(&hm.crs_proj4);
+
+        if is_projected {
+            // Projected-CRS COG: multi-tier streaming.  Read all IFD scales and pick the
+            // finest IFD that meets each tier's resolution + texture-size constraints.
+            let scales = dem_io::ifd_scales(tile_path)
+                .unwrap_or_else(|_| vec![dem_io::geotiff_pixel_scale(tile_path)]);
+            // Close tier: pixel scale ≥ 5 m/px AND window fits in GPU_SAFE_PX
+            let close_ifd =
+                tiers::select_ifd(&scales, 5.0, tiers::BEV_5M_RADIUS_M, GPU_SAFE_PX as u32);
+            // Base tier: pixel scale ≥ 30 m/px AND window fits in GPU_SAFE_PX
+            let base_ifd =
+                tiers::select_ifd(&scales, 30.0, tiers::BEV_BASE_RADIUS_M, GPU_SAFE_PX as u32);
+            // Fine tier: when the tile itself is sub-5 m, use it directly at IFD-0.
+            // This takes priority over the separate 1m-tiles directory — they both serve
+            // the same purpose and a direct extract is simpler and always correct.
+            // The directory scan (variant a) is only used when the main tile is coarser.
+            let fine_ifd = if scales[0] < 5.0 { Some(0usize) } else { None };
+            println!(
+                "streaming IFDs: base={base_ifd} ({:.1}m), close={close_ifd} ({:.1}m), fine={fine_ifd:?}",
+                scales.get(base_ifd).copied().unwrap_or(0.0),
+                scales.get(close_ifd).copied().unwrap_or(0.0),
+            );
             glo30 = None;
-            let (init_e, init_n) = lcc_epsg31287(CAM_LAT, CAM_LON);
+            let tile_min_e = hm.crs_origin_x;
+            let tile_max_e = hm.crs_origin_x + hm.cols as f64 * hm.dx_meters;
+            let tile_min_n = hm.crs_origin_y - hm.rows as f64 * hm.dy_meters;
+            let tile_max_n = hm.crs_origin_y;
+            let (init_e, init_n) = dem_io::crs::from_wgs84(CAM_LAT, CAM_LON, &hm.crs_proj4)
+                .ok()
+                .filter(|&(e, n)| {
+                    e >= tile_min_e && e <= tile_max_e && n >= tile_min_n && n <= tile_max_n
+                })
+                .unwrap_or((
+                    (tile_min_e + tile_max_e) * 0.5,
+                    (tile_min_n + tile_max_n) * 0.5,
+                ));
             bev_base = Some(BevBaseState::new(
                 tile_path,
                 lat_rad,
@@ -875,8 +922,11 @@ impl Viewer {
                 &hm,
                 tiles_1m_dir,
                 &mut scene,
+                close_ifd,
+                base_ifd,
+                fine_ifd,
             ));
-        } else if hm.crs_epsg == 4326 {
+        } else if is_glo30 && !is_projected {
             // GLO-30 mode: sliding 3×3 Copernicus tile grid.
             bev_base = None;
             let tiles_dir = tile_path
@@ -886,7 +936,7 @@ impl Viewer {
                 .to_path_buf();
             glo30 = Some(Glo30State::new(&tiles_dir, lat_rad, CAM_LAT, CAM_LON));
         } else {
-            // EPSG:3035 single tile (Hintertux-style) — static, no sliding
+            // Geographic single tile — static, no sliding
             glo30 = None;
             bev_base = None;
         }

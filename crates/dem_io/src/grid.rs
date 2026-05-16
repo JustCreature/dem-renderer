@@ -65,6 +65,7 @@ pub fn assemble_grid(grid: &[[Option<&Heightmap>; 3]; 3]) -> Heightmap {
         crs_origin_x: nw_tile.crs_origin_x,
         crs_origin_y: nw_tile.crs_origin_y,
         crs_epsg: nw_tile.crs_epsg,
+        crs_proj4: nw_tile.crs_proj4.clone(),
     }
 }
 
@@ -118,6 +119,7 @@ pub fn stitch_windows(
         dx_meters: first.dx_meters,
         dy_meters: first.dy_meters,
         crs_epsg: first.crs_epsg,
+        crs_proj4: first.crs_proj4.clone(),
         origin_lat: first.origin_lat,
         origin_lon: first.origin_lon,
         dx_deg: first.dx_deg,
@@ -158,5 +160,6 @@ pub fn crop(
         crs_origin_x,
         crs_origin_y,
         crs_epsg: hm.crs_epsg,
+        crs_proj4: hm.crs_proj4.clone(),
     }
 }
