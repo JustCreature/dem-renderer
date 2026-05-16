@@ -14,3 +14,8 @@ pub(super) const DEFAULT_CAM_LON: f64 = 11.687592;
 pub(super) const DEFAULT_TILE_5M_PATH: &str = "tiles/big_size/DGM_R5.tif";
 
 pub(super) const TILES_BIG_PATH: &str = "tiles/big_size/";
+
+/// Maximum texture dimension accepted by wgpu without error.
+/// Applied before every GPU upload so tiles with no overviews (e.g. 1m NZ LiDAR, 24000px wide)
+/// never exceed the hardware texture dimension limit.
+pub(super) const GPU_SAFE_PX: usize = 8192;
