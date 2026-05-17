@@ -2,6 +2,7 @@ mod geo;
 mod hud_renderer;
 pub mod scene_init;
 mod tiers;
+pub(crate) mod tile_index;
 
 use std::path::Path;
 use std::sync::{Arc, mpsc};
@@ -35,8 +36,10 @@ use crate::viewer::hud_renderer::HudRenderer;
 
 use self::geo::{latlon_to_tile_metres, sun_position};
 use self::scene_init::{INIT_SIM_DAY, INIT_SIM_HOUR, compute_ao_cropped};
-use self::tiers::{AO_DRIFT_THRESHOLD_M, BEV_BASE_DRIFT_THRESHOLD_M, BevBaseState, Glo30State};
-use crate::consts::GPU_SAFE_PX;
+use self::tiers::{
+    AO_DRIFT_THRESHOLD_M, BEV_BASE_DRIFT_THRESHOLD_M, BevBaseState, cross_crs_world_origin,
+};
+use crate::consts::{GPU_SAFE_PX, M_PER_DEG};
 
 pub(crate) struct Viewer {
     scene: Option<GpuScene>,
@@ -90,8 +93,6 @@ pub(crate) struct Viewer {
     ao_last_y: f64,
     // base heightmap (shared with shadow worker; replaced on tile slide)
     hm: Arc<Heightmap>,
-    // mode-specific sliding state (only one is Some)
-    glo30: Option<Glo30State>,
     bev_base: Option<BevBaseState>,
 }
 
@@ -335,81 +336,16 @@ impl ApplicationHandler for Viewer {
                     }
                 }
 
-                // GLO-30 tile sliding
-                if let Some(ref mut glo30) = self.glo30 {
-                    if let Ok(bundle) = glo30.tile_rx.try_recv() {
-                        {
-                            let scene = self.scene.as_mut().unwrap();
-                            scene.update_heightmap(&bundle.hm, &bundle.normals, &bundle.ao);
-                            scene.update_shadow(&bundle.shadow);
-                            scene.set_hm5m_inactive();
-                        }
-                        if let Some((nx, ny)) =
-                            latlon_to_tile_metres(bundle.cam_lat, bundle.cam_lon, &bundle.hm)
-                        {
-                            self.cam_pos[0] = nx;
-                            self.cam_pos[1] = ny;
-                        }
-                        glo30.centre_lat = bundle.centre_lat;
-                        glo30.centre_lon = bundle.centre_lon;
-                        glo30.tile_loading = false;
-                        self.hm = bundle.hm;
-                        // respawn shadow worker with updated heightmap
-                        let (new_tx, new_worker_rx) = mpsc::sync_channel::<(f32, f32)>(1);
-                        let (new_worker_tx, new_rx) = mpsc::channel::<ShadowMask>();
-                        let old_tx = std::mem::replace(&mut self.shadow_tx, new_tx);
-                        let _ = std::mem::replace(&mut self.shadow_rx, new_rx);
-                        drop(old_tx);
-                        self.shadow_computing = false;
-                        let hm_w = Arc::clone(&self.hm);
-                        std::thread::spawn(move || {
-                            while let Ok((az, el)) = new_worker_rx.recv() {
-                                let mask = terrain::compute_shadow_vector_par_with_azimuth(
-                                    &hm_w, az, el, 200.0,
-                                );
-                                if new_worker_tx.send(mask).is_err() {
-                                    break;
-                                }
-                            }
-                        });
-                        println!("tile slid to N{}E{}", glo30.centre_lat, glo30.centre_lon);
-                    }
-                    if !glo30.tile_loading {
-                        // Convert tile-local metres → absolute WGS84 lon/lat to detect
-                        // which 1°×1° GLO-30 tile the camera is currently inside.
-                        // X: metres / (metres/px) * (degrees/px) + left-edge longitude
-                        // Y: top-edge latitude - same conversion (tile Y increases downward,
-                        //    latitude increases upward, hence the subtraction)
-                        let cam_lon_w = self.cam_pos[0] as f64 / self.hm.dx_meters * self.hm.dx_deg
-                            + self.hm.crs_origin_x;
-                        let cam_lat_w = self.hm.crs_origin_y
-                            - self.cam_pos[1] as f64 / self.hm.dy_meters * self.hm.dy_deg.abs();
-                        let new_lat = cam_lat_w.floor() as i32;
-                        let new_lon = cam_lon_w.floor() as i32;
-                        if new_lat != glo30.centre_lat || new_lon != glo30.centre_lon {
-                            if glo30
-                                .tile_tx
-                                .try_send((new_lat, new_lon, cam_lat_w, cam_lon_w))
-                                .is_ok()
-                            {
-                                glo30.tile_loading = true;
-                                println!(
-                                    "tile slide triggered: N{}E{} → N{}E{}",
-                                    glo30.centre_lat, glo30.centre_lon, new_lat, new_lon
-                                );
-                            }
-                        }
-                    }
-                }
-
                 // BEV two-tier drift reload
                 if let Some(ref mut bev_base) = self.bev_base {
                     // ── base tier ──
                     if let Some(data) = bev_base.base.try_recv() {
-                        // re-project camera to new heightmap coords using absolute EPSG:31287 position
-                        let (easting, northing) = bev_epsg_pos(self.cam_pos, &self.hm);
-                        self.cam_pos[0] = (easting - data.hm.crs_origin_x) as f32;
-                        self.cam_pos[1] = (data.hm.crs_origin_y - northing) as f32;
+                        // re-project camera to new heightmap tile-local metres
+                        let (lat, lon) = cam_wgs84(self.cam_pos, &self.hm);
+                        if let Some((nx, ny)) = latlon_to_tile_metres(lat, lon, &data.hm) {
+                            self.cam_pos[0] = nx;
+                            self.cam_pos[1] = ny;
+                        }
                         {
                             let scene = self.scene.as_mut().unwrap();
                             scene.update_heightmap(&data.hm, &data.normals, &data.ao);
@@ -421,14 +357,18 @@ impl ApplicationHandler for Viewer {
                             scene.set_hm1m_inactive();
                         }
                         self.hm = data.hm;
-                        // Recalibrate drift threshold to match the actual loaded window so we
-                        // don't reload more often than the window half-extent requires.
+                        // Recalibrate drift threshold to match the actual loaded window.
                         let new_half_m = (self.hm.cols as f64 * self.hm.dx_meters)
                             .min(self.hm.rows as f64 * self.hm.dy_meters)
                             * 0.5;
-                        bev_base
-                            .base
-                            .update_threshold(BEV_BASE_DRIFT_THRESHOLD_M.min(new_half_m * 0.5));
+                        let new_thresh = BEV_BASE_DRIFT_THRESHOLD_M.min(new_half_m * 0.5);
+                        // Geographic base tracks position in degrees; convert the metre threshold.
+                        let new_thresh_unit = if dem_io::crs::is_geographic(&self.hm.crs_proj4) {
+                            new_thresh / M_PER_DEG
+                        } else {
+                            new_thresh
+                        };
+                        bev_base.base.update_threshold(new_thresh_unit);
                         // close and fine tier offsets were relative to the old base origin — must reload
                         bev_base.close.invalidate();
                         if let Some(ref mut fine) = bev_base.fine {
@@ -458,16 +398,17 @@ impl ApplicationHandler for Viewer {
                         );
                     }
                     if !bev_base.base.computing {
-                        let (e, n) = bev_epsg_pos(self.cam_pos, &self.hm);
-                        if bev_base.base.needs_reload(e, n) && bev_base.base.try_trigger(e, n) {
-                            println!("BEV base reload triggered at ({e:.0}, {n:.0})");
+                        let (lat, lon) = cam_wgs84(self.cam_pos, &self.hm);
+                        if bev_base.base.needs_reload(lat, lon)
+                            && bev_base.base.try_trigger(lat, lon)
+                        {
+                            println!("BEV base reload triggered at lat={lat:.4} lon={lon:.4}");
                         }
                     }
 
                     // ── 5 m close tier ──
                     if let Some(data) = bev_base.close.try_recv() {
-                        let origin_x = (data.hm.crs_origin_x - self.hm.crs_origin_x) as f32;
-                        let origin_y = (self.hm.crs_origin_y - data.hm.crs_origin_y) as f32;
+                        let (origin_x, origin_y) = cross_crs_world_origin(&data.hm, &self.hm);
                         self.scene.as_mut().unwrap().upload_hm5m(
                             origin_x,
                             origin_y,
@@ -481,27 +422,18 @@ impl ApplicationHandler for Viewer {
                         );
                     }
                     if !bev_base.close.computing {
-                        let (e, n) = bev_epsg_pos(self.cam_pos, &self.hm);
-                        if bev_base.close.needs_reload(e, n) && bev_base.close.try_trigger(e, n) {
-                            println!("5m reload triggered at ({e:.0}, {n:.0})");
+                        let (lat, lon) = cam_wgs84(self.cam_pos, &self.hm);
+                        if bev_base.close.needs_reload(lat, lon)
+                            && bev_base.close.try_trigger(lat, lon)
+                        {
+                            println!("5m reload triggered at lat={lat:.4} lon={lon:.4}");
                         }
                     }
 
                     // ── 1 m fine tier ──
                     if let Some(ref mut fine) = bev_base.fine {
                         if let Some(data) = fine.try_recv() {
-                            // data.hm.crs_origin_x/y is in EPSG:3035; convert to EPSG:31287 tile-local
-                            let (lat, lon) = dem_io::crs::to_wgs84(
-                                data.hm.crs_origin_x,
-                                data.hm.crs_origin_y,
-                                &data.hm.crs_proj4,
-                            )
-                            .expect("1m tile origin to WGS84");
-                            let (e_base, n_base) =
-                                dem_io::crs::from_wgs84(lat, lon, &self.hm.crs_proj4)
-                                    .expect("1m tile origin to base CRS");
-                            let origin_x = (e_base - self.hm.crs_origin_x) as f32;
-                            let origin_y = (self.hm.crs_origin_y - n_base) as f32;
+                            let (origin_x, origin_y) = cross_crs_world_origin(&data.hm, &self.hm);
                             self.scene.as_mut().unwrap().upload_hm1m(
                                 origin_x,
                                 origin_y,
@@ -515,9 +447,9 @@ impl ApplicationHandler for Viewer {
                             );
                         }
                         if !fine.computing {
-                            let (e, n) = bev_epsg_pos(self.cam_pos, &self.hm);
-                            if fine.needs_reload(e, n) && fine.try_trigger(e, n) {
-                                println!("1m reload triggered at ({e:.0}, {n:.0})");
+                            let (lat, lon) = cam_wgs84(self.cam_pos, &self.hm);
+                            if fine.needs_reload(lat, lon) && fine.try_trigger(lat, lon) {
+                                println!("1m reload triggered at lat={lat:.4} lon={lon:.4}");
                             }
                         }
                     }
@@ -790,12 +722,19 @@ impl ApplicationHandler for Viewer {
     }
 }
 
-/// Convert tile-local camera position to absolute CRS coordinates (easting, northing).
-/// Used for drift detection; extracted to avoid repeating the same two lines.
-fn bev_epsg_pos(cam_pos: [f32; 3], hm: &Heightmap) -> (f64, f64) {
-    let easting = cam_pos[0] as f64 + hm.crs_origin_x;
-    let northing = hm.crs_origin_y - cam_pos[1] as f64;
-    (easting, northing)
+/// Convert tile-local camera position (metres from top-left) to WGS84 (lat, lon).
+fn cam_wgs84(cam_pos: [f32; 3], hm: &Heightmap) -> (f64, f64) {
+    if dem_io::crs::is_geographic(&hm.crs_proj4) {
+        let px = cam_pos[0] as f64 / hm.dx_meters;
+        let py = cam_pos[1] as f64 / hm.dy_meters;
+        let lon = hm.crs_origin_x + px * hm.dx_deg;
+        let lat = hm.crs_origin_y - py * hm.dy_deg.abs();
+        (lat, lon)
+    } else {
+        let e = hm.crs_origin_x + cam_pos[0] as f64;
+        let n = hm.crs_origin_y - cam_pos[1] as f64;
+        dem_io::crs::to_wgs84(e, n, &hm.crs_proj4).unwrap_or((0.0, 0.0))
+    }
 }
 
 impl Viewer {
@@ -808,7 +747,7 @@ impl Viewer {
         window: Arc<Window>,
         surface: wgpu::Surface<'static>,
         tile_path: &Path,
-        tiles_1m_dir: Option<&Path>,
+        demo_view: Option<&crate::launcher::config::DemoViewConfig>,
         vsync: bool,
         shadows_enabled: bool,
         fog_enabled: bool,
@@ -882,15 +821,27 @@ impl Viewer {
         }
 
         // Mode-specific state setup
-        let glo30: Option<Glo30State>;
         let bev_base: Option<BevBaseState>;
 
-        let is_glo30 = tile_path
-            .to_str()
-            .map_or(false, |s| s.contains("Copernicus_DSM_COG_"));
         let is_projected = !dem_io::crs::is_geographic(&hm.crs_proj4);
 
-        if is_projected {
+        if let Some(dv) = demo_view {
+            // Demo mode: config-driven three-tier streaming over a geographic Copernicus base.
+            let fine_index = Arc::new(tile_index::build_tile_index(&dv.fine_tile_paths));
+            let close_index = Arc::new(tile_index::build_tile_index(&dv.close_tile_paths));
+            let base_index = Arc::new(tile_index::build_tile_index(&dv.base_tile_paths));
+            let (cam_lat_d, cam_lon_d) = (dv.camera_lat, dv.camera_lon);
+            bev_base = Some(BevBaseState::new(
+                fine_index,
+                close_index,
+                base_index,
+                cam_lat_d,
+                cam_lon_d,
+                lat_rad,
+                &hm,
+                &mut scene,
+            ));
+        } else if is_projected {
             // Projected-CRS COG: multi-tier streaming.
             // The overview cache was built (if needed) during prepare_scene_with_ctx;
             // pick it up from PreparedScene so we don't re-open the source tile here.
@@ -962,46 +913,40 @@ impl Viewer {
                 close_scales.get(close_ifd).copied().unwrap_or(0.0),
             );
 
-            glo30 = None;
-            let tile_min_e = hm.crs_origin_x;
-            let tile_max_e = hm.crs_origin_x + hm.cols as f64 * hm.dx_meters;
-            let tile_min_n = hm.crs_origin_y - hm.rows as f64 * hm.dy_meters;
-            let tile_max_n = hm.crs_origin_y;
-            let (init_e, init_n) = dem_io::crs::from_wgs84(CAM_LAT, CAM_LON, &hm.crs_proj4)
-                .ok()
-                .filter(|&(e, n)| {
-                    e >= tile_min_e && e <= tile_max_e && n >= tile_min_n && n <= tile_max_n
-                })
-                .unwrap_or((
-                    (tile_min_e + tile_max_e) * 0.5,
-                    (tile_min_n + tile_max_n) * 0.5,
-                ));
+            let mut base_vec = tile_index::build_tile_index(&[tier_path.to_path_buf()]);
+            if let Some(e) = base_vec.get_mut(0) {
+                e.ifd = base_ifd;
+            }
+            let base_index = Arc::new(base_vec);
+
+            let mut close_vec = tile_index::build_tile_index(&[close_path.to_path_buf()]);
+            if let Some(e) = close_vec.get_mut(0) {
+                e.ifd = close_ifd;
+            }
+            let close_index = Arc::new(close_vec);
+
+            let fine_index = if let Some(fi) = fine_ifd {
+                let mut fine_vec = tile_index::build_tile_index(&[tile_path.to_path_buf()]);
+                if let Some(e) = fine_vec.get_mut(0) {
+                    e.ifd = fi;
+                }
+                Arc::new(fine_vec)
+            } else {
+                Arc::new(vec![])
+            };
+
             bev_base = Some(BevBaseState::new(
-                tile_path,
-                tier_path,
-                close_path,
+                fine_index,
+                close_index,
+                base_index,
+                CAM_LAT,
+                CAM_LON,
                 lat_rad,
-                init_e,
-                init_n,
                 &hm,
-                tiles_1m_dir,
                 &mut scene,
-                close_ifd,
-                base_ifd,
-                fine_ifd,
             ));
-        } else if is_glo30 && !is_projected {
-            // GLO-30 mode: sliding 3×3 Copernicus tile grid.
-            bev_base = None;
-            let tiles_dir = tile_path
-                .parent()
-                .and_then(|p| p.parent())
-                .unwrap_or(Path::new("tiles"))
-                .to_path_buf();
-            glo30 = Some(Glo30State::new(&tiles_dir, lat_rad, CAM_LAT, CAM_LON));
         } else {
             // Geographic single tile — static, no sliding
-            glo30 = None;
             bev_base = None;
         }
 
@@ -1049,7 +994,6 @@ impl Viewer {
             ao_last_x: init_cam_pos[0] as f64,
             ao_last_y: init_cam_pos[1] as f64,
             hm,
-            glo30,
             bev_base,
         }
     }

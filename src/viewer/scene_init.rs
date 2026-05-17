@@ -1,7 +1,7 @@
 use std::path::Path;
 use std::sync::Arc;
 
-use dem_io::{Heightmap, crop, extract_window, load_grid};
+use dem_io::{Heightmap, crop, extract_window, load_grid_from_paths};
 use render_gpu::{GpuContext, GpuScene};
 
 use super::geo::{latlon_to_tile_metres, sun_position};
@@ -37,126 +37,32 @@ pub(super) fn compute_ao_cropped(hm: &Heightmap, cam_x: f64, cam_y: f64) -> Vec<
     ao
 }
 
-/// Like `prepare_scene` but reuses an existing `GpuContext` (for seamless surface handoff)
-/// and accepts a progress callback `report(fraction, label)` called after each major step.
-pub(crate) fn prepare_scene_with_ctx(
+/// Initial scene for demo mode: loads a Copernicus 3×3 grid from `demo_view.base_tile_paths`,
+/// then also builds the overview cache for each close tile so the close worker starts fast.
+pub(crate) fn prepare_demo_scene_with_ctx(
     gpu_ctx: GpuContext,
-    tile_path: &Path,
+    demo_view: &crate::launcher::config::DemoViewConfig,
     width: u32,
     height: u32,
-    cam_lat: f64,
-    cam_lon: f64,
     report: impl Fn(f32, &str),
 ) -> crate::viewer::PreparedScene {
-    // Detect GLO-30 by directory naming convention, not pixel scale.
-    let is_glo30 = tile_path
-        .to_str()
-        .map_or(false, |s| s.contains("Copernicus_DSM_COG_"));
+    let cam_lat = demo_view.camera_lat;
+    let cam_lon = demo_view.camera_lon;
 
-    let (hm, cache_path) = if is_glo30 {
-        report(0.05, "Reading terrain data…");
-        let tiles_dir = tile_path
-            .parent()
-            .and_then(|p| p.parent())
-            .unwrap_or(Path::new("tiles"));
-        let centre_lat = cam_lat.floor() as i32;
-        let centre_lon = cam_lon.floor() as i32;
-        let t0 = std::time::Instant::now();
-        let hm = load_grid(tiles_dir, centre_lat, centre_lon, |p| {
-            dem_io::parse_geotiff_auto(p).ok()
-        });
-        println!(
-            "GLO-30 3×3 grid: {}×{} at {:.4}°/px  ({:.2?})",
-            hm.cols,
-            hm.rows,
-            hm.dx_deg,
-            t0.elapsed()
-        );
-        (hm, None::<std::path::PathBuf>)
-    } else {
-        let proj4 = dem_io::crs::tile_proj4(tile_path).expect("failed to resolve CRS from tile");
-        let is_geo = dem_io::crs::is_geographic(&proj4);
-        let centre_crs = dem_io::crs::from_wgs84(cam_lat, cam_lon, &proj4)
-            .or_else(|_| dem_io::tile_centre_crs(tile_path))
-            .unwrap_or_else(|_| (0.0, 0.0));
-
-        // For projected high-res single-IFD tiles: build the overview cache NOW, before
-        // loading any pixel data.  For a 10 GB source this avoids reading the full tile
-        // only to crop it; the small cache makes the initial load fast and consistent
-        // with worker reloads.  Progress maps 0.05–0.48 so the bar stays monotonic.
-        let cache_path: Option<std::path::PathBuf> = if !is_geo {
-            dem_io::ensure_overview_cache(tile_path, |f, msg| {
-                report(0.05 + f * 0.43, msg);
-            })
-            .unwrap_or(None)
-        } else {
-            None
-        };
-
-        // Use the cache when available; otherwise fall back to the original tile.
-        let tier_path: &Path = cache_path.as_deref().unwrap_or(tile_path);
-        let t0 = std::time::Instant::now();
-        report(0.50, "Reading terrain data…");
-        let scales = dem_io::ifd_scales(tier_path).unwrap_or_else(|_| vec![1.0]);
-        let base_ifd = select_ifd(&scales, 30.0, BEV_BASE_RADIUS_M, GPU_SAFE_PX as u32);
-        let loaded = match extract_window(tier_path, centre_crs, BEV_BASE_RADIUS_M, base_ifd)
-            .or_else(|_| extract_window(tier_path, centre_crs, BEV_BASE_RADIUS_M, 1))
-            .or_else(|_| {
-                // Camera outside tile — retry from tile geographic centre
-                dem_io::tile_centre_crs(tier_path)
-                    .and_then(|tc| extract_window(tier_path, tc, BEV_BASE_RADIUS_M, base_ifd))
-            }) {
-            Ok(hm) => {
-                println!(
-                    "window: {}×{} at {:.1}m/px, elev {:.0}–{:.0}m  ({:.2?})",
-                    hm.cols,
-                    hm.rows,
-                    hm.dx_meters,
-                    hm.data.iter().cloned().fold(f32::INFINITY, f32::min),
-                    hm.data.iter().cloned().fold(f32::NEG_INFINITY, f32::max),
-                    t0.elapsed(),
-                );
-                hm
-            }
-            Err(_) => {
-                let hm = dem_io::parse_geotiff_auto(tile_path)
-                    .expect("parse_geotiff_auto failed — check tile path");
-                println!(
-                    "full tile: {}×{} at {:.1}m/px, elev {:.0}–{:.0}m  ({:.2?})",
-                    hm.cols,
-                    hm.rows,
-                    hm.dx_meters,
-                    hm.data.iter().cloned().fold(f32::INFINITY, f32::min),
-                    hm.data.iter().cloned().fold(f32::NEG_INFINITY, f32::max),
-                    t0.elapsed(),
-                );
-                hm
-            }
-        };
-        // Crop to GPU-safe size when tile or clipped window still exceeds the limit.
-        // This happens for high-res tiles with no overviews (e.g. 1m NZ LiDAR, 24000 px wide).
-        if loaded.cols > GPU_SAFE_PX || loaded.rows > GPU_SAFE_PX {
-            println!(
-                "cropping oversized tile {}×{} → {}×{}",
-                loaded.cols,
-                loaded.rows,
-                GPU_SAFE_PX.min(loaded.cols),
-                GPU_SAFE_PX.min(loaded.rows)
-            );
-        }
-        let (centre_e, centre_n) = latlon_to_tile_metres(cam_lat, cam_lon, &loaded)
-            .map(|(x, y)| {
-                (
-                    loaded.crs_origin_x + x as f64,
-                    loaded.crs_origin_y - y as f64,
-                )
-            })
-            .unwrap_or((
-                loaded.crs_origin_x + loaded.cols as f64 * loaded.dx_meters * 0.5,
-                loaded.crs_origin_y - loaded.rows as f64 * loaded.dy_meters * 0.5,
-            ));
-        (cap_to_gpu_limit(loaded, centre_e, centre_n), cache_path)
-    };
+    report(0.10, "Reading terrain data…");
+    let t0 = std::time::Instant::now();
+    let centre_lat = cam_lat.floor() as i32;
+    let centre_lon = cam_lon.floor() as i32;
+    let hm = load_grid_from_paths(&demo_view.base_tile_paths, centre_lat, centre_lon, |p| {
+        dem_io::parse_geotiff_auto(p).ok()
+    });
+    println!(
+        "demo base 3×3 grid: {}×{} at {:.4}°/px  ({:.2?})",
+        hm.cols,
+        hm.rows,
+        hm.dx_deg,
+        t0.elapsed()
+    );
 
     report(0.65, "Computing surface normals…");
     let t1 = std::time::Instant::now();
@@ -171,12 +77,171 @@ pub(crate) fn prepare_scene_with_ctx(
     let shadow_mask = terrain::compute_shadow_vector_par_with_azimuth(&hm, init_az, init_el, 200.0);
     println!("shadows:  {:.2?}", t2.elapsed());
 
+    let cam_x = (cam_lon - hm.crs_origin_x) / hm.dx_deg * hm.dx_meters;
+    let cam_y = (hm.crs_origin_y - cam_lat) / hm.dy_deg.abs() * hm.dy_meters;
+
+    report(0.85, "Computing ambient occlusion…");
+    let t3 = std::time::Instant::now();
+    let ao_data_mask = compute_ao_cropped(&hm, cam_x, cam_y);
+    println!("ao:       {:.2?}", t3.elapsed());
+
+    report(0.95, "Uploading to GPU…");
+    let hm = Arc::new(hm);
+    let scene = GpuScene::new(
+        gpu_ctx,
+        &hm,
+        &normal_map,
+        &shadow_mask,
+        &ao_data_mask,
+        width,
+        height,
+    );
+
+    crate::viewer::PreparedScene {
+        scene,
+        hm,
+        lat_rad,
+        width,
+        height,
+        cache_path: None,
+    }
+}
+
+/// Like `prepare_scene` but reuses an existing `GpuContext` (for seamless surface handoff)
+/// and accepts a progress callback `report(fraction, label)` called after each major step.
+pub(crate) fn prepare_scene_with_ctx(
+    gpu_ctx: GpuContext,
+    tile_path: &Path,
+    width: u32,
+    height: u32,
+    cam_lat: f64,
+    cam_lon: f64,
+    report: impl Fn(f32, &str),
+) -> crate::viewer::PreparedScene {
+    let (hm, cache_path) = {
+        let proj4 = dem_io::crs::tile_proj4(tile_path).expect("failed to resolve CRS from tile");
+        let is_geo = dem_io::crs::is_geographic(&proj4);
+
+        if is_geo {
+            // Geographic tile (e.g. Copernicus GLO-30, SRTM): extract_window stores the TIFF
+            // pixel-scale tag verbatim as dx_meters, which for WGS84 tiles is degrees/px —
+            // the shader would see a sub-metre terrain. Use parse_geotiff_auto instead, which
+            // correctly converts degrees → metres via cos(lat) × M_PER_DEG.
+            report(0.50, "Reading terrain data…");
+            let t0 = std::time::Instant::now();
+            let hm = dem_io::parse_geotiff_auto(tile_path)
+                .expect("parse_geotiff_auto failed — check tile path");
+            println!(
+                "geographic tile: {}×{} at {:.4}°/px ({:.1}m/px)  ({:.2?})",
+                hm.cols,
+                hm.rows,
+                hm.dx_deg,
+                hm.dx_meters,
+                t0.elapsed()
+            );
+            let (centre_lon, centre_lat) =
+                dem_io::crs::from_wgs84(cam_lat, cam_lon, &proj4).unwrap_or((cam_lon, cam_lat));
+            (cap_to_gpu_limit(hm, centre_lon, centre_lat), None)
+        } else {
+            let centre_crs = dem_io::crs::from_wgs84(cam_lat, cam_lon, &proj4)
+                .or_else(|_| dem_io::tile_centre_crs(tile_path))
+                .unwrap_or_else(|_| (0.0, 0.0));
+
+            // For projected high-res single-IFD tiles: build the overview cache NOW, before
+            // loading any pixel data.  For a 10 GB source this avoids reading the full tile
+            // only to crop it; the small cache makes the initial load fast and consistent
+            // with worker reloads.  Progress maps 0.05–0.48 so the bar stays monotonic.
+            let cache_path: Option<std::path::PathBuf> =
+                dem_io::ensure_overview_cache(tile_path, |f, msg| {
+                    report(0.05 + f * 0.43, msg);
+                })
+                .unwrap_or(None);
+
+            // Use the cache when available; otherwise fall back to the original tile.
+            let tier_path: &Path = cache_path.as_deref().unwrap_or(tile_path);
+            let t0 = std::time::Instant::now();
+            report(0.50, "Reading terrain data…");
+            let scales = dem_io::ifd_scales(tier_path).unwrap_or_else(|_| vec![1.0]);
+            let base_ifd = select_ifd(&scales, 30.0, BEV_BASE_RADIUS_M, GPU_SAFE_PX as u32);
+            let loaded = match extract_window(tier_path, centre_crs, BEV_BASE_RADIUS_M, base_ifd)
+                .or_else(|_| extract_window(tier_path, centre_crs, BEV_BASE_RADIUS_M, 1))
+                .or_else(|_| {
+                    // Camera outside tile — retry from tile geographic centre
+                    dem_io::tile_centre_crs(tier_path)
+                        .and_then(|tc| extract_window(tier_path, tc, BEV_BASE_RADIUS_M, base_ifd))
+                }) {
+                Ok(hm) => {
+                    println!(
+                        "window: {}×{} at {:.1}m/px, elev {:.0}–{:.0}m  ({:.2?})",
+                        hm.cols,
+                        hm.rows,
+                        hm.dx_meters,
+                        hm.data.iter().cloned().fold(f32::INFINITY, f32::min),
+                        hm.data.iter().cloned().fold(f32::NEG_INFINITY, f32::max),
+                        t0.elapsed(),
+                    );
+                    hm
+                }
+                Err(_) => {
+                    let hm = dem_io::parse_geotiff_auto(tile_path)
+                        .expect("parse_geotiff_auto failed — check tile path");
+                    println!(
+                        "full tile: {}×{} at {:.1}m/px, elev {:.0}–{:.0}m  ({:.2?})",
+                        hm.cols,
+                        hm.rows,
+                        hm.dx_meters,
+                        hm.data.iter().cloned().fold(f32::INFINITY, f32::min),
+                        hm.data.iter().cloned().fold(f32::NEG_INFINITY, f32::max),
+                        t0.elapsed(),
+                    );
+                    hm
+                }
+            };
+            // Crop to GPU-safe size when tile or clipped window still exceeds the limit.
+            // This happens for high-res tiles with no overviews (e.g. 1m NZ LiDAR, 24000 px wide).
+            if loaded.cols > GPU_SAFE_PX || loaded.rows > GPU_SAFE_PX {
+                println!(
+                    "cropping oversized tile {}×{} → {}×{}",
+                    loaded.cols,
+                    loaded.rows,
+                    GPU_SAFE_PX.min(loaded.cols),
+                    GPU_SAFE_PX.min(loaded.rows)
+                );
+            }
+            let (centre_e, centre_n) = latlon_to_tile_metres(cam_lat, cam_lon, &loaded)
+                .map(|(x, y)| {
+                    (
+                        loaded.crs_origin_x + x as f64,
+                        loaded.crs_origin_y - y as f64,
+                    )
+                })
+                .unwrap_or((
+                    loaded.crs_origin_x + loaded.cols as f64 * loaded.dx_meters * 0.5,
+                    loaded.crs_origin_y - loaded.rows as f64 * loaded.dy_meters * 0.5,
+                ));
+            (cap_to_gpu_limit(loaded, centre_e, centre_n), cache_path)
+        }
+    };
+
+    let lat_rad = (cam_lat as f32).to_radians();
     let (cam_x, cam_y) = latlon_to_tile_metres(cam_lat, cam_lon, &hm)
         .map(|(x, y)| (x as f64, y as f64))
         .unwrap_or((
             hm.cols as f64 * hm.dx_meters * 0.5,
             hm.rows as f64 * hm.dy_meters * 0.5,
         ));
+
+    report(0.65, "Computing surface normals…");
+    let t1 = std::time::Instant::now();
+    let normal_map = terrain::compute_normals_vector_par(&hm);
+    println!("normals:  {:.2?}", t1.elapsed());
+
+    let (init_az, init_el) = sun_position(lat_rad, INIT_SIM_DAY, INIT_SIM_HOUR);
+
+    report(0.75, "Computing sun shadows…");
+    let t2 = std::time::Instant::now();
+    let shadow_mask = terrain::compute_shadow_vector_par_with_azimuth(&hm, init_az, init_el, 200.0);
+    println!("shadows:  {:.2?}", t2.elapsed());
 
     report(0.85, "Computing ambient occlusion…");
     let t3 = std::time::Instant::now();

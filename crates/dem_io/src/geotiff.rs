@@ -118,6 +118,49 @@ pub fn parse_geotiff_auto(path: &Path) -> Result<Heightmap, DemError> {
     })
 }
 
+/// Return the WGS84 bounding box of a GeoTIFF tile without loading pixel data.
+/// Returns `(lat_min, lat_max, lon_min, lon_max)`.
+pub fn tile_bounds_wgs84(path: &Path) -> Result<(f64, f64, f64, f64), DemError> {
+    let crs_data = crs::read_geo_key_data(path)?;
+    let proj4 = crs::proj4_from_keys(&crs_data)?;
+
+    let file = File::open(path)?;
+    let mut decoder = Decoder::new(std::io::BufReader::new(file))?;
+    let (cols, rows) = decoder.dimensions()?;
+    let scale = decoder.get_tag(Tag::Unknown(33550))?.into_f64_vec()?;
+    let tiepoint = decoder.get_tag(Tag::Unknown(33922))?.into_f64_vec()?;
+
+    let origin_x = tiepoint[3];
+    let origin_y = tiepoint[4];
+    let dx = scale[0];
+    let dy = scale[1];
+
+    if crs::is_geographic(&proj4) {
+        // origin is top-left corner in lon/lat degrees
+        let lat_max = origin_y;
+        let lat_min = origin_y - rows as f64 * dy;
+        let lon_min = origin_x;
+        let lon_max = origin_x + cols as f64 * dx;
+        return Ok((lat_min, lat_max, lon_min, lon_max));
+    }
+
+    // Projected: convert all four corners via WGS84
+    let (lat_tl, lon_tl) = crs::to_wgs84(origin_x, origin_y, &proj4)?;
+    let (lat_tr, lon_tr) = crs::to_wgs84(origin_x + cols as f64 * dx, origin_y, &proj4)?;
+    let (lat_bl, lon_bl) = crs::to_wgs84(origin_x, origin_y - rows as f64 * dy, &proj4)?;
+    let (lat_br, lon_br) = crs::to_wgs84(
+        origin_x + cols as f64 * dx,
+        origin_y - rows as f64 * dy,
+        &proj4,
+    )?;
+
+    let lat_min = lat_tl.min(lat_tr).min(lat_bl).min(lat_br);
+    let lat_max = lat_tl.max(lat_tr).max(lat_bl).max(lat_br);
+    let lon_min = lon_tl.min(lon_tr).min(lon_bl).min(lon_br);
+    let lon_max = lon_tl.max(lon_tr).max(lon_bl).max(lon_br);
+    Ok((lat_min, lat_max, lon_min, lon_max))
+}
+
 /// Returns the CRS-native (x, y) coordinate of the tile centre at IFD-0,
 /// without loading image data.  x = easting or longitude, y = northing or latitude.
 pub fn tile_centre_crs(path: &Path) -> Result<(f64, f64), DemError> {

@@ -2,7 +2,70 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use winit::window::Window;
 
-use crate::consts::{DEFAULT_TILE_5M_PATH, TILES_BIG_PATH};
+use crate::consts::DEFAULT_TILE_5M_PATH;
+
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+pub struct DemoViewConfig {
+    #[serde(default = "default_demo_cam_lat")]
+    pub camera_lat: f64,
+    #[serde(default = "default_demo_cam_lon")]
+    pub camera_lon: f64,
+    #[serde(default = "default_demo_cam_elev")]
+    pub camera_elev: f32,
+    #[serde(default = "default_fine_paths")]
+    pub fine_tile_paths: Vec<PathBuf>,
+    #[serde(default = "default_close_paths")]
+    pub close_tile_paths: Vec<PathBuf>,
+    #[serde(default = "default_base_paths")]
+    pub base_tile_paths: Vec<PathBuf>,
+}
+
+fn default_demo_cam_lat() -> f64 {
+    crate::consts::DEFAULT_CAM_LAT
+}
+fn default_demo_cam_lon() -> f64 {
+    crate::consts::DEFAULT_CAM_LON
+}
+fn default_demo_cam_elev() -> f32 {
+    crate::consts::DEFAULT_CAM_ELEV
+}
+
+fn default_fine_paths() -> Vec<PathBuf> {
+    vec![
+        PathBuf::from("tiles/big_size/CRS3035RES50000mN2650000E4400000.tif"),
+        PathBuf::from("tiles/big_size/CRS3035RES50000mN2650000E4450000.tif"),
+    ]
+}
+
+fn default_close_paths() -> Vec<PathBuf> {
+    vec![PathBuf::from("tiles/big_size/DGM_R5.tif")]
+}
+
+fn default_base_paths() -> Vec<PathBuf> {
+    (45u32..=49)
+        .flat_map(|lat| {
+            (9u32..=13).map(move |lon| {
+                PathBuf::from(format!(
+                    "tiles/Copernicus_DSM_COG_10_N{lat:02}_00_E{lon:03}_00_DEM/\
+                     Copernicus_DSM_COG_10_N{lat:02}_00_E{lon:03}_00_DEM.tif"
+                ))
+            })
+        })
+        .collect()
+}
+
+impl Default for DemoViewConfig {
+    fn default() -> Self {
+        DemoViewConfig {
+            camera_lat: default_demo_cam_lat(),
+            camera_lon: default_demo_cam_lon(),
+            camera_elev: default_demo_cam_elev(),
+            fine_tile_paths: default_fine_paths(),
+            close_tile_paths: default_close_paths(),
+            base_tile_paths: default_base_paths(),
+        }
+    }
+}
 
 #[derive(Clone, Debug, Default, PartialEq, serde::Serialize, serde::Deserialize)]
 pub enum SelectedView {
@@ -14,6 +77,8 @@ pub enum SelectedView {
 
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct LauncherSettings {
+    #[serde(default)]
+    pub demo_view: DemoViewConfig,
     #[serde(default)]
     pub skip_launcher: bool,
     #[serde(default = "default_vsync")]
@@ -32,8 +97,6 @@ pub struct LauncherSettings {
     pub tiles_refinement: bool,
     #[serde(default = "default_tile_5m_path")]
     pub tile_5m_path: PathBuf,
-    #[serde(default = "default_tiles_dir")]
-    pub tiles_1m_dir: PathBuf,
     #[serde(default)]
     pub selected_view: SelectedView,
 }
@@ -41,6 +104,7 @@ pub struct LauncherSettings {
 impl Default for LauncherSettings {
     fn default() -> Self {
         LauncherSettings {
+            demo_view: DemoViewConfig::default(),
             skip_launcher: false,
             vsync: false,
             shadows_enabled: true,
@@ -50,7 +114,6 @@ impl Default for LauncherSettings {
             ao_mode: 3,  // HBAO×4
             tiles_refinement: true,
             tile_5m_path: PathBuf::from(DEFAULT_TILE_5M_PATH),
-            tiles_1m_dir: PathBuf::from(TILES_BIG_PATH),
             selected_view: SelectedView::None,
         }
     }
@@ -76,9 +139,6 @@ fn default_ao_mode() -> u32 {
 }
 fn default_tile_5m_path() -> PathBuf {
     LauncherSettings::default().tile_5m_path
-}
-fn default_tiles_dir() -> PathBuf {
-    LauncherSettings::default().tiles_1m_dir
 }
 
 impl LauncherSettings {

@@ -1,5 +1,5 @@
 mod background;
-mod config;
+pub mod config;
 mod downloader;
 mod renderer;
 mod screens;
@@ -180,32 +180,48 @@ impl LauncherApp {
         let (tx, rx) = mpsc::channel::<LoadProgress>();
         self.load_rx = Some(rx);
 
-        // Clone the GPU context so the background thread builds the GpuScene on the same
-        // underlying wgpu device as the launcher — this lets us hand the surface over to
-        // the viewer without a drop+recreate (and the visual flash that comes with it).
         let ctx = self
             .gpu_ctx
             .as_ref()
             .expect("gpu_ctx must be initialised before begin_loading")
             .clone();
+
+        let is_demo = self.settings.selected_view == SelectedView::DemoView;
+        let demo_cfg = self.settings.demo_view.clone();
         let tile_path = self.settings.tile_5m_path.clone();
 
         std::thread::spawn(move || {
-            let prepared = crate::viewer::scene_init::prepare_scene_with_ctx(
-                ctx,
-                &tile_path,
-                WINDOW_W,
-                WINDOW_H,
-                DEFAULT_CAM_LAT,
-                DEFAULT_CAM_LON,
-                |frac, label| {
-                    let _ = tx.send(LoadProgress {
-                        frac,
-                        label: label.to_string(),
-                        prepared: None,
-                    });
-                },
-            );
+            let prepared = if is_demo {
+                crate::viewer::scene_init::prepare_demo_scene_with_ctx(
+                    ctx,
+                    &demo_cfg,
+                    WINDOW_W,
+                    WINDOW_H,
+                    |frac, label| {
+                        let _ = tx.send(LoadProgress {
+                            frac,
+                            label: label.to_string(),
+                            prepared: None,
+                        });
+                    },
+                )
+            } else {
+                crate::viewer::scene_init::prepare_scene_with_ctx(
+                    ctx,
+                    &tile_path,
+                    WINDOW_W,
+                    WINDOW_H,
+                    DEFAULT_CAM_LAT,
+                    DEFAULT_CAM_LON,
+                    |frac, label| {
+                        let _ = tx.send(LoadProgress {
+                            frac,
+                            label: label.to_string(),
+                            prepared: None,
+                        });
+                    },
+                )
+            };
             let _ = tx.send(LoadProgress {
                 frac: 1.0,
                 label: "Ready".to_string(),
