@@ -96,12 +96,17 @@ impl App {
                 prepared,
                 surface,
             } => {
+                let demo_view = if settings.selected_view == launcher::SelectedView::DemoView {
+                    Some(settings.demo_view.clone())
+                } else {
+                    None
+                };
                 let viewer = viewer::Viewer::from_launcher(
                     prepared,
                     window,
                     surface,
                     settings.tile_5m_path.as_path(),
-                    Some(settings.tiles_1m_dir.as_path()),
+                    demo_view.as_ref(),
                     settings.vsync || self.vsync_override,
                     settings.shadows_enabled,
                     settings.fog_enabled,

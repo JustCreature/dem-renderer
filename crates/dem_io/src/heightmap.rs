@@ -153,6 +153,278 @@ pub(crate) fn fill_nodata(data: &mut [f32], rows: usize, cols: usize, nodata: f3
     }
 }
 
+/// Fill every cell in `hm` with height < -1000 (extract_window NODATA sentinel) by
+/// sampling `base` at the corresponding world position, then smoothing the transition
+/// in two passes:
+///
+/// 1. **Contact blend** – filled cells directly adjacent to valid data are pulled
+///    50 % toward the average of their valid neighbours, so the seam value is the
+///    mean of the 5m edge and the 30m fill.
+/// 2. **Outward blend** – valid cells within `VALID_BLEND` pixels of the nodata
+///    border are pulled toward the base value, so both sides converge to the same
+///    target and the normal discontinuity disappears.
+///
+/// Fill uses a fast bilinear-corner approximation: 4 proj4 transforms for the window
+/// corners, then bilinear interpolation of corner base-pixel coords for every cell.
+pub fn fill_nodata_from_base(hm: &mut Heightmap, base: &Heightmap) {
+    use crate::crs;
+    use std::collections::VecDeque;
+
+    if hm.rows == 0 || hm.cols == 0 || base.rows == 0 || base.cols == 0 {
+        return;
+    }
+
+    let n = hm.rows * hm.cols;
+
+    // Track which cells were originally NODATA so valid terrain is never modified.
+    let was_nodata: Vec<bool> = hm.data.iter().map(|&h| h <= -1000.0).collect();
+
+    // --- Fill from base (bilinear corner approximation) ---
+    let is_hm_geo = crs::is_geographic(&hm.crs_proj4);
+    let is_base_geo = crs::is_geographic(&base.crs_proj4);
+
+    let hm_pixel_to_base = |r: f64, c: f64| -> Option<(f64, f64)> {
+        let (hm_x, hm_y) = if is_hm_geo {
+            (
+                hm.crs_origin_x + c * hm.dx_deg,
+                hm.crs_origin_y - r * hm.dy_deg,
+            )
+        } else {
+            (
+                hm.crs_origin_x + c * hm.dx_meters,
+                hm.crs_origin_y - r * hm.dy_meters,
+            )
+        };
+        let (lat, lon) = if is_hm_geo {
+            (hm_y, hm_x)
+        } else {
+            crs::to_wgs84(hm_x, hm_y, &hm.crs_proj4).ok()?
+        };
+        let (base_x, base_y) = if is_base_geo {
+            (lon, lat)
+        } else {
+            crs::from_wgs84(lat, lon, &base.crs_proj4).ok()?
+        };
+        let bc = if is_base_geo {
+            (base_x - base.crs_origin_x) / base.dx_deg
+        } else {
+            (base_x - base.crs_origin_x) / base.dx_meters
+        };
+        let br = if is_base_geo {
+            (base.crs_origin_y - base_y) / base.dy_deg
+        } else {
+            (base.crs_origin_y - base_y) / base.dy_meters
+        };
+        Some((bc, br))
+    };
+
+    let rc = (hm.rows - 1) as f64;
+    let cc = (hm.cols - 1) as f64;
+    let Some((bc00, br00)) = hm_pixel_to_base(0.0, 0.0) else {
+        return;
+    };
+    let Some((bc01, br01)) = hm_pixel_to_base(0.0, cc) else {
+        return;
+    };
+    let Some((bc10, br10)) = hm_pixel_to_base(rc, 0.0) else {
+        return;
+    };
+    let Some((bc11, br11)) = hm_pixel_to_base(rc, cc) else {
+        return;
+    };
+
+    let get_base = |br: i64, bc: i64| -> f32 {
+        if br < 0 || br >= base.rows as i64 || bc < 0 || bc >= base.cols as i64 {
+            return -9999.0;
+        }
+        base.data[br as usize * base.cols + bc as usize]
+    };
+
+    for r in 0..hm.rows {
+        let tr = r as f64 / rc.max(1.0);
+        let base_row_left = (1.0 - tr) * br00 + tr * br10;
+        let base_row_right = (1.0 - tr) * br01 + tr * br11;
+        let base_col_left = (1.0 - tr) * bc00 + tr * bc10;
+        let base_col_right = (1.0 - tr) * bc01 + tr * bc11;
+
+        for c in 0..hm.cols {
+            let i = r * hm.cols + c;
+            if !was_nodata[i] {
+                continue;
+            }
+            let tc = c as f64 / cc.max(1.0);
+            let base_col = (1.0 - tc) * base_col_left + tc * base_col_right;
+            let base_row = (1.0 - tc) * base_row_left + tc * base_row_right;
+
+            let col0 = base_col.floor() as i64;
+            let row0 = base_row.floor() as i64;
+            let dc = (base_col - col0 as f64) as f32;
+            let dr = (base_row - row0 as f64) as f32;
+
+            let mut ws = 0.0f32;
+            let mut wt = 0.0f32;
+            for (h, w) in [
+                (get_base(row0, col0), (1.0 - dr) * (1.0 - dc)),
+                (get_base(row0, col0 + 1), (1.0 - dr) * dc),
+                (get_base(row0 + 1, col0), dr * (1.0 - dc)),
+                (get_base(row0 + 1, col0 + 1), dr * dc),
+            ] {
+                if h > -1000.0 {
+                    ws += h * w;
+                    wt += w;
+                }
+            }
+            if wt > 0.0 {
+                hm.data[i] = ws / wt;
+            }
+        }
+    }
+
+    // --- Contact blend: pull filled boundary cells toward their valid neighbours ---
+    // The fill gave each nodata cell the raw base value.  Cells right at the edge of
+    // valid data would create a sharp normal discontinuity even if the height step is
+    // small.  For every filled cell that touches at least one valid cell, blend 50 %
+    // toward the average of those valid neighbours so the seam value sits halfway
+    // between the 5m edge and the 30m fill — a single pass, no BFS propagation.
+    // dist[i] = BFS distance from nearest valid-border cell (usize::MAX = unreached).
+    // border_h[i] = average valid-neighbour height for the seed cells at distance 1.
+    let mut dist = vec![usize::MAX; n];
+    let mut border_h = vec![0.0f32; n];
+    let mut queue: VecDeque<usize> = VecDeque::new();
+
+    // Seed: filled cells that are directly adjacent to at least one valid cell.
+    for r in 0..hm.rows {
+        for c in 0..hm.cols {
+            let i = r * hm.cols + c;
+            if !was_nodata[i] || hm.data[i] <= -1000.0 {
+                continue;
+            }
+            let mut sum_h = 0.0f32;
+            let mut cnt = 0u32;
+            for &(dr, dc) in &[(-1i32, 0i32), (1, 0), (0, -1), (0, 1)] {
+                let nr = r as i32 + dr;
+                let nc = c as i32 + dc;
+                if nr < 0 || nr >= hm.rows as i32 || nc < 0 || nc >= hm.cols as i32 {
+                    continue;
+                }
+                let ni = nr as usize * hm.cols + nc as usize;
+                if !was_nodata[ni] {
+                    sum_h += hm.data[ni];
+                    cnt += 1;
+                }
+            }
+            if cnt > 0 {
+                dist[i] = 1;
+                border_h[i] = sum_h / cnt as f32;
+                queue.push_back(i);
+            }
+        }
+    }
+
+    // --- Outward blend: pull valid cells near the nodata border toward the base value ---
+    // Valid cells right at the boundary keep their original sharp 5m values without this
+    // step, so the seam is visible as a normal discontinuity even when the height step is
+    // small.  Blending VALID_BLEND valid pixels toward the same base target makes both
+    // sides of the seam converge to the same surface.
+    const VALID_BLEND: usize = 30;
+
+    let mut dist_out = vec![usize::MAX; n];
+    let mut queue_out: VecDeque<usize> = VecDeque::new();
+
+    // Seed: valid cells that touch at least one nodata cell.
+    for r in 0..hm.rows {
+        for c in 0..hm.cols {
+            let i = r * hm.cols + c;
+            if was_nodata[i] {
+                continue;
+            }
+            let mut near_nodata = false;
+            for &(dr, dc) in &[(-1i32, 0i32), (1, 0), (0, -1), (0, 1)] {
+                let nr = r as i32 + dr;
+                let nc = c as i32 + dc;
+                if nr < 0 || nr >= hm.rows as i32 || nc < 0 || nc >= hm.cols as i32 {
+                    continue;
+                }
+                if was_nodata[nr as usize * hm.cols + nc as usize] {
+                    near_nodata = true;
+                    break;
+                }
+            }
+            if near_nodata {
+                dist_out[i] = 1;
+                queue_out.push_back(i);
+            }
+        }
+    }
+
+    // BFS outward through valid cells up to VALID_BLEND.
+    while let Some(i) = queue_out.pop_front() {
+        let d = dist_out[i];
+        if d >= VALID_BLEND {
+            continue;
+        }
+        let r = i / hm.cols;
+        let c = i % hm.cols;
+        for &(dr, dc) in &[(-1i32, 0i32), (1, 0), (0, -1), (0, 1)] {
+            let nr = r as i32 + dr;
+            let nc = c as i32 + dc;
+            if nr < 0 || nr >= hm.rows as i32 || nc < 0 || nc >= hm.cols as i32 {
+                continue;
+            }
+            let ni = nr as usize * hm.cols + nc as usize;
+            if was_nodata[ni] || dist_out[ni] != usize::MAX {
+                continue;
+            }
+            dist_out[ni] = d + 1;
+            queue_out.push_back(ni);
+        }
+    }
+
+    // Apply: at d=1 (right at boundary) blend 75 % toward base; at d=VALID_BLEND → 0 %.
+    for r in 0..hm.rows {
+        let tr = r as f64 / rc.max(1.0);
+        let base_row_left = (1.0 - tr) * br00 + tr * br10;
+        let base_row_right = (1.0 - tr) * br01 + tr * br11;
+        let base_col_left = (1.0 - tr) * bc00 + tr * bc10;
+        let base_col_right = (1.0 - tr) * bc01 + tr * bc11;
+
+        for c in 0..hm.cols {
+            let i = r * hm.cols + c;
+            if was_nodata[i] {
+                continue;
+            }
+            let d = dist_out[i];
+            if d == usize::MAX {
+                continue;
+            }
+            let t = (VALID_BLEND - d) as f32 / VALID_BLEND as f32;
+            let tc = c as f64 / cc.max(1.0);
+            let base_col = (1.0 - tc) * base_col_left + tc * base_col_right;
+            let base_row = (1.0 - tc) * base_row_left + tc * base_row_right;
+            let col0 = base_col.floor() as i64;
+            let row0 = base_row.floor() as i64;
+            let dc = (base_col - col0 as f64) as f32;
+            let dr = (base_row - row0 as f64) as f32;
+            let mut ws = 0.0f32;
+            let mut wt = 0.0f32;
+            for (h, w) in [
+                (get_base(row0, col0), (1.0 - dr) * (1.0 - dc)),
+                (get_base(row0, col0 + 1), (1.0 - dr) * dc),
+                (get_base(row0 + 1, col0), dr * (1.0 - dc)),
+                (get_base(row0 + 1, col0 + 1), dr * dc),
+            ] {
+                if h > -1000.0 {
+                    ws += h * w;
+                    wt += w;
+                }
+            }
+            if wt > 0.0 {
+                hm.data[i] = hm.data[i] * (1.0 - t) + (ws / wt) * t;
+            }
+        }
+    }
+}
+
 fn build_grayscale_png(heightmap: &Heightmap, cols: usize, rows: usize) {
     let min = heightmap.data.iter().cloned().fold(f32::INFINITY, f32::min);
     let max = heightmap

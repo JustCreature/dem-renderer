@@ -38,6 +38,8 @@ pub struct GpuScene {
     pub(super) hm5m_extent_y: f32,
     pub(super) hm5m_cols: u32,
     pub(super) hm5m_rows: u32,
+    pub(super) hm5m_cos_rot: f32,
+    pub(super) hm5m_sin_rot: f32,
     pub(super) hm5m_buf_elems: u64,
 
     // hm1m fine tier (placeholder until upload_hm1m; extent_x==0 means inactive)
@@ -54,6 +56,8 @@ pub struct GpuScene {
     pub(super) hm1m_extent_y: f32,
     pub(super) hm1m_cols: u32,
     pub(super) hm1m_rows: u32,
+    pub(super) hm1m_cos_rot: f32,
+    pub(super) hm1m_sin_rot: f32,
     pub(super) hm1m_buf_elems: u64,
 
     // Mutable per-frame / per-sun-update
@@ -699,6 +703,8 @@ impl GpuScene {
             hm5m_extent_y: 0.0,
             hm5m_cols: 0,
             hm5m_rows: 0,
+            hm5m_cos_rot: 1.0,
+            hm5m_sin_rot: 0.0,
             hm5m_buf_elems: 1,
             _hm1m_texture: hm1m_texture,
             _hm1m_view: hm1m_view,
@@ -713,6 +719,8 @@ impl GpuScene {
             hm1m_extent_y: 0.0,
             hm1m_cols: 0,
             hm1m_rows: 0,
+            hm1m_cos_rot: 1.0,
+            hm1m_sin_rot: 0.0,
             hm1m_buf_elems: 1,
             shadow_buf,
             cam_buf,
@@ -787,16 +795,20 @@ impl GpuScene {
             hm5m_extent_y: self.hm5m_extent_y,
             hm5m_cols: self.hm5m_cols,
             hm5m_rows: self.hm5m_rows,
-            _pad6: 0,
-            _pad7: 0,
+            hm5m_cos_rot: self.hm5m_cos_rot,
+            hm5m_sin_rot: self.hm5m_sin_rot,
             hm1m_origin_x: self.hm1m_origin_x,
             hm1m_origin_y: self.hm1m_origin_y,
             hm1m_extent_x: self.hm1m_extent_x,
             hm1m_extent_y: self.hm1m_extent_y,
             hm1m_cols: self.hm1m_cols,
             hm1m_rows: self.hm1m_rows,
+            hm1m_cos_rot: self.hm1m_cos_rot,
+            hm1m_sin_rot: self.hm1m_sin_rot,
             max_terrain_h: self.max_terrain_h,
             smooth_radius_m: 2000.0,
+            align_mode: 0,
+            _pad7: 0.0,
         };
 
         self.gpu_ctx
@@ -865,6 +877,7 @@ impl GpuScene {
         vat_mode: u32,
         lod_mode: u32,
         smooth_radius_m: f32,
+        align_mode: u32,
     ) {
         let forward = crate::vector_utils::normalize(crate::vector_utils::sub(look_at, origin));
         let right =
@@ -906,16 +919,20 @@ impl GpuScene {
             hm5m_extent_y: self.hm5m_extent_y,
             hm5m_cols: self.hm5m_cols,
             hm5m_rows: self.hm5m_rows,
-            _pad6: 0,
-            _pad7: 0,
+            hm5m_cos_rot: self.hm5m_cos_rot,
+            hm5m_sin_rot: self.hm5m_sin_rot,
             hm1m_origin_x: self.hm1m_origin_x,
             hm1m_origin_y: self.hm1m_origin_y,
             hm1m_extent_x: self.hm1m_extent_x,
             hm1m_extent_y: self.hm1m_extent_y,
             hm1m_cols: self.hm1m_cols,
             hm1m_rows: self.hm1m_rows,
+            hm1m_cos_rot: self.hm1m_cos_rot,
+            hm1m_sin_rot: self.hm1m_sin_rot,
             max_terrain_h: self.max_terrain_h,
             smooth_radius_m,
+            align_mode,
+            _pad7: 0.0,
         };
 
         self.gpu_ctx
@@ -987,13 +1004,82 @@ impl GpuScene {
     }
 
     /// Re-upload heightmap, normals, and AO after a tile slide.
-    /// Existing GPU textures/buffers are reused in-place; bind group is unchanged.
+    /// When tile dimensions differ from the current GPU allocation, all size-dependent
+    /// resources (hm texture, AO texture, normals buffer, shadow buffer) are recreated
+    /// so that the shader UV formula `pos / (hm_cols * dx_meters)` stays correct.
     pub fn update_heightmap(
         &mut self,
         hm: &Heightmap,
         normal_map: &NormalMap,
         ao_data_mask: &[f32],
     ) {
+        let new_cols = hm.cols as u32;
+        let new_rows = hm.rows as u32;
+
+        if new_cols != self.hm_cols || new_rows != self.hm_rows {
+            self._hm_texture = self
+                .gpu_ctx
+                .device
+                .create_texture(&wgpu::TextureDescriptor {
+                    label: Some("scene_hm_tex"),
+                    size: wgpu::Extent3d {
+                        width: new_cols,
+                        height: new_rows,
+                        depth_or_array_layers: 1,
+                    },
+                    mip_level_count: 8,
+                    sample_count: 1,
+                    dimension: wgpu::TextureDimension::D2,
+                    format: wgpu::TextureFormat::R16Float,
+                    usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+                    view_formats: &[],
+                });
+            self._hm_view = self
+                ._hm_texture
+                .create_view(&wgpu::TextureViewDescriptor::default());
+
+            self._ao_texture = self
+                .gpu_ctx
+                .device
+                .create_texture(&wgpu::TextureDescriptor {
+                    label: Some("scene_ao_tex"),
+                    size: wgpu::Extent3d {
+                        width: new_cols,
+                        height: new_rows,
+                        depth_or_array_layers: 1,
+                    },
+                    mip_level_count: 1,
+                    sample_count: 1,
+                    dimension: wgpu::TextureDimension::D2,
+                    format: wgpu::TextureFormat::R8Unorm,
+                    usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+                    view_formats: &[],
+                });
+            self._ao_view = self
+                ._ao_texture
+                .create_view(&wgpu::TextureViewDescriptor::default());
+
+            self._normals_packed_buf = self.gpu_ctx.device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("normals_packed"),
+                size: new_cols as u64 * new_rows as u64 * 4,
+                mapped_at_creation: false,
+                usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+            });
+
+            // Shadow buffer initialised to 1.0 (fully lit) — real shadow arrives shortly
+            let lit: Vec<f32> = vec![1.0; (new_cols as usize) * (new_rows as usize)];
+            self.shadow_buf =
+                self.gpu_ctx
+                    .device
+                    .create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                        label: Some("shadow"),
+                        contents: bytemuck::cast_slice(&lit),
+                        usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+                    });
+
+            self.rebuild_bind_group();
+        }
+
         let hm_data: Vec<half::f16> = hm.data.iter().map(|&v| half::f16::from_f32(v)).collect();
         self.gpu_ctx.queue.write_texture(
             wgpu::TexelCopyTextureInfo {
@@ -1005,12 +1091,12 @@ impl GpuScene {
             bytemuck::cast_slice(&hm_data),
             wgpu::TexelCopyBufferLayout {
                 offset: 0,
-                bytes_per_row: Some(hm.cols as u32 * 2),
+                bytes_per_row: Some(new_cols * 2),
                 rows_per_image: None,
             },
             wgpu::Extent3d {
-                width: hm.cols as u32,
-                height: hm.rows as u32,
+                width: new_cols,
+                height: new_rows,
                 depth_or_array_layers: 1,
             },
         );
@@ -1049,18 +1135,18 @@ impl GpuScene {
             bytemuck::cast_slice(&ao_data),
             wgpu::TexelCopyBufferLayout {
                 offset: 0,
-                bytes_per_row: Some(hm.cols as u32),
+                bytes_per_row: Some(new_cols),
                 rows_per_image: None,
             },
             wgpu::Extent3d {
-                width: hm.cols as u32,
-                height: hm.rows as u32,
+                width: new_cols,
+                height: new_rows,
                 depth_or_array_layers: 1,
             },
         );
 
-        self.hm_cols = hm.cols as u32;
-        self.hm_rows = hm.rows as u32;
+        self.hm_cols = new_cols;
+        self.hm_rows = new_rows;
         self.dx_meters = hm.dx_meters as f32;
         self.dy_meters = hm.dy_meters as f32;
         self.max_terrain_h = hm.data.iter().cloned().fold(f32::NEG_INFINITY, f32::max);

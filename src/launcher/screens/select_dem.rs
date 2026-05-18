@@ -3,8 +3,6 @@ use crate::launcher::style::*;
 use crate::launcher::widgets::*;
 use egui::{Color32, Id, Sense, Stroke, Ui, pos2, vec2};
 
-use crate::consts::TILES_BIG_PATH;
-
 #[derive(Default)]
 pub struct SelectDemAnim {
     pub choice: [f32; 2],
@@ -186,7 +184,7 @@ fn show_download_modal(ui: &mut Ui, modal_open: &mut bool) -> Option<SelectDemEv
 
                     // Path styled as a dark code block
                     let path_galley = ui.ctx().fonts_mut(|f| {
-                        f.layout_no_wrap(TILES_BIG_PATH.to_string(), mono(11.0), TEXT_SECONDARY)
+                        f.layout_no_wrap("tiles/big_size/".to_string(), mono(11.0), TEXT_SECONDARY)
                     });
                     let path_h = path_galley.size().y + 14.0;
                     let (path_resp, path_painter) =
