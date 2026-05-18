@@ -211,8 +211,11 @@ pub fn stitch_windows_geographic(
         }
     }
 
-    // Fix up dx_meters/dy_meters to actual m/px at the centre latitude
-    let actual_dx_m = deg_per_px_x * 111_320.0 * centre_lat.to_radians().cos();
+    // Fix up dx_meters/dy_meters to actual m/px.
+    // Use the NW corner latitude (out_lat1 = crs_origin_y) so that dx_meters is consistent
+    // with how cam_pos.x is built: latlon_to_tile_metres uses cos(crs_origin_y), so
+    // cam.dx_meters must also use cos(crs_origin_y) for the shader column index to be correct.
+    let actual_dx_m = deg_per_px_x * 111_320.0 * out_lat1.to_radians().cos();
     let actual_dy_m = deg_per_px_y * 111_320.0;
 
     Heightmap {
@@ -249,8 +252,19 @@ pub fn crop(
 
     let origin_lat = hm.origin_lat - row_start as f64 * hm.dy_deg.abs();
     let origin_lon = hm.origin_lon + col_start as f64 * hm.dx_deg;
-    let crs_origin_x = hm.crs_origin_x + col_start as f64 * hm.dx_meters;
-    let crs_origin_y = hm.crs_origin_y - row_start as f64 * hm.dy_meters;
+    // For geographic tiles crs_origin_x/y are in degrees — advance using dx_deg.
+    // For projected tiles they are in metres — advance using dx_meters.
+    let (crs_origin_x, crs_origin_y) = if hm.dx_deg != 0.0 {
+        (
+            hm.crs_origin_x + col_start as f64 * hm.dx_deg,
+            hm.crs_origin_y - row_start as f64 * hm.dy_deg.abs(),
+        )
+    } else {
+        (
+            hm.crs_origin_x + col_start as f64 * hm.dx_meters,
+            hm.crs_origin_y - row_start as f64 * hm.dy_meters,
+        )
+    };
 
     Heightmap {
         data,

@@ -37,7 +37,8 @@ use crate::viewer::hud_renderer::HudRenderer;
 use self::geo::{latlon_to_tile_metres, sun_position};
 use self::scene_init::{INIT_SIM_DAY, INIT_SIM_HOUR, compute_ao_cropped};
 use self::tiers::{
-    AO_DRIFT_THRESHOLD_M, BEV_BASE_DRIFT_THRESHOLD_M, BevBaseState, cross_crs_world_origin,
+    AO_DRIFT_THRESHOLD_M, BEV_BASE_DRIFT_THRESHOLD_M, BevBaseState,
+    cross_crs_world_origin_and_extent,
 };
 use crate::consts::{GPU_SAFE_PX, M_PER_DEG};
 
@@ -91,9 +92,12 @@ pub(crate) struct Viewer {
     ao_computing: bool,
     ao_last_x: f64, // tile-local metres of last AO centre
     ao_last_y: f64,
+    // detail-tier speed gate: close/fine tiers are suppressed while flying fast
+    detail_allowed_since: Option<std::time::Instant>,
     // base heightmap (shared with shadow worker; replaced on tile slide)
     hm: Arc<Heightmap>,
     bev_base: Option<BevBaseState>,
+    align_mode_viz: bool, // V key: show all 3 tiers as separate colored surfaces
 }
 
 impl ApplicationHandler for Viewer {
@@ -226,6 +230,7 @@ impl ApplicationHandler for Viewer {
                 self.last_frame = std::time::Instant::now();
 
                 // cam movements
+                let cam_pos_before = self.cam_pos;
                 let speed_boost_value = if self.speed_boost { 10.0 } else { 1.0 };
                 let speed = 500.0_f32 * speed_boost_value; // meters per second
 
@@ -255,6 +260,43 @@ impl ApplicationHandler for Viewer {
                 if self.keys_held.contains(&KeyCode::ShiftLeft) {
                     self.cam_pos[2] -= speed * dt;
                 }
+
+                // Keep the camera inside the loaded heightmap so the shader's bounds-check
+                // never fires on the first ray step (which would render a solid blue frame).
+                let hm_max_x = self.hm.cols as f32 * self.hm.dx_meters as f32 - 1.0;
+                let hm_max_y = self.hm.rows as f32 * self.hm.dy_meters as f32 - 1.0;
+                self.cam_pos[0] = self.cam_pos[0].clamp(1.0, hm_max_x);
+                self.cam_pos[1] = self.cam_pos[1].clamp(1.0, hm_max_y);
+
+                // Speed gate for close/fine tier triggers.
+                // At boost speed (5000 m/s) loading a 20 km close-tier window is pointless —
+                // the camera leaves before compute finishes. Gate on speed so triggers only
+                // fire when the camera has been slow (< 2500 m/s) for 400 ms continuously.
+                // Normal speed is 500 m/s, so the threshold sits cleanly between the two.
+                const DETAIL_SPEED_GATE: f32 = 2500.0; // m/s
+                const DETAIL_DEBOUNCE: std::time::Duration = std::time::Duration::from_millis(400);
+                let cam_moved = {
+                    let dx = self.cam_pos[0] - cam_pos_before[0];
+                    let dy = self.cam_pos[1] - cam_pos_before[1];
+                    (dx * dx + dy * dy).sqrt()
+                };
+                let cam_speed_est = cam_moved / dt.max(0.001);
+                let was_fast = self.detail_allowed_since.is_none();
+                if cam_speed_est > DETAIL_SPEED_GATE {
+                    self.detail_allowed_since = None;
+                } else if self.detail_allowed_since.is_none() {
+                    self.detail_allowed_since = Some(std::time::Instant::now());
+                }
+                let is_fast = self.detail_allowed_since.is_none();
+                if is_fast && !was_fast {
+                    println!("camera moving fast ({cam_speed_est:.0} m/s) — detail suppressed");
+                } else if !is_fast && was_fast {
+                    println!("camera slowed ({cam_speed_est:.0} m/s) — debouncing");
+                }
+                let detail_allowed = self
+                    .detail_allowed_since
+                    .map(|t| t.elapsed() >= DETAIL_DEBOUNCE)
+                    .unwrap_or(false);
 
                 // full forward vector with pitch for look_at
                 let fwd = [
@@ -345,6 +387,28 @@ impl ApplicationHandler for Viewer {
                         if let Some((nx, ny)) = latlon_to_tile_metres(lat, lon, &data.hm) {
                             self.cam_pos[0] = nx;
                             self.cam_pos[1] = ny;
+                        } else {
+                            // Camera drifted past the new tile's extent while loading.
+                            // Place at tile centre so the shader never fires an all-blue frame.
+                            let (tile_w, tile_h) = if dem_io::crs::is_geographic(&data.hm.crs_proj4)
+                            {
+                                let dx_m = (data.hm.dx_deg
+                                    * crate::consts::M_PER_DEG
+                                    * data.hm.crs_origin_y.to_radians().cos())
+                                    as f32;
+                                let dy_m = (data.hm.dy_deg.abs() * crate::consts::M_PER_DEG) as f32;
+                                (data.hm.cols as f32 * dx_m, data.hm.rows as f32 * dy_m)
+                            } else {
+                                (
+                                    data.hm.cols as f32 * data.hm.dx_meters as f32,
+                                    data.hm.rows as f32 * data.hm.dy_meters as f32,
+                                )
+                            };
+                            println!(
+                                "WARN: camera ({lat:.4}°, {lon:.4}°) outside new base tile — snapping to centre"
+                            );
+                            self.cam_pos[0] = (tile_w * 0.5).clamp(1.0, tile_w - 1.0);
+                            self.cam_pos[1] = (tile_h * 0.5).clamp(1.0, tile_h - 1.0);
                         }
                         {
                             let scene = self.scene.as_mut().unwrap();
@@ -374,7 +438,7 @@ impl ApplicationHandler for Viewer {
                         if let Some(ref mut fine) = bev_base.fine {
                             fine.invalidate();
                         }
-                        // respawn shadow worker with updated heightmap
+                        // Respawn shadow worker with updated heightmap.
                         let (new_tx, new_worker_rx) = mpsc::sync_channel::<(f32, f32)>(1);
                         let (new_worker_tx, new_rx) = mpsc::channel::<ShadowMask>();
                         let old_tx = std::mem::replace(&mut self.shadow_tx, new_tx);
@@ -392,14 +456,36 @@ impl ApplicationHandler for Viewer {
                                 }
                             }
                         });
+                        // Respawn AO worker with updated heightmap so AO data matches the new
+                        // tile's dimensions and terrain layout.
+                        let (new_ao_tx, new_ao_worker_rx) = mpsc::sync_channel::<(f64, f64)>(1);
+                        let (new_ao_worker_tx, new_ao_rx) = mpsc::channel::<Vec<f32>>();
+                        let old_ao_tx = std::mem::replace(&mut self.ao_tx, new_ao_tx);
+                        let _ = std::mem::replace(&mut self.ao_rx, new_ao_rx);
+                        drop(old_ao_tx);
+                        self.ao_computing = false;
+                        // Force an immediate AO recompute for the new tile centre.
+                        self.ao_last_x = f64::MAX;
+                        self.ao_last_y = f64::MAX;
+                        let hm_ao = Arc::clone(&self.hm);
+                        std::thread::spawn(move || {
+                            while let Ok((cam_x, cam_y)) = new_ao_worker_rx.recv() {
+                                let ao = compute_ao_cropped(&hm_ao, cam_x, cam_y);
+                                if new_ao_worker_tx.send(ao).is_err() {
+                                    break;
+                                }
+                            }
+                        });
                         println!(
                             "BEV base reloaded: {}×{} at {:.1}m/px",
                             self.hm.cols, self.hm.rows, self.hm.dx_meters
                         );
                     }
-                    if !bev_base.base.computing {
+                    // Always check base drift even while a reload is in-flight.
+                    {
                         let (lat, lon) = cam_wgs84(self.cam_pos, &self.hm);
-                        if bev_base.base.needs_reload(lat, lon)
+                        if !bev_base.base.computing
+                            && bev_base.base.needs_reload(lat, lon)
                             && bev_base.base.try_trigger(lat, lon)
                         {
                             println!("BEV base reload triggered at lat={lat:.4} lon={lon:.4}");
@@ -408,10 +494,14 @@ impl ApplicationHandler for Viewer {
 
                     // ── 5 m close tier ──
                     if let Some(data) = bev_base.close.try_recv() {
-                        let (origin_x, origin_y) = cross_crs_world_origin(&data.hm, &self.hm);
+                        let (origin_x, origin_y, extent_x, extent_y, rot_rad) =
+                            cross_crs_world_origin_and_extent(&data.hm, &self.hm);
                         self.scene.as_mut().unwrap().upload_hm5m(
                             origin_x,
                             origin_y,
+                            rot_rad,
+                            extent_x,
+                            extent_y,
                             &data.hm,
                             &data.normals,
                             &data.shadow,
@@ -421,7 +511,7 @@ impl ApplicationHandler for Viewer {
                             data.hm.cols, data.hm.rows, data.hm.dx_meters
                         );
                     }
-                    if !bev_base.close.computing {
+                    if detail_allowed && !bev_base.close.computing {
                         let (lat, lon) = cam_wgs84(self.cam_pos, &self.hm);
                         if bev_base.close.needs_reload(lat, lon)
                             && bev_base.close.try_trigger(lat, lon)
@@ -433,10 +523,14 @@ impl ApplicationHandler for Viewer {
                     // ── 1 m fine tier ──
                     if let Some(ref mut fine) = bev_base.fine {
                         if let Some(data) = fine.try_recv() {
-                            let (origin_x, origin_y) = cross_crs_world_origin(&data.hm, &self.hm);
+                            let (origin_x, origin_y, extent_x, extent_y, rot_rad) =
+                                cross_crs_world_origin_and_extent(&data.hm, &self.hm);
                             self.scene.as_mut().unwrap().upload_hm1m(
                                 origin_x,
                                 origin_y,
+                                rot_rad,
+                                extent_x,
+                                extent_y,
                                 &data.hm,
                                 &data.normals,
                                 &data.shadow,
@@ -446,7 +540,7 @@ impl ApplicationHandler for Viewer {
                                 data.hm.cols, data.hm.rows, data.hm.dx_meters
                             );
                         }
-                        if !fine.computing {
+                        if detail_allowed && !fine.computing {
                             let (lat, lon) = cam_wgs84(self.cam_pos, &self.hm);
                             if fine.needs_reload(lat, lon) && fine.try_trigger(lat, lon) {
                                 println!("1m reload triggered at lat={lat:.4} lon={lon:.4}");
@@ -488,6 +582,7 @@ impl ApplicationHandler for Viewer {
                     self.vat_mode,
                     self.lod_mode,
                     self.smooth_radius_m,
+                    self.align_mode_viz as u32,
                 );
                 let output_buf: &wgpu::Buffer = scene.get_output_buffer();
 
@@ -606,6 +701,10 @@ impl ApplicationHandler for Viewer {
                         self.lod_mode = (self.lod_mode + 1).rem_euclid(4);
                         return;
                     }
+                    if kc == KeyCode::KeyV && event.state == winit::event::ElementState::Pressed {
+                        self.align_mode_viz = !self.align_mode_viz;
+                        return;
+                    }
                     if kc == KeyCode::KeyB && event.state == winit::event::ElementState::Pressed {
                         // 0.0 = off (dist < 0 never true), other values = active radius
                         let presets = [0.0_f32, 500.0, 1000.0, 2000.0, 5000.0];
@@ -627,6 +726,7 @@ impl ApplicationHandler for Viewer {
                         }
                         return;
                     }
+
                     match event.state {
                         winit::event::ElementState::Pressed => self.keys_held.insert(kc),
                         winit::event::ElementState::Released => self.keys_held.remove(&kc),
@@ -725,8 +825,13 @@ impl ApplicationHandler for Viewer {
 /// Convert tile-local camera position (metres from top-left) to WGS84 (lat, lon).
 fn cam_wgs84(cam_pos: [f32; 3], hm: &Heightmap) -> (f64, f64) {
     if dem_io::crs::is_geographic(&hm.crs_proj4) {
-        let px = cam_pos[0] as f64 / hm.dx_meters;
-        let py = cam_pos[1] as f64 / hm.dy_meters;
+        // dx_meters is unreliable for geographic tiles: extract_window stores deg/px there,
+        // while parse_geotiff and stitch_windows_geographic store actual m/px.
+        // Always derive m/px from dx_deg (reliably deg/px in all code paths).
+        let dx_m = hm.dx_deg * crate::consts::M_PER_DEG * hm.crs_origin_y.to_radians().cos();
+        let dy_m = hm.dy_deg.abs() * crate::consts::M_PER_DEG;
+        let px = cam_pos[0] as f64 / dx_m;
+        let py = cam_pos[1] as f64 / dy_m;
         let lon = hm.crs_origin_x + px * hm.dx_deg;
         let lat = hm.crs_origin_y - py * hm.dy_deg.abs();
         (lat, lon)
@@ -993,8 +1098,10 @@ impl Viewer {
             ao_computing: false,
             ao_last_x: init_cam_pos[0] as f64,
             ao_last_y: init_cam_pos[1] as f64,
+            detail_allowed_since: Some(std::time::Instant::now()),
             hm,
             bev_base,
+            align_mode_viz: false,
         }
     }
 }

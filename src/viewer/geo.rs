@@ -1,20 +1,31 @@
 use dem_io::Heightmap;
 use dem_io::crs;
 
+use crate::consts::M_PER_DEG;
+
 /// Convert WGS84 lat/lon to tile-local metres (cam_pos.x, cam_pos.y).
 /// Returns None if the position falls outside the tile bounds.
 pub(super) fn latlon_to_tile_metres(lat: f64, lon: f64, hm: &Heightmap) -> Option<(f32, f32)> {
-    let (x, y) = if crs::is_geographic(&hm.crs_proj4) {
-        let x = (lon - hm.crs_origin_x) / hm.dx_deg * hm.dx_meters;
-        let y = (hm.crs_origin_y - lat) / hm.dy_deg.abs() * hm.dy_meters;
-        (x, y)
+    let (x, y, max_x, max_y) = if crs::is_geographic(&hm.crs_proj4) {
+        // dx_meters is unreliable for geographic tiles (may be deg/px or m/px depending
+        // on which loader was used). Derive m/px consistently from dx_deg.
+        let dx_m = hm.dx_deg * M_PER_DEG * hm.crs_origin_y.to_radians().cos();
+        let dy_m = hm.dy_deg.abs() * M_PER_DEG;
+        let x = (lon - hm.crs_origin_x) / hm.dx_deg * dx_m;
+        let y = (hm.crs_origin_y - lat) / hm.dy_deg.abs() * dy_m;
+        (x, y, hm.cols as f64 * dx_m, hm.rows as f64 * dy_m)
     } else {
         let (e, n) = crs::from_wgs84(lat, lon, &hm.crs_proj4).ok()?;
-        (e - hm.crs_origin_x, hm.crs_origin_y - n)
+        let x = e - hm.crs_origin_x;
+        let y = hm.crs_origin_y - n;
+        (
+            x,
+            y,
+            hm.cols as f64 * hm.dx_meters,
+            hm.rows as f64 * hm.dy_meters,
+        )
     };
 
-    let max_x = hm.cols as f64 * hm.dx_meters;
-    let max_y = hm.rows as f64 * hm.dy_meters;
     if x >= 0.0 && x <= max_x && y >= 0.0 && y <= max_y {
         Some((x as f32, y as f32))
     } else {

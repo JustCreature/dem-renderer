@@ -226,9 +226,11 @@ impl BevBaseState {
                 let (az, el) = sun_position(lat_rad_b, INIT_SIM_DAY, INIT_SIM_HOUR);
                 let shadow = terrain::compute_shadow_vector_par_with_azimuth(&hm, az, el, 200.0);
                 let (cam_x, cam_y) = if dem_io::crs::is_geographic(&hm.crs_proj4) {
+                    let dx_m = hm.dx_deg * M_PER_DEG * lat.to_radians().cos();
+                    let dy_m = hm.dy_deg.abs() * M_PER_DEG;
                     let px = (lon - hm.crs_origin_x) / hm.dx_deg;
                     let py = (hm.crs_origin_y - lat) / hm.dy_deg.abs();
-                    (px * hm.dx_meters, py * hm.dy_meters)
+                    (px * dx_m, py * dy_m)
                 } else {
                     (cam_cx - hm.crs_origin_x, hm.crs_origin_y - cam_cy)
                 };
@@ -313,7 +315,8 @@ impl BevBaseState {
                         .min(hm5m_init.rows as f64 * hm5m_init.dy_meters)
                         * 0.5;
                     effective_close_threshold = BEV_5M_DRIFT_THRESHOLD_M.min(close_half_m * 0.5);
-                    let (origin_x, origin_y) = cross_crs_world_origin(&hm5m_init, hm);
+                    let (origin_x, origin_y, extent_x, extent_y, rot_rad) =
+                        cross_crs_world_origin_and_extent(&hm5m_init, hm);
                     let hm5m_init = Arc::new(hm5m_init);
                     let normals5 = terrain::compute_normals_vector_par(&hm5m_init);
                     let (az, el) = sun_position(lat_rad, INIT_SIM_DAY, INIT_SIM_HOUR);
@@ -321,11 +324,16 @@ impl BevBaseState {
                         terrain::compute_shadow_vector_par_with_azimuth(&hm5m_init, az, el, 200.0);
                     last_5m_lat = cam_lat;
                     last_5m_lon = cam_lon;
-                    println!(
-                        "close IFD-{} initial: {}×{} at {:.1}m/px",
-                        entry.ifd, hm5m_init.cols, hm5m_init.rows, hm5m_init.dx_meters
+                    scene.upload_hm5m(
+                        origin_x,
+                        origin_y,
+                        rot_rad,
+                        extent_x,
+                        extent_y,
+                        &hm5m_init,
+                        &normals5,
+                        &shadow5,
                     );
-                    scene.upload_hm5m(origin_x, origin_y, &hm5m_init, &normals5, &shadow5);
                 }
             }
         }
@@ -419,6 +427,109 @@ impl BevBaseState {
     }
 }
 
+/// Like `cross_crs_world_origin` but also returns `(extent_x, extent_y)` of `hm` in the base
+/// world frame. When the two tiers share the same CRS this falls back to `cols*dx / rows*dy`.
+/// When they differ, both the TR corner (for extent_x) and BL corner (for extent_y) of `hm`
+/// are projected through WGS84 so the extents are consistent with the cos-scaled world metres
+/// used for origin_x/y.
+pub(super) fn cross_crs_world_origin_and_extent(
+    hm: &Heightmap,
+    base_hm: &Heightmap,
+) -> (f32, f32, f32, f32, f32) {
+    let (ox, oy) = cross_crs_world_origin(hm, base_hm);
+
+    if hm.crs_proj4 == base_hm.crs_proj4 {
+        return (
+            ox,
+            oy,
+            (hm.cols as f64 * hm.dx_meters) as f32,
+            (hm.rows as f64 * hm.dy_meters) as f32,
+            0.0,
+        );
+    }
+
+    // TR and BL corners of hm in its native CRS.
+    let (tr_crs_x, bl_crs_y) = if dem_io::crs::is_geographic(&hm.crs_proj4) {
+        (
+            hm.crs_origin_x + hm.cols as f64 * hm.dx_deg,
+            hm.crs_origin_y - hm.rows as f64 * hm.dy_deg.abs(),
+        )
+    } else {
+        (
+            hm.crs_origin_x + hm.cols as f64 * hm.dx_meters,
+            hm.crs_origin_y - hm.rows as f64 * hm.dy_meters,
+        )
+    };
+
+    let fallback = (
+        ox,
+        oy,
+        hm.cols as f32 * hm.dx_meters as f32,
+        hm.rows as f32 * hm.dy_meters as f32,
+        0.0,
+    );
+
+    if dem_io::crs::is_geographic(&base_hm.crs_proj4) {
+        let dx_m = base_hm.dx_deg * M_PER_DEG * base_hm.crs_origin_y.to_radians().cos();
+        let dy_m = base_hm.dy_deg.abs() * M_PER_DEG;
+        let Ok((tr_lat, tr_lon)) = dem_io::crs::to_wgs84(tr_crs_x, hm.crs_origin_y, &hm.crs_proj4)
+        else {
+            return fallback;
+        };
+        let Ok((bl_lat, bl_lon)) = dem_io::crs::to_wgs84(hm.crs_origin_x, bl_crs_y, &hm.crs_proj4)
+        else {
+            return fallback;
+        };
+        let tr_wx = ((tr_lon - base_hm.crs_origin_x) / base_hm.dx_deg * dx_m) as f32;
+        let tr_wy = ((base_hm.crs_origin_y - tr_lat) / base_hm.dy_deg.abs() * dy_m) as f32;
+        let bl_wx = ((bl_lon - base_hm.crs_origin_x) / base_hm.dx_deg * dx_m) as f32;
+        let bl_wy = ((base_hm.crs_origin_y - bl_lat) / base_hm.dy_deg.abs() * dy_m) as f32;
+        let ex = tr_wx - ox;
+        let rot_rad = (tr_wy - oy).atan2(ex);
+        
+        let true_extent_x = ex.hypot(tr_wy - oy);
+        let true_extent_y = (bl_wy - oy).hypot(bl_wx - ox);
+        
+        (ox, oy, true_extent_x, true_extent_y, rot_rad)
+    } else {
+        let Ok((tr_lat, tr_lon)) =
+            dem_io::crs::to_wgs84(tr_crs_x, hm.crs_origin_y, &hm.crs_proj4)
+        else {
+            return fallback;
+        };
+        let Ok((tr_e, tr_n)) = dem_io::crs::from_wgs84(tr_lat, tr_lon, &base_hm.crs_proj4) else {
+            return fallback;
+        };
+        let Ok((bl_lat, bl_lon)) =
+            dem_io::crs::to_wgs84(hm.crs_origin_x, bl_crs_y, &hm.crs_proj4)
+        else {
+            return fallback;
+        };
+        let Ok((bl_e, bl_n)) = dem_io::crs::from_wgs84(bl_lat, bl_lon, &base_hm.crs_proj4) else {
+            return fallback;
+        };
+        
+        let tr_wx = (tr_e - base_hm.crs_origin_x) as f32;
+        let tr_wy = (base_hm.crs_origin_y - tr_n) as f32;
+        let bl_wx = (bl_e - base_hm.crs_origin_x) as f32;
+        let bl_wy = (base_hm.crs_origin_y - bl_n) as f32;
+        
+        let ex = tr_wx - ox;
+        let rot_rad = (tr_wy - oy).atan2(ex);
+        
+        let true_extent_x = ex.hypot(tr_wy - oy);
+        let true_extent_y = (bl_wy - oy).hypot(bl_wx - ox);
+        
+        (
+            ox,
+            oy,
+            true_extent_x,
+            true_extent_y,
+            rot_rad,
+        )
+    }
+}
+
 /// Compute the tile-local position of `hm`'s top-left corner in `base_hm`'s world frame
 /// (metres from base_hm's top-left, X right, Y down). Routes through WGS84 for any CRS pair.
 pub(super) fn cross_crs_world_origin(hm: &Heightmap, base_hm: &Heightmap) -> (f32, f32) {
@@ -433,13 +544,12 @@ pub(super) fn cross_crs_world_origin(hm: &Heightmap, base_hm: &Heightmap) -> (f3
         return (0.0, 0.0);
     };
     if dem_io::crs::is_geographic(&base_hm.crs_proj4) {
-        // base is geographic; tile-local metres = pixel * dx_meters (dx_meters = m/px after stitch)
+        // dx_meters is unreliable for geographic tiles; derive m/px from dx_deg.
+        let dx_m = base_hm.dx_deg * M_PER_DEG * base_hm.crs_origin_y.to_radians().cos();
+        let dy_m = base_hm.dy_deg.abs() * M_PER_DEG;
         let px = (lon - base_hm.crs_origin_x) / base_hm.dx_deg;
-        let py = (base_hm.crs_origin_y - lat) / base_hm.dy_deg;
-        (
-            (px * base_hm.dx_meters) as f32,
-            (py * base_hm.dy_meters) as f32,
-        )
+        let py = (base_hm.crs_origin_y - lat) / base_hm.dy_deg.abs();
+        ((px * dx_m) as f32, (py * dy_m) as f32)
     } else {
         let Ok((e, n)) = dem_io::crs::from_wgs84(lat, lon, &base_hm.crs_proj4) else {
             return (0.0, 0.0);

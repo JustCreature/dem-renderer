@@ -149,6 +149,8 @@ impl HudBackground {
 }
 
 fn build_vertices(width: u32, height: u32) -> [f32; 36] {
+    let h = height as f32;
+    let w = width as f32;
     [
         //For the fps box (x0=4, y0=4, x1=180, y1=36):
         // triangle 1
@@ -168,32 +170,32 @@ fn build_vertices(width: u32, height: u32) -> [f32; 36] {
         // For the hint box (x0=0, y0=height-36, x1=width, y1=height-4):
         // triangle 1
         0.0,
-        height as f32 - 36.0, // (x0, y0)
-        width as f32,
-        height as f32 - 36.0, // (x1, y0)
-        width as f32,
-        height as f32 - 4.0, // (x1, y1)
+        h - 36.0, // (x0, y0)
+        w,
+        h - 36.0, // (x1, y0)
+        w,
+        h - 4.0, // (x1, y1)
         // triangle 2
         0.0,
-        height as f32 - 36.0, // (x0, y0)
-        width as f32,
-        height as f32 - 4.0, // (x1, y1)
+        h - 36.0, // (x0, y0)
+        w,
+        h - 4.0, // (x1, y1)
         0.0,
-        height as f32 - 4.0, // (x0, y1)
+        h - 4.0, // (x0, y1)
         //For the settings box (x0=width-296, y0=4, x1=width-4, y1=136):
         // triangle 1
-        width as f32 - 296.0,
+        w - 296.0,
         4.0, // (x0, y0)
-        width as f32 - 4.0,
+        w - 4.0,
         4.0, // (x1, y0)
-        width as f32 - 4.0,
+        w - 4.0,
         136.0, // (x1, y1)
         // triangle 2
-        width as f32 - 296.0,
+        w - 296.0,
         4.0,
-        width as f32 - 4.0,
+        w - 4.0,
         136.0,
-        width as f32 - 296.0,
+        w - 296.0,
         136.0,
     ]
 }
@@ -497,7 +499,7 @@ impl HudRenderer {
         hint_buffer.set_size(&mut font_system, Some(width as f32), Some(40.0));
         hint_buffer.set_text(
             &mut font_system,
-            "Q - activate/deactivate immersive mode; Left Cmd/Alt - speed boost; E - hide/show HUD; - or + - rewind time backward or forward; [ or ] - rewind days backward or forward",
+            "Q - immersive mode; Alt - speed boost; E - hide/show HUD; +/- - time; [/] - days; V - tier viz (green=30m blue=5m red=1m)",
             &glyphon::Attrs::new(),
             glyphon::Shaping::Basic,
             Some(glyphon::cosmic_text::Align::Center),

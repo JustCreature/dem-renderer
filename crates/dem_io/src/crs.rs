@@ -30,15 +30,73 @@ pub fn get_tile_epsg(path: &Path) -> Result<u32, DemError> {
 /// Resolve proj4 from already-read GeoKeyData — avoids a second file open when the
 /// caller also needs the EPSG code from the same read.
 pub(crate) fn proj4_from_keys(data: &GeoKeyData) -> Result<String, DemError> {
-    if let Some(ref wkt) = data.wkt_candidate {
-        return proj4wkt::wkt_to_projstring(wkt)
-            .map_err(|e| format!("WKT found but proj4wkt failed to parse it: {e}").into());
+    let mut p4 = if let Some(ref wkt) = data.wkt_candidate {
+        proj4wkt::wkt_to_projstring(wkt).map_err(|e| {
+            DemError::from(format!("WKT found but proj4wkt failed to parse it: {e}"))
+        })?
+    } else {
+        let epsg = data
+            .epsg
+            .ok_or_else(|| DemError::from("no CRS GeoKey (3072/2048/3073/2049) found"))?;
+        epsg_to_proj4(epsg)?
+    };
+
+    // proj4wkt defaults to +towgs84=0,0,0,0,0,0,0 when the WKT has no TOWGS84 node
+    // (WKT2/ISO 19111 intentionally omits datum shift from CRS definitions).
+    // crs-definitions also omits +towgs84 for most non-WGS84 datums.
+    // Override with known 7-parameter Helmert values keyed by EPSG code.
+    if let Some(epsg) = data.epsg {
+        if let Some(params) = epsg_towgs84(epsg) {
+            let replacement = format!("+towgs84={params}");
+            if let Some(pos) = p4.find("+towgs84=") {
+                let end = p4[pos..].find(' ').map_or(p4.len(), |i| pos + i);
+                let existing = &p4[pos..end];
+                // Only override the zero-shift fallback; respect non-zero values the file provides.
+                let is_zero = existing.split('=').nth(1)
+                    .unwrap_or("")
+                    .split(',')
+                    .all(|s| s.trim().parse::<f64>().unwrap_or(1.0) == 0.0);
+                if is_zero {
+                    p4.replace_range(pos..end, &replacement);
+                }
+            } else {
+                p4.push(' ');
+                p4.push_str(&replacement);
+            }
+        }
     }
-    // Fallback: EPSG code → crs-definitions
-    let epsg = data
-        .epsg
-        .ok_or_else(|| DemError::from("no CRS GeoKey (3072/2048/3073/2049) found"))?;
-    epsg_to_proj4(epsg)
+
+    Ok(p4)
+}
+
+/// 7-parameter Helmert shift to WGS84 for well-known non-WGS84 national datums.
+/// Returns the comma-separated dx,dy,dz,rx,ry,rz,s string for +towgs84=.
+/// Parameters sourced from the EPSG Geodetic Parameter Dataset (epsg.org).
+fn epsg_towgs84(epsg: u32) -> Option<&'static str> {
+    match epsg {
+        // MGI (Militärgeographisches Institut) — Austria, Bessel 1841
+        // EPSG transformation 1618
+        4312 | 31254..=31259 | 31281..=31290 => {
+            Some("577.326,90.129,463.919,5.137,1.474,5.297,2.4232")
+        }
+        // DHDN (Deutsches Hauptdreiecksnetz) — Germany, Bessel 1841
+        // EPSG transformation 1673
+        4314 | 31466..=31469 => Some("598.1,73.7,418.2,0.202,0.045,-2.455,6.7"),
+        // OSGB 1936 — Great Britain, Airy 1830
+        // EPSG transformation 1314
+        4277 | 27700 => Some("446.448,-125.157,542.06,0.1502,0.247,0.8421,-20.4894"),
+        // ED50 (European Datum 1950) — International 1924
+        // General European value; actual residual varies ±5 m by sub-region
+        4230 | 23028..=23038 => Some("-87,-98,-121,0,0,0,0"),
+        // Swiss CH1903 — Bessel 1841
+        4149 | 21781 => Some("674.374,15.056,405.346,0,0,0,0"),
+        // Tokyo — Bessel 1841; continental Japan average (varies by island ±30 m)
+        4301 | 30161..=30169 => Some("-147,506,687,0,0,0,0"),
+        // NZGD49 (New Zealand Geodetic Datum 1949) — International 1924
+        // EPSG transformation 1564
+        4272 | 27200 => Some("59.47,-5.04,187.44,0.47,-0.1,1.024,-4.5993"),
+        _ => None,
+    }
 }
 
 /// Transform native CRS coordinates → WGS84 (lat_deg, lon_deg).
