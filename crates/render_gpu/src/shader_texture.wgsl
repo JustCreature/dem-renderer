@@ -298,7 +298,7 @@ fn sample_h_exact(pos_xy: vec2<f32>) -> f32 {
             let a5 = apply_convergence_5m(lx5, ly5);
             let uv5 = vec2<f32>(a5.x / cam.hm5m_extent_x, a5.y / cam.hm5m_extent_y);
             let h5 = textureSampleLevel(hm5m_tex, hm5m_samp, uv5, 0.0).r;
-            h = mix(h, h5, smoothstep(0.0, BLEND_MARGIN, close_tier_edge_dist(lx5, ly5)));
+            if h5 > -1000.0 { h = mix(h, h5, smoothstep(0.0, BLEND_MARGIN, close_tier_edge_dist(lx5, ly5))); }
         }
     }
     if cam.hm1m_extent_x > 0.0 {
@@ -308,7 +308,7 @@ fn sample_h_exact(pos_xy: vec2<f32>) -> f32 {
             let a1 = apply_convergence_1m(lx1, ly1);
             let uv1 = vec2<f32>(a1.x / cam.hm1m_extent_x, a1.y / cam.hm1m_extent_y);
             let h1 = textureSampleLevel(hm1m_tex, hm1m_samp, uv1, 0.0).r;
-            h = mix(h, h1, smoothstep(0.0, BLEND_MARGIN, fine_tier_edge_dist(lx1, ly1)));
+            if h1 > -1000.0 { h = mix(h, h1, smoothstep(0.0, BLEND_MARGIN, fine_tier_edge_dist(lx1, ly1))); }
         }
     }
     return h;
@@ -524,7 +524,7 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
             let al = apply_convergence_5m(lx_loop, ly_loop);
             let uv5 = vec2<f32>(al.x / cam.hm5m_extent_x, al.y / cam.hm5m_extent_y);
             let h5 = textureSampleLevel(hm5m_tex, hm5m_samp, uv5, 0.0).r;
-            h = mix(h, h5, smoothstep(0.0, BLEND_MARGIN, close_tier_edge_dist(lx_loop, ly_loop)));
+            if h5 > -1000.0 { h = mix(h, h5, smoothstep(0.0, BLEND_MARGIN, close_tier_edge_dist(lx_loop, ly_loop))); }
         }
         if cam.hm1m_extent_x > 0.0 {
             let lx1 = pos.x - cam.hm1m_origin_x;
@@ -533,7 +533,7 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
                 let a1 = apply_convergence_1m(lx1, ly1);
                 let uv1 = vec2<f32>(a1.x / cam.hm1m_extent_x, a1.y / cam.hm1m_extent_y);
                 let h1 = textureSampleLevel(hm1m_tex, hm1m_samp, uv1, 0.0).r;
-                h = mix(h, h1, smoothstep(0.0, BLEND_MARGIN, fine_tier_edge_dist(lx1, ly1)));
+                if h1 > -1000.0 { h = mix(h, h1, smoothstep(0.0, BLEND_MARGIN, fine_tier_edge_dist(lx1, ly1))); }
             }
         }
 
@@ -596,6 +596,9 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
             // ── close tier normals (texture sample) and shadow (buffer bilinear) ──
             let ah5 = apply_convergence_5m(lx_hit, ly_hit);
             let close_uv = vec2<f32>(ah5.x / cam.hm5m_extent_x, ah5.y / cam.hm5m_extent_y);
+            // Zero out blend weight if height is NODATA so garbage normals don't bleed in.
+            let h5_hit = textureSampleLevel(hm5m_tex, hm5m_samp, close_uv, 0.0).r;
+            let t5e = t5 * select(0.0, 1.0, h5_hit > -1000.0);
             let n5_rg = textureSampleLevel(hm5m_normal_tex, hm5m_normal_samp, close_uv, 0.0).rg;
             let n5 = normalize(vec3<f32>(n5_rg.x, n5_rg.y, sqrt(max(0.0, 1.0 - dot(n5_rg, n5_rg)))));
             let dx5 = cam.hm5m_extent_x / f32(cam.hm5m_cols);
@@ -613,9 +616,9 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
             let sh5 = mix(mix(hm5m_shadow[i5_00], hm5m_shadow[i5_10], fx5),
                 mix(hm5m_shadow[i5_01], hm5m_shadow[i5_11], fx5), fy5);
 
-            normal = normalize(mix(n_base, n5, t5));
-            in_shadow = mix(sh_base, sh5, t5);
-            hit_uv = mix(base_uv, close_uv, t5);
+            normal = normalize(mix(n_base, n5, t5e));
+            in_shadow = mix(sh_base, sh5, t5e);
+            hit_uv = mix(base_uv, close_uv, t5e);
         } else {
             normal = n_base;
             in_shadow = sh_base;

@@ -252,10 +252,18 @@ impl BevBaseState {
         });
 
         // ── close worker ───────────────────────────────────────────────────────────────
+        // Shared slot: close worker writes its latest filled hm; fine worker reads it to
+        // fill 1m NODATA from the 5m source.
+        let recent_5m: Arc<std::sync::Mutex<Option<Arc<Heightmap>>>> =
+            Arc::new(std::sync::Mutex::new(None));
+        let recent_5m_close = Arc::clone(&recent_5m);
+        let recent_5m_fine = Arc::clone(&recent_5m);
+
         let (hm5m_tx, hm5m_worker_rx) = mpsc::sync_channel::<(f64, f64)>(1);
         let (hm5m_worker_tx, hm5m_rx) = mpsc::channel::<TierData>();
         let close_idx = Arc::clone(&close_index);
         let lat_rad_5m = lat_rad;
+        let base_hm_close = Arc::clone(hm);
         std::thread::spawn(move || {
             while let Ok((lat, lon)) = hm5m_worker_rx.recv() {
                 let overlapping = tiles_overlapping_wgs84(&close_idx, lat, lon, BEV_5M_RADIUS_M);
@@ -266,11 +274,17 @@ impl BevBaseState {
                 let Ok((cx, cy)) = dem_io::crs::from_wgs84(lat, lon, &entry.crs_proj4) else {
                     continue;
                 };
-                let Ok(hm5m) = extract_window(&entry.path, (cx, cy), BEV_5M_RADIUS_M, entry.ifd)
+                let Ok(hm5m_raw) =
+                    extract_window(&entry.path, (cx, cy), BEV_5M_RADIUS_M, entry.ifd)
                 else {
                     continue;
                 };
-                let hm5m = Arc::new(cap_to_gpu_limit(hm5m, cx, cy));
+                let mut hm5m_raw = cap_to_gpu_limit(hm5m_raw, cx, cy);
+                dem_io::fill_nodata_from_base(&mut hm5m_raw, &base_hm_close);
+                let hm5m = Arc::new(hm5m_raw);
+                if let Ok(mut g) = recent_5m_close.lock() {
+                    *g = Some(Arc::clone(&hm5m));
+                }
                 let normals = terrain::compute_normals_vector_par(&hm5m);
                 let (az, el) = sun_position(lat_rad_5m, INIT_SIM_DAY, INIT_SIM_HOUR);
                 let shadow = terrain::compute_shadow_vector_par_with_azimuth(&hm5m, az, el, 200.0);
@@ -307,7 +321,8 @@ impl BevBaseState {
                 if let Ok(hm5m_init) =
                     extract_window(&entry.path, (cx, cy), BEV_5M_RADIUS_M, entry.ifd)
                 {
-                    let hm5m_init = cap_to_gpu_limit(hm5m_init, cx, cy);
+                    let mut hm5m_init = cap_to_gpu_limit(hm5m_init, cx, cy);
+                    dem_io::fill_nodata_from_base(&mut hm5m_init, hm);
                     // When the GPU cap shrinks the window below BEV_5M_RADIUS_M (e.g. 1m tiles with no
                     // overviews), keep the threshold at ≤ half the actual window half-extent so the
                     // camera never exits the loaded window before a reload fires.
@@ -318,6 +333,9 @@ impl BevBaseState {
                     let (origin_x, origin_y, extent_x, extent_y, rot_rad) =
                         cross_crs_world_origin_and_extent(&hm5m_init, hm);
                     let hm5m_init = Arc::new(hm5m_init);
+                    if let Ok(mut g) = recent_5m.lock() {
+                        *g = Some(Arc::clone(&hm5m_init));
+                    }
                     let normals5 = terrain::compute_normals_vector_par(&hm5m_init);
                     let (az, el) = sun_position(lat_rad, INIT_SIM_DAY, INIT_SIM_HOUR);
                     let shadow5 =
@@ -325,13 +343,7 @@ impl BevBaseState {
                     last_5m_lat = cam_lat;
                     last_5m_lon = cam_lon;
                     scene.upload_hm5m(
-                        origin_x,
-                        origin_y,
-                        rot_rad,
-                        extent_x,
-                        extent_y,
-                        &hm5m_init,
-                        &normals5,
+                        origin_x, origin_y, rot_rad, extent_x, extent_y, &hm5m_init, &normals5,
                         &shadow5,
                     );
                 }
@@ -346,6 +358,7 @@ impl BevBaseState {
             let (hm1m_worker_tx, hm1m_rx) = mpsc::channel::<TierData>();
             let fine_idx = Arc::clone(&fine_index);
             let lat_rad_1m = lat_rad;
+            let recent_5m_w = recent_5m_fine;
             std::thread::spawn(move || {
                 while let Ok((lat, lon)) = hm1m_worker_rx.recv() {
                     let overlapping = tiles_overlapping_wgs84(&fine_idx, lat, lon, BEV_1M_RADIUS_M);
@@ -376,7 +389,13 @@ impl BevBaseState {
                     } else {
                         stitch_windows(windows, e_tile, n_tile, BEV_1M_RADIUS_M)
                     };
-                    let hm1m = Arc::new(cap_to_gpu_limit(raw1m, e_tile, n_tile));
+                    let mut raw1m = cap_to_gpu_limit(raw1m, e_tile, n_tile);
+                    if let Ok(g) = recent_5m_w.lock() {
+                        if let Some(ref close_hm) = *g {
+                            dem_io::fill_nodata_from_base(&mut raw1m, close_hm);
+                        }
+                    }
+                    let hm1m = Arc::new(raw1m);
                     let normals = terrain::compute_normals_vector_par(&hm1m);
                     let (az, el) = sun_position(lat_rad_1m, INIT_SIM_DAY, INIT_SIM_HOUR);
                     let shadow =
@@ -486,47 +505,39 @@ pub(super) fn cross_crs_world_origin_and_extent(
         let bl_wy = ((base_hm.crs_origin_y - bl_lat) / base_hm.dy_deg.abs() * dy_m) as f32;
         let ex = tr_wx - ox;
         let rot_rad = (tr_wy - oy).atan2(ex);
-        
+
         let true_extent_x = ex.hypot(tr_wy - oy);
         let true_extent_y = (bl_wy - oy).hypot(bl_wx - ox);
-        
+
         (ox, oy, true_extent_x, true_extent_y, rot_rad)
     } else {
-        let Ok((tr_lat, tr_lon)) =
-            dem_io::crs::to_wgs84(tr_crs_x, hm.crs_origin_y, &hm.crs_proj4)
+        let Ok((tr_lat, tr_lon)) = dem_io::crs::to_wgs84(tr_crs_x, hm.crs_origin_y, &hm.crs_proj4)
         else {
             return fallback;
         };
         let Ok((tr_e, tr_n)) = dem_io::crs::from_wgs84(tr_lat, tr_lon, &base_hm.crs_proj4) else {
             return fallback;
         };
-        let Ok((bl_lat, bl_lon)) =
-            dem_io::crs::to_wgs84(hm.crs_origin_x, bl_crs_y, &hm.crs_proj4)
+        let Ok((bl_lat, bl_lon)) = dem_io::crs::to_wgs84(hm.crs_origin_x, bl_crs_y, &hm.crs_proj4)
         else {
             return fallback;
         };
         let Ok((bl_e, bl_n)) = dem_io::crs::from_wgs84(bl_lat, bl_lon, &base_hm.crs_proj4) else {
             return fallback;
         };
-        
+
         let tr_wx = (tr_e - base_hm.crs_origin_x) as f32;
         let tr_wy = (base_hm.crs_origin_y - tr_n) as f32;
         let bl_wx = (bl_e - base_hm.crs_origin_x) as f32;
         let bl_wy = (base_hm.crs_origin_y - bl_n) as f32;
-        
+
         let ex = tr_wx - ox;
         let rot_rad = (tr_wy - oy).atan2(ex);
-        
+
         let true_extent_x = ex.hypot(tr_wy - oy);
         let true_extent_y = (bl_wy - oy).hypot(bl_wx - ox);
-        
-        (
-            ox,
-            oy,
-            true_extent_x,
-            true_extent_y,
-            rot_rad,
-        )
+
+        (ox, oy, true_extent_x, true_extent_y, rot_rad)
     }
 }
 
