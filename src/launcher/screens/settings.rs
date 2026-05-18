@@ -46,16 +46,6 @@ pub fn show(ui: &mut Ui, settings: &mut LauncherSettings) {
         );
     });
 
-    opt_row_with_info(
-        ui,
-        "06",
-        "Use tiles refinement",
-        "If a higher-resolution DEM is available for this region, it will be used to refine the rendered world.",
-        |ui| {
-            styled_checkbox(ui, &mut settings.tiles_refinement);
-        },
-    );
-
     // Bottom hairline closes the last row visually
     let (_, p) = ui.allocate_painter(vec2(ui.available_width(), 1.0), Sense::hover());
     p.line_segment(
