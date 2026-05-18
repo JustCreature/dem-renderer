@@ -42,14 +42,14 @@ fn default_close_paths() -> Vec<PathBuf> {
 }
 
 fn default_base_paths() -> Vec<PathBuf> {
-    (45u32..=49)
-        .flat_map(|lat| {
-            (9u32..=13).map(move |lon| {
-                PathBuf::from(format!(
-                    "tiles/Copernicus_DSM_COG_10_N{lat:02}_00_E{lon:03}_00_DEM/\
-                     Copernicus_DSM_COG_10_N{lat:02}_00_E{lon:03}_00_DEM.tif"
-                ))
-            })
+    // Camera tile + east + south + south-east of default camera position (N47/E011)
+    [(47u32, 11u32), (47, 12), (46, 11), (46, 12)]
+        .iter()
+        .map(|&(lat, lon)| {
+            PathBuf::from(format!(
+                "tiles/Copernicus_DSM_COG_10_N{lat:02}_00_E{lon:03}_00_DEM/\
+                 Copernicus_DSM_COG_10_N{lat:02}_00_E{lon:03}_00_DEM.tif"
+            ))
         })
         .collect()
 }
@@ -93,8 +93,6 @@ pub struct LauncherSettings {
     pub lod_mode: u32, // 0=Ultra 1=High 2=Mid 3=Low
     #[serde(default = "default_ao_mode")]
     pub ao_mode: u32, // 0=Off 1=SSAO×8 2=SSAO×16 3=HBAO×4 4=HBAO×8 5=True Hemi
-    #[serde(default = "default_true_tiles")]
-    pub tiles_refinement: bool,
     #[serde(default = "default_tile_5m_path")]
     pub tile_5m_path: PathBuf,
     #[serde(default)]
@@ -112,7 +110,6 @@ impl Default for LauncherSettings {
             vat_mode: 1, // High
             lod_mode: 0, // Ultra
             ao_mode: 3,  // HBAO×4
-            tiles_refinement: true,
             tile_5m_path: PathBuf::from(DEFAULT_TILE_5M_PATH),
             selected_view: SelectedView::None,
         }
@@ -127,9 +124,6 @@ fn default_true_shadows() -> bool {
 }
 fn default_true_fog() -> bool {
     LauncherSettings::default().fog_enabled
-}
-fn default_true_tiles() -> bool {
-    LauncherSettings::default().tiles_refinement
 }
 fn default_vat_mode() -> u32 {
     LauncherSettings::default().vat_mode

@@ -11,7 +11,7 @@ pub struct DownloadEntry {
 
 #[derive(Clone, Default)]
 pub struct DownloadProgress {
-    /// 0-based index within the full 28-file manifest (for the stats "N / 28" display).
+    /// 0-based index within the full manifest (for the stats "N / total" display).
     pub file_index: usize,
     pub total_files: usize,
     pub display_name: String,
@@ -39,18 +39,17 @@ struct FileTask {
 fn all_entries(dest_root: &Path) -> Vec<DownloadEntry> {
     let mut entries = Vec::new();
 
-    for lat in 45u32..=49 {
-        for lon in 9u32..=13 {
-            let name = format!("Copernicus_DSM_COG_10_N{lat:02}_00_E{lon:03}_00_DEM");
-            entries.push(DownloadEntry {
-                url: format!("https://copernicus-dem-30m.s3.amazonaws.com/{name}/{name}.tif"),
-                dest_path: dest_root
-                    .join("tiles")
-                    .join(&name)
-                    .join(format!("{name}.tif")),
-                display_name: format!("{name}.tif"),
-            });
-        }
+    // Camera tile + east + south + south-east of default camera position (N47/E011)
+    for (lat, lon) in [(47u32, 11u32), (47, 12), (46, 11), (46, 12)] {
+        let name = format!("Copernicus_DSM_COG_10_N{lat:02}_00_E{lon:03}_00_DEM");
+        entries.push(DownloadEntry {
+            url: format!("https://copernicus-dem-30m.s3.amazonaws.com/{name}/{name}.tif"),
+            dest_path: dest_root
+                .join("tiles")
+                .join(&name)
+                .join(format!("{name}.tif")),
+            display_name: format!("{name}.tif"),
+        });
     }
 
     entries.push(DownloadEntry {

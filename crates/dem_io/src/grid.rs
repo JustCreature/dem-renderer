@@ -8,17 +8,39 @@ fn tile_path(tiles_dir: &Path, lat: i32, lon: i32) -> PathBuf {
 }
 
 /// Like `load_grid` but uses an explicit path list instead of directory convention.
-/// Finds which path in `paths` contains each of the 9 offsets in the 3×3 grid by
-/// matching the Copernicus filename pattern `N{lat:02}…E{lon:03}`.
-pub fn load_grid_from_paths<F>(
-    paths: &[PathBuf],
-    centre_lat: i32,
-    centre_lon: i32,
-    loader: F,
-) -> Heightmap
+/// Loads every path, reads tile position from `origin_lat`/`origin_lon` metadata,
+/// finds the NW-most tile, derives the 3×3 centre, and assembles. No filename parsing.
+pub fn load_grid_from_paths<F>(paths: &[PathBuf], loader: F) -> Heightmap
 where
     F: Fn(&Path) -> Option<Heightmap>,
 {
+    use std::collections::HashMap;
+
+    // Load all tiles and key them by (tile_lat, tile_lon).
+    // GLO-30 pixel centres sit ~0.5/3600° inside the integer-degree boundary, so
+    // floor(origin_lat) yields the tile's south edge degree label (e.g. 47 for N47).
+    let mut tile_map: HashMap<(i32, i32), Heightmap> = paths
+        .iter()
+        .filter_map(|p| {
+            let hm = loader(p)?;
+            let tile_lat = hm.origin_lat.floor() as i32;
+            let tile_lon = hm.origin_lon.floor() as i32;
+            Some(((tile_lat, tile_lon), hm))
+        })
+        .collect();
+
+    assert!(
+        !tile_map.is_empty(),
+        "load_grid_from_paths: no tiles loaded"
+    );
+
+    // NW-most tile = highest lat, lowest lon.
+    // NW offset in a 3×3 grid is (+1, -1) from centre, so centre = (nw_lat-1, nw_lon+1).
+    let nw_lat = tile_map.keys().map(|(la, _)| *la).max().unwrap();
+    let nw_lon = tile_map.keys().map(|(_, lo)| *lo).min().unwrap();
+    let centre_lat = nw_lat - 1;
+    let centre_lon = nw_lon + 1;
+
     let offsets = [
         [(1, -1), (1, 0), (1, 1)],
         [(0, -1), (0, 0), (0, 1)],
@@ -28,16 +50,7 @@ where
     let tiles: [[Option<Heightmap>; 3]; 3] = std::array::from_fn(|row| {
         std::array::from_fn(|col| {
             let (dlat, dlon) = offsets[row][col];
-            let lat = centre_lat + dlat;
-            let lon = centre_lon + dlon;
-            let needle_n = format!("N{:02}", lat.abs());
-            let needle_e = format!("E{:03}", lon.abs());
-            // Find the path whose filename contains both N and E markers
-            let found = paths.iter().find(|p| {
-                p.to_str()
-                    .map_or(false, |s| s.contains(&needle_n) && s.contains(&needle_e))
-            });
-            found.and_then(|p| loader(p))
+            tile_map.remove(&(centre_lat + dlat, centre_lon + dlon))
         })
     });
 

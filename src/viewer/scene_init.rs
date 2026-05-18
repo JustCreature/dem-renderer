@@ -51,9 +51,7 @@ pub(crate) fn prepare_demo_scene_with_ctx(
 
     report(0.10, "Reading terrain data…");
     let t0 = std::time::Instant::now();
-    let centre_lat = cam_lat.floor() as i32;
-    let centre_lon = cam_lon.floor() as i32;
-    let hm = load_grid_from_paths(&demo_view.base_tile_paths, centre_lat, centre_lon, |p| {
+    let hm = load_grid_from_paths(&demo_view.base_tile_paths, |p| {
         dem_io::parse_geotiff_auto(p).ok()
     });
     println!(

@@ -88,7 +88,7 @@ pub(crate) struct Viewer {
     last_shadow_el: f32,
     // drift-based AO recompute
     ao_tx: mpsc::SyncSender<(f64, f64)>,
-    ao_rx: mpsc::Receiver<Vec<f32>>,
+    ao_rx: mpsc::Receiver<Vec<u8>>,
     ao_computing: bool,
     ao_last_x: f64, // tile-local metres of last AO centre
     ao_last_y: f64,
@@ -412,7 +412,13 @@ impl ApplicationHandler for Viewer {
                         }
                         {
                             let scene = self.scene.as_mut().unwrap();
-                            scene.update_heightmap(&data.hm, &data.normals, &data.ao);
+                            scene.update_heightmap(
+                                &data.hm,
+                                &data.gpu_hm_f16,
+                                &data.gpu_hm_mips,
+                                &data.gpu_normals_u32,
+                                &data.gpu_ao_u8,
+                            );
                             scene.update_shadow(&data.shadow);
                             // The fine-tier origins are offsets relative to the base heightmap origin.
                             // After a base reload the origin shifts, so the old offsets are wrong —
@@ -459,7 +465,7 @@ impl ApplicationHandler for Viewer {
                         // Respawn AO worker with updated heightmap so AO data matches the new
                         // tile's dimensions and terrain layout.
                         let (new_ao_tx, new_ao_worker_rx) = mpsc::sync_channel::<(f64, f64)>(1);
-                        let (new_ao_worker_tx, new_ao_rx) = mpsc::channel::<Vec<f32>>();
+                        let (new_ao_worker_tx, new_ao_rx) = mpsc::channel::<Vec<u8>>();
                         let old_ao_tx = std::mem::replace(&mut self.ao_tx, new_ao_tx);
                         let _ = std::mem::replace(&mut self.ao_rx, new_ao_rx);
                         drop(old_ao_tx);
@@ -471,7 +477,7 @@ impl ApplicationHandler for Viewer {
                         std::thread::spawn(move || {
                             while let Ok((cam_x, cam_y)) = new_ao_worker_rx.recv() {
                                 let ao = compute_ao_cropped(&hm_ao, cam_x, cam_y);
-                                if new_ao_worker_tx.send(ao).is_err() {
+                                if new_ao_worker_tx.send(render_gpu::pack_ao_u8(&ao)).is_err() {
                                     break;
                                 }
                             }
@@ -503,7 +509,7 @@ impl ApplicationHandler for Viewer {
                             extent_x,
                             extent_y,
                             &data.hm,
-                            &data.normals,
+                            &data.gpu_normals_rg16,
                             &data.shadow,
                         );
                         println!(
@@ -532,7 +538,7 @@ impl ApplicationHandler for Viewer {
                                 extent_x,
                                 extent_y,
                                 &data.hm,
-                                &data.normals,
+                                &data.gpu_normals_rg16,
                                 &data.shadow,
                             );
                             println!(
@@ -912,13 +918,13 @@ impl Viewer {
 
         // AO worker
         let (ao_tx, ao_worker_rx) = mpsc::sync_channel::<(f64, f64)>(1);
-        let (ao_worker_tx, ao_rx) = mpsc::channel::<Vec<f32>>();
+        let (ao_worker_tx, ao_rx) = mpsc::channel::<Vec<u8>>();
         {
             let hm_ao = Arc::clone(&hm);
             std::thread::spawn(move || {
                 while let Ok((cam_x, cam_y)) = ao_worker_rx.recv() {
                     let ao = compute_ao_cropped(&hm_ao, cam_x, cam_y);
-                    if ao_worker_tx.send(ao).is_err() {
+                    if ao_worker_tx.send(render_gpu::pack_ao_u8(&ao)).is_err() {
                         break;
                     }
                 }
