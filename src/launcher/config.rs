@@ -42,14 +42,14 @@ fn default_close_paths() -> Vec<PathBuf> {
 }
 
 fn default_base_paths() -> Vec<PathBuf> {
-    (45u32..=49)
-        .flat_map(|lat| {
-            (9u32..=13).map(move |lon| {
-                PathBuf::from(format!(
-                    "tiles/Copernicus_DSM_COG_10_N{lat:02}_00_E{lon:03}_00_DEM/\
-                     Copernicus_DSM_COG_10_N{lat:02}_00_E{lon:03}_00_DEM.tif"
-                ))
-            })
+    // Camera tile + east + south + south-east of default camera position (N47/E011)
+    [(47u32, 11u32), (47, 12), (46, 11), (46, 12)]
+        .iter()
+        .map(|&(lat, lon)| {
+            PathBuf::from(format!(
+                "tiles/Copernicus_DSM_COG_10_N{lat:02}_00_E{lon:03}_00_DEM/\
+                 Copernicus_DSM_COG_10_N{lat:02}_00_E{lon:03}_00_DEM.tif"
+            ))
         })
         .collect()
 }
