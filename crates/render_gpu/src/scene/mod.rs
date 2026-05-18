@@ -192,52 +192,28 @@ pub(super) fn create_tier_placeholder(
 pub(super) fn write_hm_mips(
     queue: &wgpu::Queue,
     texture: &wgpu::Texture,
-    base_data: &[half::f16],
-    cols: usize,
-    rows: usize,
+    mips: &[(u32, u32, Vec<u8>)],
 ) {
-    let mut prev_data: Vec<half::f16> = base_data.to_vec();
-    let mut prev_w = cols;
-    let mut prev_h = rows;
-    for mip in 1u32..8u32 {
-        let w = (prev_w / 2).max(1);
-        let h = (prev_h / 2).max(1);
-        let mut mip_data: Vec<half::f16> = Vec::with_capacity(w * h);
-        for row in 0..h {
-            for col in 0..w {
-                let r0 = (row * 2).min(prev_h - 1);
-                let r1 = (row * 2 + 1).min(prev_h - 1);
-                let c0 = (col * 2).min(prev_w - 1);
-                let c1 = (col * 2 + 1).min(prev_w - 1);
-                let a = prev_data[r0 * prev_w + c0].to_f32();
-                let b = prev_data[r0 * prev_w + c1].to_f32();
-                let c = prev_data[r1 * prev_w + c0].to_f32();
-                let d = prev_data[r1 * prev_w + c1].to_f32();
-                mip_data.push(half::f16::from_f32(a.max(b).max(c).max(d)));
-            }
-        }
+    for (mip_idx, (w, h, data)) in mips.iter().enumerate() {
         queue.write_texture(
             wgpu::TexelCopyTextureInfo {
                 texture,
-                mip_level: mip,
+                mip_level: (mip_idx + 1) as u32,
                 origin: wgpu::Origin3d::ZERO,
                 aspect: wgpu::TextureAspect::All,
             },
-            bytemuck::cast_slice(&mip_data),
+            data,
             wgpu::TexelCopyBufferLayout {
                 offset: 0,
-                bytes_per_row: Some(w as u32 * 2),
+                bytes_per_row: Some(w * 2),
                 rows_per_image: None,
             },
             wgpu::Extent3d {
-                width: w as u32,
-                height: h as u32,
+                width: *w,
+                height: *h,
                 depth_or_array_layers: 1,
             },
         );
-        prev_data = mip_data;
-        prev_w = w;
-        prev_h = h;
     }
 }
 
@@ -281,7 +257,9 @@ impl GpuScene {
                 depth_or_array_layers: 1,
             },
         );
-        write_hm_mips(&gpu_ctx.queue, &hm_texture, &hm_data, hm.cols, hm.rows);
+        let hm_mip_bytes =
+            crate::gen_hm_mip_bytes(bytemuck::cast_slice(&hm_data), hm.cols, hm.rows);
+        write_hm_mips(&gpu_ctx.queue, &hm_texture, &hm_mip_bytes);
 
         let hm_view = hm_texture.create_view(&wgpu::TextureViewDescriptor::default());
         let hm_sampler = gpu_ctx.device.create_sampler(&wgpu::SamplerDescriptor {
@@ -972,8 +950,7 @@ impl GpuScene {
     }
 
     /// Re-upload shadow mask (call when sun direction changes).
-    pub fn update_ao(&self, ao_data_mask: &[f32]) {
-        let ao_data: Vec<u8> = ao_data_mask.iter().map(|&v| (v * 255.0) as u8).collect();
+    pub fn update_ao(&self, ao_u8: &[u8]) {
         self.gpu_ctx.queue.write_texture(
             wgpu::TexelCopyTextureInfo {
                 texture: &self._ao_texture,
@@ -981,7 +958,7 @@ impl GpuScene {
                 origin: wgpu::Origin3d::ZERO,
                 aspect: wgpu::TextureAspect::All,
             },
-            bytemuck::cast_slice(&ao_data),
+            ao_u8,
             wgpu::TexelCopyBufferLayout {
                 offset: 0,
                 bytes_per_row: Some(self.hm_cols),
@@ -1010,8 +987,10 @@ impl GpuScene {
     pub fn update_heightmap(
         &mut self,
         hm: &Heightmap,
-        normal_map: &NormalMap,
-        ao_data_mask: &[f32],
+        hm_f16: &[u8],
+        hm_mips: &[(u32, u32, Vec<u8>)],
+        normals_packed: &[u8],
+        ao_u8: &[u8],
     ) {
         let new_cols = hm.cols as u32;
         let new_rows = hm.rows as u32;
@@ -1066,21 +1045,18 @@ impl GpuScene {
                 usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
             });
 
-            // Shadow buffer initialised to 1.0 (fully lit) — real shadow arrives shortly
-            let lit: Vec<f32> = vec![1.0; (new_cols as usize) * (new_rows as usize)];
-            self.shadow_buf =
-                self.gpu_ctx
-                    .device
-                    .create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                        label: Some("shadow"),
-                        contents: bytemuck::cast_slice(&lit),
-                        usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
-                    });
+            // No init: update_shadow is always called immediately after update_heightmap.
+            self.shadow_buf = self.gpu_ctx.device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("shadow"),
+                size: new_cols as u64 * new_rows as u64 * 4,
+                usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            });
 
             self.rebuild_bind_group();
         }
 
-        let hm_data: Vec<half::f16> = hm.data.iter().map(|&v| half::f16::from_f32(v)).collect();
+        let _t0 = std::time::Instant::now();
         self.gpu_ctx.queue.write_texture(
             wgpu::TexelCopyTextureInfo {
                 texture: &self._hm_texture,
@@ -1088,7 +1064,7 @@ impl GpuScene {
                 origin: wgpu::Origin3d::ZERO,
                 aspect: wgpu::TextureAspect::All,
             },
-            bytemuck::cast_slice(&hm_data),
+            hm_f16,
             wgpu::TexelCopyBufferLayout {
                 offset: 0,
                 bytes_per_row: Some(new_cols * 2),
@@ -1100,31 +1076,25 @@ impl GpuScene {
                 depth_or_array_layers: 1,
             },
         );
-        write_hm_mips(
-            &self.gpu_ctx.queue,
-            &self._hm_texture,
-            &hm_data,
-            hm.cols,
-            hm.rows,
+        eprintln!(
+            "base write_texture hm_f16:    {:>6.1} ms ({new_cols}×{new_rows})",
+            _t0.elapsed().as_secs_f32() * 1e3
         );
-
-        let normals_packed: Vec<u32> = normal_map
-            .nx
-            .iter()
-            .zip(normal_map.ny.iter())
-            .map(|(&nx, &ny)| {
-                let xi = (nx.clamp(-1.0, 1.0) * 32767.0).round() as i16;
-                let yi = (ny.clamp(-1.0, 1.0) * 32767.0).round() as i16;
-                ((xi as u32) << 16) | (yi as u16 as u32)
-            })
-            .collect();
-        self.gpu_ctx.queue.write_buffer(
-            &self._normals_packed_buf,
-            0,
-            bytemuck::cast_slice(&normals_packed),
+        let _t1 = std::time::Instant::now();
+        write_hm_mips(&self.gpu_ctx.queue, &self._hm_texture, hm_mips);
+        eprintln!(
+            "base write_hm_mips:           {:>6.1} ms",
+            _t1.elapsed().as_secs_f32() * 1e3
         );
-
-        let ao_data: Vec<u8> = ao_data_mask.iter().map(|&v| (v * 255.0) as u8).collect();
+        let _t2 = std::time::Instant::now();
+        self.gpu_ctx
+            .queue
+            .write_buffer(&self._normals_packed_buf, 0, normals_packed);
+        eprintln!(
+            "base write_buffer normals:    {:>6.1} ms",
+            _t2.elapsed().as_secs_f32() * 1e3
+        );
+        let _t3 = std::time::Instant::now();
         self.gpu_ctx.queue.write_texture(
             wgpu::TexelCopyTextureInfo {
                 texture: &self._ao_texture,
@@ -1132,7 +1102,7 @@ impl GpuScene {
                 origin: wgpu::Origin3d::ZERO,
                 aspect: wgpu::TextureAspect::All,
             },
-            bytemuck::cast_slice(&ao_data),
+            ao_u8,
             wgpu::TexelCopyBufferLayout {
                 offset: 0,
                 bytes_per_row: Some(new_cols),
@@ -1143,6 +1113,10 @@ impl GpuScene {
                 height: new_rows,
                 depth_or_array_layers: 1,
             },
+        );
+        eprintln!(
+            "base write_texture ao_u8:     {:>6.1} ms",
+            _t3.elapsed().as_secs_f32() * 1e3
         );
 
         self.hm_cols = new_cols;

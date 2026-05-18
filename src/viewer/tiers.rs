@@ -2,7 +2,7 @@ use std::sync::{Arc, mpsc};
 
 use dem_io::{Heightmap, crop, extract_window, stitch_windows, stitch_windows_geographic};
 use render_gpu::GpuScene;
-use terrain::{NormalMap, ShadowMask};
+use terrain::ShadowMask;
 
 use super::geo::sun_position;
 use super::scene_init::{INIT_SIM_DAY, INIT_SIM_HOUR, compute_ao_cropped};
@@ -47,13 +47,23 @@ pub(super) const AO_DRIFT_THRESHOLD_M: f64 = 5_000.0;
 
 /// Common result sent by any BEV background streaming worker.
 /// `centre_lat`/`centre_lon` are WGS84 degrees of the loaded window centre.
+/// All `gpu_*` fields are pre-converted to GPU-ready byte layouts on the worker thread so
+/// the main thread only needs to call `write_texture`/`write_buffer` — no blocking CPU work.
 pub(super) struct TierData {
     pub(super) hm: Arc<Heightmap>,
-    pub(super) normals: NormalMap,
     pub(super) shadow: ShadowMask,
-    pub(super) ao: Vec<f32>,
     pub(super) centre_lat: f64,
     pub(super) centre_lon: f64,
+    /// Rg16Snorm bytes (4 bytes/pixel): normal texture for 5m/1m tiers.
+    pub(super) gpu_normals_rg16: Vec<u8>,
+    /// u32-packed normal bytes (4 bytes/pixel): storage buffer for base tier.
+    pub(super) gpu_normals_u32: Vec<u8>,
+    /// R16Float bytes (2 bytes/pixel): heightmap texture for base tier.
+    pub(super) gpu_hm_f16: Vec<u8>,
+    /// Pre-generated mip levels (width, height, bytes) for base tier heightmap.
+    pub(super) gpu_hm_mips: Vec<(u32, u32, Vec<u8>)>,
+    /// R8Unorm bytes (1 byte/pixel): AO texture for base tier.
+    pub(super) gpu_ao_u8: Vec<u8>,
 }
 
 /// Per-tier channel state and drift-detection bookkeeping.
@@ -235,14 +245,21 @@ impl BevBaseState {
                     (cam_cx - hm.crs_origin_x, hm.crs_origin_y - cam_cy)
                 };
                 let ao = compute_ao_cropped(&hm, cam_x, cam_y);
+                let gpu_hm_f16 = render_gpu::hm_to_f16_bytes(&hm.data);
+                let gpu_hm_mips = render_gpu::gen_hm_mip_bytes(&gpu_hm_f16, hm.cols, hm.rows);
+                let gpu_normals_u32 = render_gpu::pack_normals_u32_bytes(&normals.nx, &normals.ny);
+                let gpu_ao_u8 = render_gpu::pack_ao_u8(&ao);
                 if base_worker_tx
                     .send(TierData {
                         hm,
-                        normals,
                         shadow,
-                        ao,
                         centre_lat: lat,
                         centre_lon: lon,
+                        gpu_normals_rg16: vec![],
+                        gpu_normals_u32,
+                        gpu_hm_f16,
+                        gpu_hm_mips,
+                        gpu_ao_u8,
                     })
                     .is_err()
                 {
@@ -288,17 +305,22 @@ impl BevBaseState {
                 let normals = terrain::compute_normals_vector_par(&hm5m);
                 let (az, el) = sun_position(lat_rad_5m, INIT_SIM_DAY, INIT_SIM_HOUR);
                 let shadow = terrain::compute_shadow_vector_par_with_azimuth(&hm5m, az, el, 200.0);
+                let gpu_normals_rg16 =
+                    render_gpu::pack_normals_rg16_bytes(&normals.nx, &normals.ny);
                 // Use the *requested* centre, not the geometric window centre.
                 // Near a tile edge the window is clipped, so its geometric centre drifts
                 // away from the camera — triggering an infinite reload loop.
                 if hm5m_worker_tx
                     .send(TierData {
                         hm: hm5m,
-                        normals,
                         shadow,
-                        ao: vec![],
                         centre_lat: lat,
                         centre_lon: lon,
+                        gpu_normals_rg16,
+                        gpu_normals_u32: vec![],
+                        gpu_hm_f16: vec![],
+                        gpu_hm_mips: vec![],
+                        gpu_ao_u8: vec![],
                     })
                     .is_err()
                 {
@@ -340,10 +362,18 @@ impl BevBaseState {
                     let (az, el) = sun_position(lat_rad, INIT_SIM_DAY, INIT_SIM_HOUR);
                     let shadow5 =
                         terrain::compute_shadow_vector_par_with_azimuth(&hm5m_init, az, el, 200.0);
+                    let normals5_rg16 =
+                        render_gpu::pack_normals_rg16_bytes(&normals5.nx, &normals5.ny);
                     last_5m_lat = cam_lat;
                     last_5m_lon = cam_lon;
                     scene.upload_hm5m(
-                        origin_x, origin_y, rot_rad, extent_x, extent_y, &hm5m_init, &normals5,
+                        origin_x,
+                        origin_y,
+                        rot_rad,
+                        extent_x,
+                        extent_y,
+                        &hm5m_init,
+                        &normals5_rg16,
                         &shadow5,
                     );
                 }
@@ -400,14 +430,19 @@ impl BevBaseState {
                     let (az, el) = sun_position(lat_rad_1m, INIT_SIM_DAY, INIT_SIM_HOUR);
                     let shadow =
                         terrain::compute_shadow_vector_par_with_azimuth(&hm1m, az, el, 200.0);
+                    let gpu_normals_rg16 =
+                        render_gpu::pack_normals_rg16_bytes(&normals.nx, &normals.ny);
                     if hm1m_worker_tx
                         .send(TierData {
                             hm: hm1m,
-                            normals,
                             shadow,
-                            ao: vec![],
                             centre_lat: lat,
                             centre_lon: lon,
+                            gpu_normals_rg16,
+                            gpu_normals_u32: vec![],
+                            gpu_hm_f16: vec![],
+                            gpu_hm_mips: vec![],
+                            gpu_ao_u8: vec![],
                         })
                         .is_err()
                     {

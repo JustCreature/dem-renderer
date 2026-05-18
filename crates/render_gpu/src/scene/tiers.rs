@@ -13,7 +13,7 @@ impl GpuScene {
         extent_x: f32,
         extent_y: f32,
         hm5m: &dem_io::Heightmap,
-        normals: &terrain::NormalMap,
+        normals_rg16: &[u8],
         shadow: &terrain::ShadowMask,
     ) {
         let cols = hm5m.cols as u32;
@@ -80,6 +80,7 @@ impl GpuScene {
             self.rebuild_bind_group();
         }
 
+        let _t0 = std::time::Instant::now();
         self.gpu_ctx.queue.write_texture(
             self._hm5m_texture.as_image_copy(),
             bytemuck::cast_slice(&hm5m.data),
@@ -94,20 +95,14 @@ impl GpuScene {
                 depth_or_array_layers: 1,
             },
         );
-        let normal_data: Vec<i16> = normals
-            .nx
-            .iter()
-            .zip(normals.ny.iter())
-            .flat_map(|(&nx, &ny)| {
-                [
-                    (nx.clamp(-1.0, 1.0) * 32767.0).round() as i16,
-                    (ny.clamp(-1.0, 1.0) * 32767.0).round() as i16,
-                ]
-            })
-            .collect();
+        eprintln!(
+            "5m write_texture hm:      {:>6.1} ms",
+            _t0.elapsed().as_secs_f32() * 1e3
+        );
+        let _t1 = std::time::Instant::now();
         self.gpu_ctx.queue.write_texture(
             self._hm5m_normal_tex.as_image_copy(),
-            bytemuck::cast_slice(&normal_data),
+            normals_rg16,
             wgpu::TexelCopyBufferLayout {
                 offset: 0,
                 bytes_per_row: Some(cols * 4),
@@ -119,10 +114,19 @@ impl GpuScene {
                 depth_or_array_layers: 1,
             },
         );
+        eprintln!(
+            "5m write_texture normals: {:>6.1} ms",
+            _t1.elapsed().as_secs_f32() * 1e3
+        );
+        let _t2 = std::time::Instant::now();
         self.gpu_ctx.queue.write_buffer(
             &self._hm5m_shadow_buf,
             0,
             bytemuck::cast_slice(&shadow.data),
+        );
+        eprintln!(
+            "5m write_buffer  shadow:  {:>6.1} ms",
+            _t2.elapsed().as_secs_f32() * 1e3
         );
 
         self.hm5m_origin_x = origin_x;
@@ -150,7 +154,7 @@ impl GpuScene {
         extent_x: f32,
         extent_y: f32,
         hm1m: &dem_io::Heightmap,
-        normals: &terrain::NormalMap,
+        normals_rg16: &[u8],
         shadow: &terrain::ShadowMask,
     ) {
         let cols = hm1m.cols as u32;
@@ -231,20 +235,9 @@ impl GpuScene {
                 depth_or_array_layers: 1,
             },
         );
-        let normal_data: Vec<i16> = normals
-            .nx
-            .iter()
-            .zip(normals.ny.iter())
-            .flat_map(|(&nx, &ny)| {
-                [
-                    (nx.clamp(-1.0, 1.0) * 32767.0).round() as i16,
-                    (ny.clamp(-1.0, 1.0) * 32767.0).round() as i16,
-                ]
-            })
-            .collect();
         self.gpu_ctx.queue.write_texture(
             self._hm1m_normal_tex.as_image_copy(),
-            bytemuck::cast_slice(&normal_data),
+            normals_rg16,
             wgpu::TexelCopyBufferLayout {
                 offset: 0,
                 bytes_per_row: Some(cols * 4),
