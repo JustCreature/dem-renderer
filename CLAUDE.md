@@ -2,27 +2,54 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
-### Commands
-
-| Command | What it does |
-|---|---|
-| `--R` | Generate / update `docs/lessons/phase-N/long-report.md` and `short-report.md` |
-| `--\|` | Save session to `docs/sessions/phase-N/main-session.md` and update CLAUDE.md |
-| `--\|--` | Restore from the most recent session file in `docs/sessions/` |
-| `--\|--path` | Restore from a specific file, e.g. `--\|--docs/sessions/phase-2/session-1.md` |
-| `--s` | Show current phase, completion status, open items, last session summary |
-| `--v` | Finalise current phase if all planned items are complete |
-| `--v--FORCE` | Finalise unconditionally; carry incomplete items as open items to next phase |
-
 ---
 
 ## Project Purpose
 
-A learning-first, cache-optimized terrain + sunlight renderer in Rust using real USGS DEM data (~4000×4000, ~32–64 MB). The explicit goal is deep hardware understanding — memory hierarchy, SIMD utilization, TLB behavior, store buffers, ROB limits, branch predictor internals — not just producing a working renderer. Every design decision must be justified at the microarchitectural level, and every optimization must be validated with measured numbers.
+A real-time, learning-first 3D terrain renderer in Rust. The viewer raymarches real-world Digital Elevation Model data on the GPU, streaming up to three resolution tiers (coarse base / mid close / fine) and blending them in a single WGSL shader. The project doubles as a hardware-deep performance lab — every design decision has a measured backing (cache-line math, SIMD utilisation, TLB behaviour, PCIe readback floor, ROB / store-buffer limits) — but it is now a usable, generic terrain viewer that loads any GeoTIFF / SRTM file the user provides.
+
+The original development used Austrian BEV data (5 m and 1 m) and Copernicus GLO-30 (30 m) because they were the easiest to test against. The CRS pipeline is now generic (proj4rs + proj4wkt + crs-definitions), and any EPSG-registered single GeoTIFF or arbitrary set of overlapping tiles is supported. The "Tirol demo view" preset remains a curated entry point, and its tile paths / camera coordinates can be overridden in the user config file.
 
 ---
 
 ## Architecture
+
+### Two-Phase Application
+
+`src/main.rs` owns a single `App { phase: Phase, vsync_override: bool }` where `Phase::Launcher(LauncherApp) | Phase::Viewer(Viewer)`. The launcher and viewer share **one window, one GPU device, one wgpu surface** for the whole process lifetime — switching phases never calls `el.exit()` and never drops the surface, so there is no visible flash during the transition. The launcher produces a `LauncherOutcome::Start { window, settings, prepared, surface }` which the main App passes into `Viewer::from_launcher(...)`.
+
+### Launcher (egui-based UI)
+
+| File | Purpose |
+|---|---|
+| `src/launcher/mod.rs` | `LauncherApp` (ApplicationHandler), screen dispatch, load/download polling, GPU context creation |
+| `src/launcher/config.rs` | `LauncherSettings` (TOML-persisted), `DemoViewConfig`, `SelectedView` (None / DemoView / CustomFile), `LauncherOutcome` |
+| `src/launcher/renderer.rs` | `EguiRenderer` — egui-winit + egui-wgpu integration, font registration (Space Grotesk, JetBrains Mono), `mountain-bg.png` texture |
+| `src/launcher/background.rs` | Background painters (image, gradient, vignette, corner marks, metadata labels) |
+| `src/launcher/style.rs` | Color palette + font helpers (mono, prop, prop_medium) |
+| `src/launcher/widgets.rs` | Custom widgets: `menu_row`, `choice_item`, `segmented_control`, `styled_checkbox`, `dropdown`, `info_tooltip_button`, `breadcrumb`, `brand_block`, `status_footer`, `hairline_rule` |
+| `src/launcher/downloader.rs` | Background HTTP Range-resume downloader (ureq); ships the demo bundle (4× Copernicus GLO-30 + DGM_R5 5 m + 2× CRS3035 1 m) |
+| `src/launcher/screens/main_menu.rs` | Main screen — Select DEM / Settings / Start / Exit |
+| `src/launcher/screens/select_dem.rs` | Choose source — file picker (any `.tif`) or "Recommended demo view" with download modal |
+| `src/launcher/screens/settings.rs` | Overall Quality, Level of Detail, Shadows, Fog, AO mode (writes to `LauncherSettings`) |
+| `src/launcher/screens/loading.rs` | Progress bar shown while terrain is being prepared on a background thread |
+| `src/launcher/screens/download_card.rs` | Floating download progress card with animated radial ring + speed EMA |
+
+Settings persist to `dirs::config_dir() / dem_renderer / config.toml` (macOS: `~/Library/Application Support/dem_renderer/config.toml`). The `demo_view` sub-table overrides camera position and tile paths for all three tiers, so the demo view does not have to be Tirol — point `fine_tile_paths` / `close_tile_paths` / `base_tile_paths` at any GeoTIFF set and the renderer will stream from it.
+
+### Viewer
+
+| File | Purpose |
+|---|---|
+| `src/viewer/mod.rs` | `Viewer` (ApplicationHandler), WASD+mouse, sun animation, tile streaming dispatch, key bindings |
+| `src/viewer/scene_init.rs` | `prepare_scene_with_ctx` (single-tile / projected-CRS streaming), `prepare_demo_scene_with_ctx` (3×3 Copernicus base), `compute_ao_cropped` |
+| `src/viewer/tiers.rs` | `StreamingTier` (drift-detected reload), `BevBaseState` (base/close/fine workers), `cross_crs_world_origin_and_extent`, `select_ifd`, `cap_to_gpu_limit` |
+| `src/viewer/tile_index.rs` | `TileEntry` + `TileIndex` — discover WGS84 bounds of multiple tiles per tier; `tiles_overlapping_wgs84` |
+| `src/viewer/geo.rs` | `latlon_to_tile_metres` (handles both geographic and projected CRSes), `sun_position` |
+| `src/viewer/hud_renderer.rs` | glyphon HUD overlay, sun indicator, settings panel |
+| `src/viewer/shader_hud_bg.wgsl` | HUD background shader |
+| `src/viewer/shader_sun_hud.wgsl` | SDF season/time circles for the sun HUD |
+| `src/consts.rs` | `WINDOW_W/H`, `DEFAULT_CAM_LAT/LON/ELEV`, `DEFAULT_TILE_5M_PATH`, `M_PER_DEG`, `GPU_SAFE_PX = 8192` |
 
 ### Workspace Structure
 
@@ -30,56 +57,63 @@ A learning-first, cache-optimized terrain + sunlight renderer in Rust using real
 dem_renderer/
 ├── Cargo.toml
 ├── build.rs
+├── Makefile                                # build / view / config / download-tiles
+├── README.md
+├── CLAUDE.md
+├── menu.html                               # initial UI design mock-up (egui menu)
+├── ui-extra.md                             # implementation deviations + next steps for launcher UI
+├── download_copernicus_tiles_30m.sh        # 3×3 grid script
+├── download_copernicus_tiles_30m_5x5.sh    # 5×5 grid script
+├── assets/
+│   ├── mountain-bg.png                     # launcher background photo
+│   └── fonts/                              # SpaceGrotesk-Regular, JetBrainsMono-{Light,Regular}.ttf
 ├── src/
-│   ├── main.rs
+│   ├── main.rs                             # Phase state machine (Launcher ↔ Viewer)
+│   ├── consts.rs
 │   ├── system_info.rs
 │   ├── utils.rs
-│   └── viewer/
-│       ├── mod.rs          # winit app loop, WASD+mouse, sun animation, tile sliding
-│       ├── geo.rs          # CRS forward/inverse projections
-│       ├── hud_renderer.rs # glyphon HUD, sun indicator, settings panel
-│       ├── scene_init.rs   # GpuScene construction + tier wiring
-│       ├── tiers.rs        # StreamingTier, BEV 1m tier state
-│       ├── shader_hud_bg.wgsl
-│       └── shader_sun_hud.wgsl  # SDF season/time circles
+│   ├── launcher/                           # See "Launcher" table above
+│   └── viewer/                             # See "Viewer" table above
 ├── crates/
-│   ├── dem_io/
-│   │   └── src/
-│   │       ├── heightmap.rs  # Heightmap, parse_bil, fill_nodata, parse_hdr
-│   │       ├── geotiff.rs    # GeoTIFF parsing, extract_window, CRS projections
-│   │       ├── grid.rs       # assemble_grid, load_grid, crop (GLO-30 3×3 assembly)
-│   │       └── lib.rs
-│   ├── terrain/
-│   │   └── src/
-│   │       ├── lib.rs           # NormalMap (SoA), ShadowMask, compute_ao_true_hemi
-│   │       ├── row_major.rs     # compute_normals_scalar/_neon/_neon_parallel
-│   │       ├── row_major_avx2.rs
-│   │       ├── shadow.rs        # DDA shadow sweep, NEON variants
-│   │       └── shadow_avx2.rs
-│   ├── render_gpu/
-│   │   └── src/
-│   │       ├── context.rs       # GpuContext (device, queue, instance, adapter)
-│   │       ├── camera.rs        # CameraUniforms (256 bytes, std140)
-│   │       ├── vector_utils.rs
-│   │       ├── render_rexture.rs
-│   │       ├── lib.rs
-│   │       ├── shader_texture.wgsl  # raymarcher: 3-tier height blend, AO, fog, LOD
-│   │       └── scene/
-│   │           ├── mod.rs       # GpuScene, dispatch_frame, resize, update_heightmap
-│   │           ├── bind_group.rs  # rebuild_bind_group (22-entry canonical BG)
-│   │           └── tiers.rs     # upload_hm5m/hm1m, set_*_inactive
-│   └── profiling/
-│       └── src/lib.rs           # cntvct_el0 / rdtsc, timed(), CSV emit
-├── tiles/                        # Copernicus GLO-30 COG + BEV 1m/5m tiles (gitignored)
-│   ├── Copernicus_DSM_COG_10_N*/
-│   └── big_size/                # 1m_innsbruck_area, 1m_salzburg_south_area, 5m_whole_austria
-├── n47_e011_1arc_v3_bil/         # SRTM BIL source data (gitignored)
+│   ├── dem_io/src/
+│   │   ├── lib.rs
+│   │   ├── heightmap.rs                    # Heightmap (f32 data), parse_bil, fill_nodata, fill_nodata_from_base
+│   │   ├── geotiff.rs                      # parse_geotiff_auto, extract_window, ifd_scales, tile_bounds_wgs84, tile_centre_crs
+│   │   ├── grid.rs                         # assemble_grid, load_grid, load_grid_from_paths, crop, stitch_windows[_geographic]
+│   │   ├── crs.rs                          # tile_proj4 / to_wgs84 / from_wgs84 / is_geographic / epsg_towgs84 (proj4rs + proj4wkt + crs-definitions)
+│   │   └── overview.rs                     # ensure_overview_cache: build .tmp_dem_pre_calc_*.tif from large single-IFD tiles
+│   ├── terrain/src/
+│   │   ├── lib.rs                          # Platform dispatchers (#[cfg(target_arch)] guards for AVX2 / NEON)
+│   │   ├── row_major.rs                    # scalar + NEON normals
+│   │   ├── row_major_avx2.rs               # AVX2 normals (x86_64 only)
+│   │   ├── shadow.rs                       # scalar + NEON shadow DDA
+│   │   └── shadow_avx2.rs                  # AVX2 shadow DDA (x86_64 only)
+│   ├── render_gpu/src/
+│   │   ├── lib.rs                          # public exports + CPU-side helpers (hm_to_f16_bytes, gen_hm_mip_bytes, pack_normals_*, pack_ao_u8)
+│   │   ├── context.rs                      # GpuContext (Arc-backed Device/Queue, Instance, Adapter)
+│   │   ├── camera.rs                       # CameraUniforms — std140-aligned struct mirrored in WGSL
+│   │   ├── vector_utils.rs
+│   │   ├── render_rexture.rs
+│   │   ├── shader_texture.wgsl             # main compute raymarcher (3-tier blend, AO, fog, LOD, bicubic Catmull-Rom)
+│   │   └── scene/
+│   │       ├── mod.rs                      # GpuScene::{new, resize, update_heightmap, update_shadow, update_ao, dispatch_frame}
+│   │       ├── bind_group.rs               # rebuild_bind_group — 20-entry canonical BG (binding 0–19)
+│   │       └── tiers.rs                    # upload_hm5m / upload_hm1m / set_hm5m_inactive / set_hm1m_inactive (grow-only)
+│   └── profiling/src/lib.rs                # cntvct_el0 / rdtsc cycle counters, CSV emit
+├── tiles/                                  # gitignored; user-supplied DEM tiles
+│   ├── Copernicus_DSM_COG_10_N*_00_E*_00_DEM/
+│   └── big_size/                           # large user-downloaded GeoTIFFs (5 m / 1 m / Norway / NZ / …)
+├── n47_e011_1arc_v3_bil/                   # gitignored; SRTM BIL legacy source
 └── docs/
-    ├── planning/
-    ├── lessons/
-    ├── sessions/
-    ├── gems/
-    └── benchmark_results/
+    ├── DEM Renderer.zip                    # design ZIP (high-level project archive)
+    ├── screenshot.png
+    ├── benchmarks_report.html
+    ├── menu.html / time_season_hud_concept.png / gem-fixed-misalignment.md / misalignment.md / other_tiles.md
+    ├── planning/                           # active plans: performace-improvements.md, tile-processing-overlapping.md, ui-downloader.md
+    ├── gems/                               # design notes
+    ├── learnings/
+    ├── improvements/
+    └── sessions/                           # per-phase session restore points
 ```
 
 ### Dependency DAG
@@ -87,81 +121,69 @@ dem_renderer/
 ```
 profiling (leaf)
     ↑
-dem_io
+dem_io  ─ proj4rs · proj4wkt · crs-definitions · tiff · image
     ↑
-terrain
+terrain ─ rayon
     ↑
-render_gpu
+render_gpu ─ wgpu · half · bytemuck
     ↑
-  main.rs
+  main.rs / src/launcher / src/viewer
+        ─ winit · wgpu · egui (+ egui-wgpu + egui-winit) · glyphon · rfd · ureq · dirs · serde · toml · sysinfo · rayon · image · bytemuck
 ```
 
-Types are defined in the crate that produces them: `Heightmap` in `dem_io`, `NormalMap`/`ShadowMask` in `terrain`.
+Types are defined in the crate that produces them: `Heightmap` in `dem_io`, `NormalMap`/`ShadowMask` in `terrain`, `GpuScene`/`GpuContext`/`CameraUniforms` in `render_gpu`.
 
 ### Crate Responsibilities
 
-- **`dem_io`**: Parse SRTM `.hgt` and GeoTIFF files. GLO-30 3×3 grid assembly. Selective COG window reads (`extract_window`). CRS: EPSG:4326, 31287, 3035.
-- **`terrain`**: Surface normals (SoA finite differences, NEON + AVX2). Sun shadow sweep (DDA horizon-angle, NEON + AVX2). AO (16-azimuth DDA, averaged).
-- **`render_gpu`**: wgpu texture-based raymarcher. `GpuScene` holds all GPU resources persistently. Three resolution tiers (30m / 5m / 1m) blended in WGSL. Swap-chain viewer lives in `src/viewer/`.
-- **`profiling`**: `cntvct_el0` (AArch64) / `rdtsc` (x86) cycle counters, CSV timing emitter.
+- **`dem_io`** — Read SRTM `.hgt`/`.bil` and any GeoTIFF (including BigTIFF). `parse_geotiff_auto` reads the CRS from GeoKey 3072 / WKT (tag 34737) and resolves it via `proj4rs` / `proj4wkt` / `crs-definitions` — no hardcoded CRS knowledge. `extract_window` performs selective COG reads at a chosen IFD level. `assemble_grid` / `load_grid_from_paths` build 3×3 or arbitrary Copernicus mosaics. `stitch_windows_geographic` and `stitch_windows` stitch BEV / projected windows from multiple overlapping tiles. `ensure_overview_cache` builds a `.tmp_dem_pre_calc_<filename>.tif` next to any large single-IFD tile (box-averaged to ~8 m and ~32 m levels) so subsequent runs and tier reloads stay fast. `fill_nodata_from_base` smooth-blends a higher-resolution window over a coarser base so seams between tiers disappear.
+- **`terrain`** — Surface normals (Sobel SoA, NEON 4-wide and 8-wide on aarch64, AVX2 8-wide on x86_64). DDA shadow sweep with arbitrary azimuth and penumbra (scalar / NEON / AVX2 variants, rayon-parallel). True-hemisphere AO (`compute_ao_true_hemi` — 16-azimuth DDA averaged).
+- **`render_gpu`** — wgpu compute-shader raymarcher. `GpuScene` owns all GPU resources persistently; mutable per-frame work is the camera uniform write and an optional shadow/AO/heightmap buffer/texture refresh. Three tiers are blended in WGSL with a 500 m blend margin. Bicubic Catmull-Rom interpolation is enabled within `smooth_radius_m` of the camera (default 2000 m, `B` key cycles 0/500/1000/2000/5000 m). Public helpers `hm_to_f16_bytes`, `gen_hm_mip_bytes`, `pack_normals_u32_bytes`, `pack_normals_rg16_bytes`, `pack_ao_u8` let workers pre-pack bytes off the main thread.
+- **`profiling`** — `cntvct_el0` (AArch64) / `rdtsc` (x86) cycle counters, CSV timing emitter.
+
+### Multi-tier Streaming Model
+
+For projected single-file mode and demo mode, the viewer spawns three background workers that hold WGS84 `(lat, lon)` and translate per-tile:
+
+| Tier | Radius | Drift threshold | Format on GPU |
+|---|---|---|---|
+| **base** | 90 km | 30 km | R16Float texture + 8 mips; packed-u32 normal storage buffer; R8Unorm AO; f32 shadow buffer |
+| **close** (≈5 m) | 20 km | 3 km | R32Float texture; Rg16Snorm normal texture; f32 shadow buffer |
+| **fine** (≈1 m) | 3.5 km | 1 km | R32Float texture; Rg16Snorm normal texture; f32 shadow buffer |
+
+`StreamingTier::needs_reload` fires when the camera drifts past the threshold; the worker re-reads via `extract_window`, recomputes normals/shadows on the worker thread, pre-packs all GPU bytes, and sends a `TierData` bundle. The main thread does only `write_texture` / `write_buffer`. Detail tiers are suppressed while the camera moves > 2 500 m/s (400 ms debounce) — a 20 km close window is pointless when the camera leaves it before the load finishes. The base tier also recalibrates its drift threshold to half the actual loaded window after each reload (so GPU-capped windows on 1 m sources stay reload-stable).
+
+### Bind Group Layout (Single Canonical BG, 20 Entries)
+
+| Binding | Resource |
+|---|---|
+| 0 | `CameraUniforms` (Uniform) |
+| 1 / 2 | Base hm `texture_2d<f32>` (R16Float, 8 mips) + filtering sampler |
+| 3 | Output buffer (`storage, read_write` u32 array) |
+| 4 | Packed normals (`storage, read` u32 array) |
+| 7 | Base shadow (`storage, read` f32 array) |
+| 8 / 9 | AO texture (R8Unorm) + sampler |
+| 10–14 | 5 m close tier — heightmap (R32Float) + samp + normals (Rg16Snorm) + samp + shadow buffer |
+| 15–19 | 1 m fine tier — same layout as 5 m |
+
+`scene::bind_group::rebuild_bind_group()` rebuilds the BG whenever a tier's texture / buffer is recreated (size grows). Steady-state reloads do not allocate — `write_texture` / `write_buffer` overwrite in place.
 
 ---
 
 ## Interaction Mode
 
 - **Guide.** The user is building this to learn. Explain *why* something works at the hardware level, point to the right direction, suggest experiments — but do not write code or execute commands unless explicitly asked.
-- **Assume strong technical curiosity.** The user wants full-depth explanations: cache-line math, TLB reach calculations, ROB/store-buffer reasoning, branch predictor behavior. Don't simplify unless asked.
-- **Encourage measurement over intuition.** When the user asks "which is faster?", the answer is almost always "profile it — here's how and what counters to look at."
+- **Assume strong technical curiosity.** The user wants full-depth explanations: cache-line math, TLB reach, ROB/store-buffer reasoning, branch predictor behaviour. Don't simplify unless asked.
+- **Encourage measurement over intuition.** "Profile it — here's how and what counters to look at" is almost always the right answer to "which is faster?".
 - **Build layered mental models.** Start from the hardware constraint (cache size, SIMD width, pipeline depth), derive the software implication, then suggest the experiment to validate.
-- **Go full hardware depth.** Reason about store buffers, ROB size, retirement rate, branch predictor internals (TAGE), TLB pressure, prefetcher training, port pressure — not just "use SIMD and cache lines."
+- **Go full hardware depth.** Store buffers, ROB size, retirement rate, branch predictor internals (TAGE), TLB pressure, prefetcher training, port pressure — not just "use SIMD and cache lines".
 
 ---
 
 ## Key Measurement Results (M4 Max unless noted)
 
-### Memory bandwidth baseline (256 MB working set)
-- seq_read scalar: 5.7–6.7 GB/s | seq_read SIMD: 21.8–37 GB/s
-- random_read scalar: 0.6 GB/s | random_read SIMD: 1.4 GB/s
-- Sequential/random ratio: 11–16× — drives all tiling decisions
 
-### Normal computation (cold cache, 3601×3601)
-- Scalar (black_box): 8.1 GB/s | Auto-vectorized: 24.1 GB/s | NEON 4-wide: 28.8 GB/s
-- NEON parallel (10 cores): 42–50 GB/s cold | ~117 GB/s warm
-- Tiled NEON parallel: 34 GB/s (worse — output is row-major, writes dominate)
-- Stencil row-major: 60–72 GB/s (auto-vec 8-wide) | tiled: ~11 GB/s (`continue` blocks vec)
 
-### Shadow computation (cold cache)
-- Scalar branchy: 8.1 GB/s | Scalar branchless: 10.6 GB/s | NEON 4-wide: 17.4 GB/s | NEON parallel: 58.6 GB/s
-- Diagonal shadow 2.4× slower than cardinal (strided cache-line access)
-- CPU NEON parallel: 1.5 ms | GPU shadow: 26 ms — CPU wins 17× (serial running-max dependency)
 
-### CPU raymarcher (2000×900 image)
-- Scalar single-thread: 0.80s | NEON single-thread: 0.80s (gather overhead cancels SIMD gain)
-- Scalar parallel (10 cores): 0.08s — 10× speedup, near-ideal scaling
-- Average steps per ray: 506 (≈10.5 km); effective read rate: ~22 GB/s (compute-bound, not BW-bound)
-
-### GPU rendering (8000×2667 = 21.3 Mpix)
-- GPU buffer: 130 ms | GPU texture: 170 ms | GPU combined (normals on GPU): 90 ms | CPU parallel: 1260 ms
-- Multi-frame per-frame: GPU scene 98 ms | GPU combined 120 ms | GPU separate 133 ms | CPU 1730 ms
-- GpuScene speedup over CPU: 17.7× — 85 MB readback was the hard floor (~88 ms)
-
-### Swap-chain viewer (no readback, 1600×533)
-- M4: **477 fps** (2.1 ms/frame) | Win GTX 1650: **260 fps** | Mac i7: **53 fps** | Asus Pentium: **4.9 fps**
-- vs bench_fps with readback: M4 10.3× | Win 24.1× | Mac i7 11.3× | Asus 7.1×
-- True compute at 8000×2667: **21 fps** (47 ms)
-- Command overhead floor: ~2.1 ms (~470 fps) — fixed cost regardless of shader work
-
-### Thread / accumulator scaling (3601×3601)
-- Thread scaling writes: linear to 8T (85 GB/s), ceiling at 12T (101 GB/s)
-- Thread scaling reads: linear to 10T (259 GB/s), ceiling at 12T (247 GB/s) — write 3× narrower than read
-- NEON 1-acc: 18 GB/s | 4-acc: 71 GB/s | 8-acc: 120 GB/s (SLC-bound)
-- TLB knees: 4 MB (L1 DTLB, 256×16 KB) and 16–64 MB (L2 TLB, ~48 MB)
-
-### AoS vs SoA / Morton
-- AoS vs SoA: 1.00× single-thread | 1.13× parallel (barely BW-limited on M4)
-- SoA advantage scales with bandwidth starvation: Win 2.3× | Asus 2.7×
-- Morton vs row-major tiled: 1.00× — OOO ROB hides L2 latency, never reaches DRAM
-- Software prefetch: +14% max at D=64 — M4 ROB (~600) already issues speculative loads
 
 ### Multi-tile loading (10800×10800 assembled GLO-30 grid)
 - load_grid (9 × DEFLATE COG from disk): 4.52 s | normals: 185 ms | shadows: 525 ms
@@ -189,52 +211,54 @@ Types are defined in the crate that produces them: `Heightmap` in `dem_io`, `Nor
 - M4 16 KB pages give 4× TLB reach vs x86 — critical at large working sets (26 MB heightmap)
 - Morton ordering needs DRAM pressure to matter; OOO ROB hides the L2 latency difference
 
-### GPU vs CPU
-- GPU wins rendering (17.7×) — raymarching is embarrassingly parallel, no inter-pixel dependencies
-- CPU wins shadow — running-max is serial per row; GPU shader cores run at lower clock with no advantage
-- PCIe readback is the fps ceiling on discrete GPU; unified memory (M4) eliminates this tax entirely
-- Swap chain removes 96% of perceived frame time on GTX 1650
-
 ### wgpu specifics
 - Bind groups store GPU addresses, not CPU-side Arc refs — all referenced resources must be kept alive in the owning struct
 - `write_buffer` updates buffer contents in-place; bound bind group sees new data automatically on next dispatch
 - Default buffer binding limit 128 MB; fix: `required_limits: adapter.limits()`
-- Texture dimension limit 8192 px (hardware max, not wgpu default)
+- Texture dimension limit 8192 px (hardware max, not wgpu default) — `GPU_SAFE_PX = 8192`, source windows above this are cropped centred on the camera
 - wgpu does not expose VkSparseBinding or Metal sparse textures; software indirection is the only option
 - Workgroup size (64–256 threads, 8×8 to 32×8): all within ±3% when readback dominates
 
 ### GeoTIFF / CRS
+- CRS is read from each tile, not assumed: `tile_proj4` reads WKT from tag 34737 (via proj4wkt) or falls back to the EPSG code in GeoKey 3072/2048 (via crs-definitions). proj4rs handles the transforms in both directions
+- proj4wkt defaults to `+towgs84=0,0,0,0,0,0,0` for any WKT without an explicit TOWGS84 node; `epsg_towgs84()` overrides that with 7-parameter Helmert shifts for MGI (Austria), DHDN (Germany), OSGB36, ED50, CH1903 (Switzerland), Tokyo, NZGD49 — without these the Austrian 5 m tile sits ~600 m east of the 30 m Copernicus grid
+- A geographic tile stores `dx_meters = dx_deg * 111 320 * cos(lat)`; `extract_window` writes `dx_meters = dx_deg` for geographic tiles (degrees as pixel scale), so all viewer/tier code derives m/px from `dx_deg` for geographic CRSes and reads `dx_meters` directly for projected ones
+- BEV DGM 5 m NoData sentinel = 0.0 (safe: min Austrian elevation >> 0); GLO-30 NaN/<-1000 sentinel; the extract_window NoData sentinel is -9999
 - Pixel-scale tag value distinguishes geographic CRS (<0.1 deg/px) from projected (≥1.0 m/px) at load time
-- EPSG:3035 LAEA Europe: FE=4321000, FN=3210000, lat0=52°N, lon0=10°E, GRS 1980
-- EPSG:31287 Austria Lambert: FE=FN=400000, lat0=47.5°N, lon0=13.333°E, Bessel 1841; 5m/px
 - `tiff` crate default memory limit blocks tiles > 128 MB; fix: `Limits::unlimited()`
-- BEV DGM 5m NoData sentinel = 0.0 (safe: min Austrian elevation >> 0)
 - Tile geometry at mid-latitudes is asymmetric: E-W width shrinks with cos(lat)
 - GLO-30 tiles: 3600×3600 pixel-is-area, pixel centres at ±0.5/3600° from integer degree boundary; adjacent tiles concatenate directly
+- For large single-IFD tiles, `ensure_overview_cache` builds box-averaged pyramids (target ~8 m close + ~32 m base) into a `.tmp_dem_pre_calc_<filename>.tif` next to the source — checked by mtime so subsequent runs hit the cache and base / close tier reloads stay fast
 
 ### Multi-resolution tiers
 - True Hemisphere AO = sun shadow DDA generalised: 16 azimuths, averaged — baked once, free at render time
 - HBAO radial 600m sweep exposes smaller GPU caches (GTX 1650); SSAO fixed-offset samples stay cache-local
-- C1 discontinuity (slope jumps at DEM grid lines) is a data floor; Gaussian smoothing fixes the symptom but destroys ridgelines
-- At 47°N: SRTM tiles are 111 km N-S × 76 km E-W; fog 60 km always overshoots E/W edges → 3×3 tile grid required
+- C1 discontinuity (slope jumps at DEM grid lines) is a data floor; bicubic Catmull-Rom inside `smooth_radius_m` softens fine-tier surfaces without destroying ridgelines; Gaussian smoothing destroys ridgelines
+- At 47°N: SRTM tiles are 111 km N-S × 76 km E-W; fog 60 km always overshoots E/W edges → 3×3 (or 2×2) tile grid required
+- The fine and close tiers carry an explicit per-tier rotation (`cos_rot`/`sin_rot` in `CameraUniforms`) so meridian convergence between projected CRSes (e.g. 1 m EPSG:3035 over a 30 m geographic base) does not produce a visible seam
+
+### Main-thread responsiveness (fix-freeze)
+- All CPU-heavy pre-upload work (`hm_to_f16_bytes`, `gen_hm_mip_bytes`, `pack_normals_u32_bytes` / `pack_normals_rg16_bytes`, `pack_ao_u8`) is now performed on tier worker threads; the main thread only calls `write_texture` / `write_buffer`. Removing the f32→f16 pass and the mip generation from the GPU upload path eliminated multi-frame stalls on tile slides
+- The base tier reload also respawns shadow and AO workers because both close over `Arc<Heightmap>` — replacing the heightmap requires respawning their senders/receivers, and AO is force-recomputed at the new tile centre by setting `ao_last_x = f64::MAX`
 
 ---
 
 ## Open Items
 
-- GPU shadow via parallel prefix scan (deferred multiple times)
-- Occupancy analysis via Instruments/Metal GPU trace — requires full Xcode.app
 - `fill_nodata` division-by-zero if all 4 directions hit boundary without finding valid data
 - Supersampled ray optimization: march 1 reference ray, approximate 3 neighbours via gradient. Breaks at sharp peaks.
+- Dynamic tile list in the Select DEM screen (planned `src/launcher/scanner.rs` to discover `tiles/` contents and feed the UI live)
+- Custom configure-view UI (let the user point each tier at arbitrary GeoTIFFs without editing the TOML by hand)
 
 ---
 
 ## Build Commands
 
 ```sh
-cargo build --release
-cargo bench -p terrain
-RUSTFLAGS="-C target-cpu=native" cargo build --release  # Enable AVX2/NEON
+cargo build --release                                         # native (target-cpu via Makefile)
+RUSTFLAGS="-C target-cpu=native" cargo build --release        # explicit AVX2 / NEON
+make build_arm                                                # macOS Apple Silicon
+make build_x86                                                # cross-compile to x86_64-apple-darwin (run on an Intel host)
 ```
 
 **Build profiles** (workspace `Cargo.toml`):
@@ -243,10 +267,6 @@ RUSTFLAGS="-C target-cpu=native" cargo build --release  # Enable AVX2/NEON
 opt-level = 3
 lto = "thin"
 codegen-units = 1
-
-[profile.bench]
-inherits = "release"
-debug = true  # symbols for perf report / Instruments
 ```
 
 Use `#[inline(never)]` during profiling so functions appear as distinct symbols. Switch to `#[inline]` + LTO for final benchmark numbers.
@@ -257,35 +277,35 @@ Use `#[inline(never)]` during profiling so functions appear as distinct symbols.
 
 | Decision | Rationale |
 |---|---|
+| Generic CRS via proj4rs/proj4wkt | Any GeoTIFF with a CRS works; no per-EPSG branches in the load path |
+| Built-in epsg_towgs84 Helmert shifts | proj4wkt zero-fills TOWGS84 for WKT without it; manual override prevents 600 m datum offsets on national grids |
+| Pre-built overview cache for large single-IFD tiles | One slow build instead of slow tier reloads on every run |
+| Two-phase App with shared surface | Launcher and viewer use one window/device/surface — zero visible flash at startup |
+| TOML config in `dirs::config_dir()` | Survives reinstalls; demo_view paths can be edited by hand for any region |
 | SoA over AoS for normals | Load 8 consecutive nx values in one AVX2 instruction |
 | Branchless inner loops | SIMD masks / `cmov` in shadow sweep, ray termination |
-| `#[inline(never)]` on profiled functions | Distinct symbols in `perf report` / Instruments |
-| `codegen-units = 1` | No cross-function optimization loss |
-| Thin LTO in release | Cross-crate inlining for hot paths |
+| Worker-side byte packing | Main thread never spends time converting f32→f16 / scaling AO / packing normals |
+| Single canonical 20-entry bind group | `rebuild_bind_group()` runs only when a tier texture/buffer is resized |
+| Grow-only tier buffers | Steady-state reloads do not allocate; only `write_texture`/`write_buffer` |
+| `GPU_SAFE_PX = 8192` cap | Hardware texture dimension limit; oversized source windows are cropped around the camera |
+| Speed-gated detail loads | At boost speed (5 km/s) a 20 km close window outlives its load time; gate at 2.5 km/s with 400 ms debounce |
 | CPU shadow, GPU render | Running-max is serial → CPU wins; raymarching embarrassingly parallel → GPU wins |
 | Swap-chain viewer | Eliminates 85 MB readback floor; PCIe was the fps bottleneck, not shader compute |
-| Multi-resolution tiers | 30m GLO-30 base + 5m BEV detail + 1m BEV fine; blended in shader |
-| Single canonical bind group | `rebuild_bind_group()` — one 22-entry BG replaces 4 duplicate ~90-line blocks |
+| Multi-resolution tiers | 30 m / 5 m / 1 m blended in shader with a 500 m feathered margin; bicubic Catmull-Rom near camera |
+| Per-tier `cos_rot`/`sin_rot` | Compensates meridian convergence between projected CRSes at tier boundaries |
 
 ---
 
 ## Coding Conventions
 
-- Rust stable; nightly only for `std::simd` / `core::arch` not yet stabilized.
+- Rust stable, `edition = "2024"`. Nightly only for `std::simd` / `core::arch` items not yet stabilised.
 - `unsafe` only for SIMD intrinsics — document the safety invariant inline.
 - Prefer `core::arch` over `std::simd` when stable intrinsics cover the operation.
-- Name SIMD dispatch functions explicitly: `compute_normals_neon()`, `compute_normals_avx2()`, `compute_normals()` (dispatcher).
+- Name SIMD dispatch functions explicitly: `compute_normals_neon()`, `compute_normals_avx2()`, `compute_normals_vector()` (dispatcher).
+- ISA-specific modules go behind `#[cfg(target_arch = "x86_64")]` / `#[cfg(target_arch = "aarch64")]` and the dispatcher logs `[SCALAR FALLBACK]` when neither path is available.
 
 ---
 
 ## Profiling
 
-**Target hardware**: Apple Silicon M4 Max (NEON, 128 KB L1D) and x86-64 (AVX2, 32–48 KB L1D).
-
-Before claiming an optimization works, measure:
-- Wall-clock (Criterion or manual)
-- `perf stat`: cycles, instructions, IPC
-- L1/L2/L3 miss rates, dTLB miss rate, branch misprediction rate
-- Apple Silicon: Instruments CPU Counters template
-
-Key counters: `cache-misses`, `L1-dcache-load-misses`, `dTLB-load-misses`, `instructions`, `cycles`, `branches`, `branch-misses`, `resource_stalls.sb`, `fp_ret_sse_avx_ops.all`.
+**Target hardware**: Apple Intel x86-64 (AVX2, 32–48 KB L1D) and Apple Silicon M4 Max (NEON, 128 KB L1D) and ACER WindowsOS Intel CPU Nvidea GTX 1650 GPU.

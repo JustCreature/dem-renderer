@@ -127,7 +127,7 @@ impl LauncherApp {
         match event {
             ChooseFiles => {
                 if let Some(path) = rfd::FileDialog::new()
-                    .add_filter("DEM tiles", &["tif", "hgt", "asc"])
+                    .add_filter("DEM tiles", &["tif"])
                     .pick_file()
                 {
                     self.settings.tile_5m_path = path;
@@ -507,7 +507,7 @@ impl ApplicationHandler for LauncherApp {
                                             "Digital Elevation Model · Renderer",
                                             "DEM Renderer",
                                             ".",
-                                            "v 0.4.2 · build 2026.05",
+                                            "v 0.1.0 · build 2026.05",
                                         ),
                                         Screen::Settings => brand_block(
                                             ui,

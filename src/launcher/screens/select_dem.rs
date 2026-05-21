@@ -37,7 +37,7 @@ pub fn show(
         ui,
         "A",
         "Choose files…",
-        "Open a file browser and pick local DEM tiles.\nSupports .tif (GeoTIFF) · .hgt (SRTM) · .asc (ESRI ASCII Grid).",
+        "Open a file browser and pick local DEM tiles.\nSupports .tif (GeoTIFF).",
         "LOCAL · ANY SIZE",
         *selected_view == SelectedView::CustomFile,
         &mut anim.choice[0],

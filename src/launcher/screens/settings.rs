@@ -78,6 +78,8 @@ fn opt_row(ui: &mut Ui, num: &str, label: &str, control: impl FnOnce(&mut Ui)) {
     ui.add_space(4.0);
 }
 
+// Kept in case this component is needed later.
+#[allow(dead_code)]
 fn opt_row_with_info(
     ui: &mut Ui,
     num: &str,
