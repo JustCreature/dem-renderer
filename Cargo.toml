@@ -9,7 +9,7 @@ resolver = "2"
 
 [package]
 name = "dem_renderer"
-version = "0.0.2"
+version = "0.1.0"
 edition = "2024"
 
 [[bin]]
@@ -23,7 +23,7 @@ terrain = { path = "crates/terrain" }
 render_gpu = { path = "crates/render_gpu" }
 image = "0.25"
 rayon = "1.12.0"
-sysinfo = "0.33.1"
+sysinfo = "0.39.2"
 winit = "0.30"
 wgpu = "29.0.3"
 glyphon = { git = "https://github.com/grovesNL/glyphon", branch = "main" }
@@ -32,7 +32,7 @@ egui = { version = "0.34.2", features = ["default_fonts"] }
 egui-wgpu = { version = "0.34.2", features = ["winit"] }
 egui-winit = "0.34.2"
 serde = { version = "1", features = ["derive"] }
-toml = "1.1.2+spec-1.1.0"
+toml = "1.1.2"
 dirs = "6.0.0"
 rfd = "0.17.2"
-ureq = { version = "2", features = ["tls"] }
+ureq = { version = "3.3.0", features = ["_tls"] }

@@ -35,7 +35,7 @@ pub fn print_system_info() {
     }
     println!(
         "Cores          : {} physical / {} logical",
-        sys.physical_core_count().unwrap_or(0),
+        sysinfo::System::physical_core_count().unwrap_or(0),
         cpus.len(),
     );
 

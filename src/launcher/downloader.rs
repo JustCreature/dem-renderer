@@ -83,7 +83,12 @@ fn head_content_length(url: &str) -> u64 {
     ureq::head(url)
         .call()
         .ok()
-        .and_then(|r| r.header("content-length").and_then(|v| v.parse().ok()))
+        .and_then(|r| {
+            r.headers()
+                .get("content-length")
+                .and_then(|v| v.to_str().ok())
+                .and_then(|v| v.parse().ok())
+        })
         .unwrap_or(0)
 }
 
@@ -224,7 +229,7 @@ pub fn begin_download(dest_root: PathBuf) -> (mpsc::Receiver<DownloadProgress>, 
 
             let resp = if task.resume_from > 0 {
                 ureq::get(&task.url)
-                    .set("Range", &format!("bytes={}-", task.resume_from))
+                    .header("Range", &format!("bytes={}-", task.resume_from))
                     .call()
             } else {
                 ureq::get(&task.url).call()
@@ -250,18 +255,22 @@ pub fn begin_download(dest_root: PathBuf) -> (mpsc::Receiver<DownloadProgress>, 
 
             let current_file_size = if resp.status() == 206 {
                 let remaining: u64 = resp
-                    .header("content-length")
+                    .headers()
+                    .get("content-length")
+                    .and_then(|v| v.to_str().ok())
                     .and_then(|v| v.parse().ok())
                     .unwrap_or(0);
                 task.resume_from + remaining
             } else {
-                resp.header("content-length")
+                resp.headers()
+                    .get("content-length")
+                    .and_then(|v| v.to_str().ok())
                     .and_then(|v| v.parse().ok())
                     .unwrap_or(task.remote_size)
             };
 
             let mut current_file_bytes = task.resume_from;
-            let mut reader = resp.into_reader();
+            let mut reader = resp.into_body().into_reader();
             let mut writer = BufWriter::new(file);
             let mut chunk = vec![0u8; 65536];
 

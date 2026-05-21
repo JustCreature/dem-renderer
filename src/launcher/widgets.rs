@@ -307,8 +307,10 @@ pub fn segmented_control(ui: &mut Ui, id: Id, options: &[&str], current: &mut u3
     changed
 }
 
+// Kept in case this component is needed later.
 /// Checkbox styled as a 16×16 bordered square with a checkmark when active.
 /// Returns true if the toggle was clicked this frame.
+#[allow(dead_code)]
 pub fn styled_checkbox(ui: &mut Ui, checked: &mut bool) -> bool {
     let size = 16.0_f32;
     let (response, painter) = ui.allocate_painter(vec2(size, size), Sense::click());
