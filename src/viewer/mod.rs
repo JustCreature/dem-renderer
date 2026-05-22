@@ -721,6 +721,18 @@ impl ApplicationHandler for Viewer {
                         self.smooth_radius_m = presets[(cur + 1) % presets.len()];
                         return;
                     }
+                    // Debug: force close + fine tier reloads on the next frame.
+                    // Used to repro tier-swap memory peaks without flying.
+                    if kc == KeyCode::KeyR && event.state == winit::event::ElementState::Pressed {
+                        if let Some(ref mut bev_base) = self.bev_base {
+                            bev_base.close.invalidate();
+                            if let Some(ref mut fine) = bev_base.fine {
+                                fine.invalidate();
+                            }
+                            eprintln!("[vram] debug: close + fine tiers invalidated (R)");
+                        }
+                        return;
+                    }
                     if kc == KeyCode::SuperLeft || kc == KeyCode::AltLeft {
                         match event.state {
                             winit::event::ElementState::Pressed => {

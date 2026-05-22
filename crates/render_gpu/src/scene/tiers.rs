@@ -1,4 +1,5 @@
 use super::GpuScene;
+use crate::vram;
 
 impl GpuScene {
     /// Upload 5m close-tier data.
@@ -24,10 +25,10 @@ impl GpuScene {
         let buf_too_small = needed_elems > self.hm5m_buf_elems;
 
         if size_changed {
-            let texture = self
-                .gpu_ctx
-                .device
-                .create_texture(&wgpu::TextureDescriptor {
+            vram::track_texture_drop(&self._hm5m_texture, "hm5m_tex");
+            let texture = vram::create_texture_tracked(
+                &self.gpu_ctx.device,
+                &wgpu::TextureDescriptor {
                     label: Some("hm5m_tex"),
                     size: wgpu::Extent3d {
                         width: cols,
@@ -40,13 +41,15 @@ impl GpuScene {
                     format: wgpu::TextureFormat::R32Float,
                     usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
                     view_formats: &[],
-                });
+                },
+                "hm5m_tex",
+            );
             self._hm5m_view = texture.create_view(&wgpu::TextureViewDescriptor::default());
             self._hm5m_texture = texture;
-            let normal_tex = self
-                .gpu_ctx
-                .device
-                .create_texture(&wgpu::TextureDescriptor {
+            vram::track_texture_drop(&self._hm5m_normal_tex, "hm5m_normal_tex");
+            let normal_tex = vram::create_texture_tracked(
+                &self.gpu_ctx.device,
+                &wgpu::TextureDescriptor {
                     label: Some("hm5m_normal_tex"),
                     size: wgpu::Extent3d {
                         width: cols,
@@ -59,7 +62,9 @@ impl GpuScene {
                     format: wgpu::TextureFormat::Rg16Snorm,
                     usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
                     view_formats: &[],
-                });
+                },
+                "hm5m_normal_tex",
+            );
             self._hm5m_normal_view =
                 normal_tex.create_view(&wgpu::TextureViewDescriptor::default());
             self._hm5m_normal_tex = normal_tex;
@@ -67,12 +72,17 @@ impl GpuScene {
 
         if buf_too_small {
             let size = needed_elems * 4;
-            self._hm5m_shadow_buf = self.gpu_ctx.device.create_buffer(&wgpu::BufferDescriptor {
-                label: Some("hm5m_shadow"),
-                size,
-                usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
-                mapped_at_creation: false,
-            });
+            vram::track_buffer_drop(&self._hm5m_shadow_buf, "hm5m_shadow");
+            self._hm5m_shadow_buf = vram::create_buffer_tracked(
+                &self.gpu_ctx.device,
+                &wgpu::BufferDescriptor {
+                    label: Some("hm5m_shadow"),
+                    size,
+                    usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+                    mapped_at_creation: false,
+                },
+                "hm5m_shadow",
+            );
             self.hm5m_buf_elems = needed_elems;
         }
 
@@ -165,10 +175,10 @@ impl GpuScene {
         let buf_too_small = needed_elems > self.hm1m_buf_elems;
 
         if size_changed {
-            let texture = self
-                .gpu_ctx
-                .device
-                .create_texture(&wgpu::TextureDescriptor {
+            vram::track_texture_drop(&self._hm1m_texture, "hm1m_tex");
+            let texture = vram::create_texture_tracked(
+                &self.gpu_ctx.device,
+                &wgpu::TextureDescriptor {
                     label: Some("hm1m_tex"),
                     size: wgpu::Extent3d {
                         width: cols,
@@ -181,13 +191,15 @@ impl GpuScene {
                     format: wgpu::TextureFormat::R32Float,
                     usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
                     view_formats: &[],
-                });
+                },
+                "hm1m_tex",
+            );
             self._hm1m_view = texture.create_view(&wgpu::TextureViewDescriptor::default());
             self._hm1m_texture = texture;
-            let normal_tex = self
-                .gpu_ctx
-                .device
-                .create_texture(&wgpu::TextureDescriptor {
+            vram::track_texture_drop(&self._hm1m_normal_tex, "hm1m_normal_tex");
+            let normal_tex = vram::create_texture_tracked(
+                &self.gpu_ctx.device,
+                &wgpu::TextureDescriptor {
                     label: Some("hm1m_normal_tex"),
                     size: wgpu::Extent3d {
                         width: cols,
@@ -200,7 +212,9 @@ impl GpuScene {
                     format: wgpu::TextureFormat::Rg16Snorm,
                     usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
                     view_formats: &[],
-                });
+                },
+                "hm1m_normal_tex",
+            );
             self._hm1m_normal_view =
                 normal_tex.create_view(&wgpu::TextureViewDescriptor::default());
             self._hm1m_normal_tex = normal_tex;
@@ -208,12 +222,17 @@ impl GpuScene {
 
         if buf_too_small {
             let size = needed_elems * 4;
-            self._hm1m_shadow_buf = self.gpu_ctx.device.create_buffer(&wgpu::BufferDescriptor {
-                label: Some("hm1m_shadow"),
-                size,
-                usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
-                mapped_at_creation: false,
-            });
+            vram::track_buffer_drop(&self._hm1m_shadow_buf, "hm1m_shadow");
+            self._hm1m_shadow_buf = vram::create_buffer_tracked(
+                &self.gpu_ctx.device,
+                &wgpu::BufferDescriptor {
+                    label: Some("hm1m_shadow"),
+                    size,
+                    usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+                    mapped_at_creation: false,
+                },
+                "hm1m_shadow",
+            );
             self.hm1m_buf_elems = needed_elems;
         }
 

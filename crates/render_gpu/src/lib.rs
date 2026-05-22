@@ -3,6 +3,7 @@ mod context;
 mod render_rexture;
 mod scene;
 mod vector_utils;
+pub mod vram;
 
 pub use context::GpuContext;
 pub use render_rexture::render_gpu_texture;
