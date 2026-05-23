@@ -78,7 +78,7 @@ jobs:
     # 3. Bundle build for Mac and Linux
     - name: Build and Bundle (Mac & Linux)
       if: runner.os == 'macOS' || runner.os == 'Linux'
-      run: cargo bundle --release --target ${{ matrix.target }} --verbose
+      run: cargo bundle --release --target ${{ matrix.target }}
       
     # Run tests natively (we omit the --target flag here so the Intel cross-compile job just tests the code on the native ARM runner, avoiding Rosetta 2 emulator quirks)
     - name: Run tests
