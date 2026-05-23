@@ -106,6 +106,10 @@ pub(crate) struct Viewer {
     /// True when an OOM degradation has disabled close-tier reloads; the worker
     /// stays parked on `recv()` because we stop sending it requests.
     close_tier_disabled: bool,
+    /// True when the fine tier was disabled by the runtime OOM handler (NOT
+    /// when the preset shipped without a fine tier — that case leaves the HUD
+    /// banner silent). Drives the red "OOM prevented" warning in the HUD.
+    fine_disabled_by_oom: bool,
     align_mode_viz: bool, // V key: show all 3 tiers as separate colored surfaces
 }
 
@@ -634,7 +638,9 @@ impl ApplicationHandler for Viewer {
                     let surface_view = surface_texture
                         .texture
                         .create_view(&wgpu::TextureViewDescriptor::default());
-                    self.hud_renderer.as_mut().expect("no hud renderer").draw(
+                    let hud = self.hud_renderer.as_mut().expect("no hud renderer");
+                    hud.set_oom_state(self.fine_disabled_by_oom, self.close_tier_disabled);
+                    hud.draw(
                         &scene.get_gpu_ctx().queue,
                         &scene.get_gpu_ctx().device,
                         &mut encoder,
@@ -919,6 +925,7 @@ impl Viewer {
                 bev_base.fine = None;
                 self.tier_radii.fine_radius_m = 0.0;
                 self.tier_radii.fine_drift_m = 0.0;
+                self.fine_disabled_by_oom = true;
                 return;
             }
         }
@@ -1227,6 +1234,7 @@ impl Viewer {
             bev_base,
             tier_radii,
             close_tier_disabled: false,
+            fine_disabled_by_oom: false,
             align_mode_viz: false,
         }
     }

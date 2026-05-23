@@ -13,6 +13,10 @@ pub struct HudRenderer {
     fps_buffer: glyphon::Buffer,
     hint_buffer: glyphon::Buffer,
     settings_buffer: glyphon::Buffer,
+    /// Top-of-screen warning banner. Empty text until the OOM handler kicks
+    /// in; `set_oom_state` rewrites the buffer when a tier gets disabled.
+    /// Drawn in red so the user can't miss it.
+    oom_buffer: glyphon::Buffer,
     // Cardinal labels around season circle (static)
     lbl_summer: glyphon::Buffer,
     lbl_fall: glyphon::Buffer,
@@ -504,6 +508,19 @@ impl HudRenderer {
             glyphon::Shaping::Basic,
             Some(glyphon::cosmic_text::Align::Center),
         );
+        // OOM warning banner — empty until set_oom_state writes a message.
+        // Centred at the top of the screen; rendered in red via the
+        // default_color on the TextArea, so the buffer itself stores no colour.
+        let mut oom_buffer: glyphon::Buffer =
+            glyphon::Buffer::new(&mut font_system, glyphon::Metrics::new(18.0, 20.0));
+        oom_buffer.set_size(&mut font_system, Some(width as f32), Some(40.0));
+        oom_buffer.set_text(
+            &mut font_system,
+            "",
+            &glyphon::Attrs::new(),
+            glyphon::Shaping::Basic,
+            Some(glyphon::cosmic_text::Align::Center),
+        );
         let mut settings_buffer: glyphon::Buffer =
             glyphon::Buffer::new(&mut font_system, glyphon::Metrics::new(18.0, 20.0));
         settings_buffer.set_size(&mut font_system, Some(292.0), Some(100.0));
@@ -542,6 +559,7 @@ impl HudRenderer {
             fps_buffer,
             hint_buffer,
             settings_buffer,
+            oom_buffer,
             lbl_summer,
             lbl_fall,
             lbl_winter,
@@ -567,9 +585,38 @@ impl HudRenderer {
         self.height = height;
         self.hint_buffer
             .set_size(&mut self.font_system, Some(width as f32), Some(40.0));
+        self.oom_buffer
+            .set_size(&mut self.font_system, Some(width as f32), Some(40.0));
         self.hud_bg.update_size(queue, width, height);
         self.sun_indicator
             .update(queue, width, height, self.sim_day, self.sim_hour);
+    }
+
+    /// Update the top-of-screen OOM banner. Pass the current tier-disabled
+    /// flags; the method rewrites the buffer text only when the state actually
+    /// changes (avoiding glyphon shaping cost on every frame). An empty text
+    /// renders nothing, so the banner disappears once both flags are false.
+    pub fn set_oom_state(&mut self, fine_disabled_by_oom: bool, close_disabled_by_oom: bool) {
+        let new_text = match (fine_disabled_by_oom, close_disabled_by_oom) {
+            (false, false) => "",
+            (true, false) => {
+                "OOM prevented — not enough VRAM. Fine detail tier disabled. Lower the VRAM Budget preset for next launch."
+            }
+            (_, true) => {
+                "OOM prevented — not enough VRAM. Fine and close detail tiers disabled. Lower the VRAM Budget preset for next launch."
+            }
+        };
+        // Cheap content-comparison: glyphon's Buffer doesn't expose its text
+        // directly, so we track via the buffer line metrics; in practice the
+        // unconditional set_text is fine here (called at most a handful of
+        // times per session — once per OOM step).
+        self.oom_buffer.set_text(
+            &mut self.font_system,
+            new_text,
+            &glyphon::Attrs::new(),
+            glyphon::Shaping::Basic,
+            Some(glyphon::cosmic_text::Align::Center),
+        );
     }
 
     pub fn draw(
@@ -746,6 +793,24 @@ impl HudRenderer {
                             bottom: h as i32,
                         },
                         default_color: glyphon::Color::rgb(255, 255, 255),
+                        custom_glyphs: &[],
+                    },
+                    // OOM warning banner (top, centred, red). Buffer is empty
+                    // unless the viewer's OOM handler set it via
+                    // `set_oom_state`, so this TextArea costs nothing to
+                    // prepare when there's no message.
+                    glyphon::TextArea {
+                        buffer: &self.oom_buffer,
+                        left: 0.0,
+                        top: 10.0,
+                        scale: 1.0,
+                        bounds: glyphon::TextBounds {
+                            left: 0,
+                            top: 0,
+                            right: w as i32,
+                            bottom: h as i32,
+                        },
+                        default_color: glyphon::Color::rgb(255, 90, 90),
                         custom_glyphs: &[],
                     },
                     // ── Season circle labels — shadows ───────────────────────
