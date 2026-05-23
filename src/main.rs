@@ -113,6 +113,7 @@ impl App {
                     settings.vat_mode,
                     settings.lod_mode,
                     settings.ao_mode,
+                    settings.vram_budget,
                 );
                 self.phase = Phase::Viewer(viewer);
                 // Drive resumed() manually so the surface and HUD are configured

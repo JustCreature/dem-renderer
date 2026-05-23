@@ -75,6 +75,29 @@ pub enum SelectedView {
     CustomFile,
 }
 
+/// Launcher-side VRAM budget. Each variant maps 1:1 onto a
+/// `render_gpu::VramClass` preset. The auto-detected `vram_class` on the
+/// `GpuContext` is informational only (logged on startup) — the user-chosen
+/// budget always wins, with `Mid` as the safe default.
+#[derive(Clone, Copy, Debug, Default, PartialEq, serde::Serialize, serde::Deserialize)]
+pub enum VramBudget {
+    Low,
+    #[default]
+    Mid,
+    High,
+}
+
+impl VramBudget {
+    /// Direct mapping to the tier-radius preset class.
+    pub fn to_class(self) -> render_gpu::VramClass {
+        match self {
+            VramBudget::Low => render_gpu::VramClass::Low,
+            VramBudget::Mid => render_gpu::VramClass::Mid,
+            VramBudget::High => render_gpu::VramClass::High,
+        }
+    }
+}
+
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct LauncherSettings {
     #[serde(default)]
@@ -97,6 +120,11 @@ pub struct LauncherSettings {
     pub tile_5m_path: PathBuf,
     #[serde(default)]
     pub selected_view: SelectedView,
+    /// User-chosen tier-radius preset (`Low` / `Mid` / `High`). Default is
+    /// `Mid`. The adapter-derived `VramClass` is logged for context but does
+    /// not affect tier sizing. Persisted across launches via config.toml.
+    #[serde(default)]
+    pub vram_budget: VramBudget,
 }
 
 impl Default for LauncherSettings {
@@ -112,6 +140,7 @@ impl Default for LauncherSettings {
             ao_mode: 3,  // HBAO×4
             tile_5m_path: PathBuf::from(DEFAULT_TILE_5M_PATH),
             selected_view: SelectedView::None,
+            vram_budget: VramBudget::Mid,
         }
     }
 }

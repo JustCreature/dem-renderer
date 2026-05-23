@@ -107,6 +107,10 @@ pub(crate) fn prepare_demo_scene_with_ctx(
 
 /// Like `prepare_scene` but reuses an existing `GpuContext` (for seamless surface handoff)
 /// and accepts a progress callback `report(fraction, label)` called after each major step.
+///
+/// `vram_budget` drives the initial base-tier extract radius so a Low preset doesn't read
+/// a 90 km window only to crop it. The adapter-derived `gpu_ctx.vram_class` is logged for
+/// context but the user's choice always wins.
 pub(crate) fn prepare_scene_with_ctx(
     gpu_ctx: GpuContext,
     tile_path: &Path,
@@ -114,6 +118,7 @@ pub(crate) fn prepare_scene_with_ctx(
     height: u32,
     cam_lat: f64,
     cam_lon: f64,
+    vram_budget: crate::launcher::config::VramBudget,
     report: impl Fn(f32, &str),
 ) -> crate::viewer::PreparedScene {
     let (hm, cache_path) = {
@@ -160,9 +165,11 @@ pub(crate) fn prepare_scene_with_ctx(
             let t0 = std::time::Instant::now();
             report(0.50, "Reading terrain data…");
             let scales = dem_io::ifd_scales(tier_path).unwrap_or_else(|_| vec![1.0]);
-            // Initial base load uses the VRAM-class radius so a Low preset
-            // doesn't waste time reading a 90 km window we'd immediately crop.
-            let init_radii = tier_radii(gpu_ctx.vram_class);
+            // Initial base load uses the chosen VRAM-class radius so a Low
+            // preset doesn't waste time reading a 90 km window we'd immediately
+            // crop. The adapter-detected class (gpu_ctx.vram_class) is purely
+            // informational — the user's choice in vram_budget always wins.
+            let init_radii = tier_radii(vram_budget.to_class());
             let base_radius = init_radii.base_radius_m;
             let base_ifd = select_ifd(&scales, 30.0, base_radius, GPU_SAFE_PX as u32);
             let loaded = match extract_window(tier_path, centre_crs, base_radius, base_ifd)

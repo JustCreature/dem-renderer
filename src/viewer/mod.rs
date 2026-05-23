@@ -880,6 +880,7 @@ impl Viewer {
         vat_mode: u32,
         lod_mode: u32,
         ao_mode: u32,
+        vram_budget: crate::launcher::config::VramBudget,
     ) -> Self {
         // Named camera position: Hintertux glacier tongue, WGS84.
         // Converted to tile-local metres at runtime — works for any tile that contains this point.
@@ -898,11 +899,15 @@ impl Viewer {
         let dx: f32 = scene.get_dx_meters();
         let dy: f32 = scene.get_dy_meters();
 
-        // Resolve tier radii from the GPU context's detected VRAM class.
-        // A launcher-side override will eventually plumb through here.
-        let tier_radii = tier_radii(scene.get_gpu_ctx().vram_class);
+        // Resolve tier radii from the user-chosen budget. The adapter-derived
+        // `vram_class` is logged for context but never overrides the choice —
+        // the user always picks (default `Mid`).
+        let chosen_class = vram_budget.to_class();
+        let tier_radii = tier_radii(chosen_class);
         eprintln!(
-            "[tier] radii: base {:.0} km / drift {:.0} km, close {:.0} km / drift {:.0} km, fine {:.1} km / drift {:.1} km",
+            "[tier] vram_budget={vram_budget:?} (adapter detected={:?}); \
+             radii: base {:.0} km / drift {:.0} km, close {:.0} km / drift {:.0} km, fine {:.1} km / drift {:.1} km",
+            scene.get_gpu_ctx().vram_class,
             tier_radii.base_radius_m / 1000.0,
             tier_radii.base_drift_m / 1000.0,
             tier_radii.close_radius_m / 1000.0,
