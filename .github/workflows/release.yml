@@ -2,7 +2,6 @@ name: Rust Release
 
 on:
   push:
-    # Triggers on any tag that looks like a version number (e.g., 0.1.0)
     tags:
       - '*.*.*'
 
@@ -23,24 +22,29 @@ jobs:
       matrix:
         include:
           - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
             asset_prefix: dem_renderer_linux_x86_64
             binary_name: dem_renderer
             ext: ""
             rustflags: "-C target-cpu=x86-64-v3"
             
           - os: macos-latest
+            target: aarch64-apple-darwin
             asset_prefix: dem_renderer_apple_arm
             binary_name: dem_renderer
             ext: ""
             rustflags: ""
             
-          - os: macos-13
+          # Swapped macos-13 to macos-latest, but building for the Intel target
+          - os: macos-latest
+            target: x86_64-apple-darwin
             asset_prefix: dem_renderer_apple_darwin_x86_64
             binary_name: dem_renderer
             ext: ""
             rustflags: ""
             
           - os: windows-latest
+            target: x86_64-pc-windows-msvc
             asset_prefix: dem_renderer_win_x86_64
             binary_name: dem_renderer.exe
             ext: ".exe"
@@ -49,25 +53,30 @@ jobs:
     steps:
     - uses: actions/checkout@v4
     
+    # 1. Download the toolchain for the specific target architecture
+    - name: Install Rust toolchain target
+      run: rustup target add ${{ matrix.target }}
+    
     - name: Setup Rust cache
       uses: Swatinem/rust-cache@v2
     
+    # 2. Tell Cargo to build specifically for the matrix target
     - name: Build
-      run: cargo build --release --verbose
+      run: cargo build --release --target ${{ matrix.target }} --verbose
       
+    # Run tests natively (we omit the --target flag here so the Intel cross-compile job just tests the code on the native ARM runner, avoiding Rosetta 2 emulator quirks)
     - name: Run tests
       run: cargo test --verbose
       
-    # Injects the 'v' right before the tag name (${{ github.ref_name }})
+    # 3. Update paths to account for the new target subdirectory
     - name: Rename executable
       shell: bash
       run: |
-        mv target/release/${{ matrix.binary_name }} target/release/${{ matrix.asset_prefix }}_v${{ github.ref_name }}${{ matrix.ext }}
+        mv target/${{ matrix.target }}/release/${{ matrix.binary_name }} target/${{ matrix.target }}/release/${{ matrix.asset_prefix }}_v${{ github.ref_name }}${{ matrix.ext }}
         
     - name: Create Draft Release and Upload Asset
       uses: softprops/action-gh-release@v2
       with:
-        # Keeps the release name exactly as the tag (e.g., 0.1.0)
         name: ${{ github.ref_name }}
         draft: true
-        files: target/release/${{ matrix.asset_prefix }}_v${{ github.ref_name }}${{ matrix.ext }}
+        files: target/${{ matrix.target }}/release/${{ matrix.asset_prefix }}_v${{ github.ref_name }}${{ matrix.ext }}
