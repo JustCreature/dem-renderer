@@ -24,7 +24,45 @@ impl GpuScene {
         let size_changed = cols != self.hm5m_cols || rows != self.hm5m_rows;
         let buf_too_small = needed_elems > self.hm5m_buf_elems;
 
-        if size_changed {
+        if size_changed || buf_too_small {
+            // Drop-first cycle: replace the in-use resources with 1×1 placeholders,
+            // rebuild the bind group so wgpu's Arcs on the old resources fall to zero,
+            // and pump device.poll(Wait) so the deferred-destroy queue drains. Only
+            // then do we allocate the new real resources. Reload peak memory goes
+            // from old+new to ~max(old,new).
+            //
+            // The extent_x = 0.0 is a shader safety net for the moment between the
+            // first rebuild_bind_group and the second — shader binding 10 will point
+            // at a 1×1 placeholder, but the tier is treated as inactive so no sample
+            // is taken from it.
+            self.hm5m_extent_x = 0.0;
+
+            vram::track_texture_drop(&self._hm5m_texture, "hm5m_tex");
+            vram::track_texture_drop(&self._hm5m_normal_tex, "hm5m_normal_tex");
+            vram::track_buffer_drop(&self._hm5m_shadow_buf, "hm5m_shadow");
+
+            let (ph_tex, ph_view, ph_ntex, ph_nview, ph_sbuf) = super::make_tier_size_placeholders(
+                &self.gpu_ctx.device,
+                &self.gpu_ctx.queue,
+                "hm5m",
+            );
+            self._hm5m_texture = ph_tex;
+            self._hm5m_view = ph_view;
+            self._hm5m_normal_tex = ph_ntex;
+            self._hm5m_normal_view = ph_nview;
+            self._hm5m_shadow_buf = ph_sbuf;
+            self.hm5m_cols = 0;
+            self.hm5m_rows = 0;
+            self.hm5m_buf_elems = 1;
+
+            self.rebuild_bind_group();
+            let _ = self.gpu_ctx.device.poll(wgpu::PollType::Wait {
+                submission_index: None,
+                timeout: None,
+            });
+
+            // Old resources are now actually freed on the GPU. Safe to allocate the
+            // new ones.
             vram::track_texture_drop(&self._hm5m_texture, "hm5m_tex");
             let texture = vram::create_texture_tracked(
                 &self.gpu_ctx.device,
@@ -46,6 +84,7 @@ impl GpuScene {
             );
             self._hm5m_view = texture.create_view(&wgpu::TextureViewDescriptor::default());
             self._hm5m_texture = texture;
+
             vram::track_texture_drop(&self._hm5m_normal_tex, "hm5m_normal_tex");
             let normal_tex = vram::create_texture_tracked(
                 &self.gpu_ctx.device,
@@ -68,11 +107,9 @@ impl GpuScene {
             self._hm5m_normal_view =
                 normal_tex.create_view(&wgpu::TextureViewDescriptor::default());
             self._hm5m_normal_tex = normal_tex;
-        }
 
-        if buf_too_small {
-            let size = needed_elems * 4;
             vram::track_buffer_drop(&self._hm5m_shadow_buf, "hm5m_shadow");
+            let size = needed_elems * 4;
             self._hm5m_shadow_buf = vram::create_buffer_tracked(
                 &self.gpu_ctx.device,
                 &wgpu::BufferDescriptor {
@@ -84,9 +121,7 @@ impl GpuScene {
                 "hm5m_shadow",
             );
             self.hm5m_buf_elems = needed_elems;
-        }
 
-        if size_changed || buf_too_small {
             self.rebuild_bind_group();
         }
 
@@ -149,9 +184,40 @@ impl GpuScene {
         self.hm5m_sin_rot = rot_rad.sin();
     }
 
-    /// Disables the 5 m close-tier in the shader by zeroing hm5m_extent_x.
+    /// Disable the 5 m close tier and eagerly free its GPU resources.
+    ///
+    /// Sets `hm5m_extent_x = 0.0` so the shader skips it, then swaps the texture
+    /// and buffer fields to 1×1 placeholders. The follow-up `rebuild_bind_group`
+    /// drops the BindGroup's Arc on the old resources, and `device.poll(Wait)`
+    /// drains wgpu's deferred-destroy queue so the GPU memory is actually freed
+    /// before we return — otherwise it lingers until the next submission retires.
+    ///
+    /// Returns immediately if the tier is already inactive (avoids a redundant
+    /// poll on repeat calls; poll(Wait) can block for tens of ms when prior
+    /// compute work is in flight).
     pub fn set_hm5m_inactive(&mut self) {
+        if self.hm5m_cols == 0 && self.hm5m_rows == 0 && self.hm5m_extent_x == 0.0 {
+            return;
+        }
         self.hm5m_extent_x = 0.0;
+        vram::track_texture_drop(&self._hm5m_texture, "hm5m_tex");
+        vram::track_texture_drop(&self._hm5m_normal_tex, "hm5m_normal_tex");
+        vram::track_buffer_drop(&self._hm5m_shadow_buf, "hm5m_shadow");
+        let (ph_tex, ph_view, ph_ntex, ph_nview, ph_sbuf) =
+            super::make_tier_size_placeholders(&self.gpu_ctx.device, &self.gpu_ctx.queue, "hm5m");
+        self._hm5m_texture = ph_tex;
+        self._hm5m_view = ph_view;
+        self._hm5m_normal_tex = ph_ntex;
+        self._hm5m_normal_view = ph_nview;
+        self._hm5m_shadow_buf = ph_sbuf;
+        self.hm5m_cols = 0;
+        self.hm5m_rows = 0;
+        self.hm5m_buf_elems = 1;
+        self.rebuild_bind_group();
+        let _ = self.gpu_ctx.device.poll(wgpu::PollType::Wait {
+            submission_index: None,
+            timeout: None,
+        });
     }
 
     /// Upload 1m fine-tier data.
@@ -174,7 +240,34 @@ impl GpuScene {
         let size_changed = cols != self.hm1m_cols || rows != self.hm1m_rows;
         let buf_too_small = needed_elems > self.hm1m_buf_elems;
 
-        if size_changed {
+        if size_changed || buf_too_small {
+            // See upload_hm5m above for the drop-first cycle reasoning.
+            self.hm1m_extent_x = 0.0;
+
+            vram::track_texture_drop(&self._hm1m_texture, "hm1m_tex");
+            vram::track_texture_drop(&self._hm1m_normal_tex, "hm1m_normal_tex");
+            vram::track_buffer_drop(&self._hm1m_shadow_buf, "hm1m_shadow");
+
+            let (ph_tex, ph_view, ph_ntex, ph_nview, ph_sbuf) = super::make_tier_size_placeholders(
+                &self.gpu_ctx.device,
+                &self.gpu_ctx.queue,
+                "hm1m",
+            );
+            self._hm1m_texture = ph_tex;
+            self._hm1m_view = ph_view;
+            self._hm1m_normal_tex = ph_ntex;
+            self._hm1m_normal_view = ph_nview;
+            self._hm1m_shadow_buf = ph_sbuf;
+            self.hm1m_cols = 0;
+            self.hm1m_rows = 0;
+            self.hm1m_buf_elems = 1;
+
+            self.rebuild_bind_group();
+            let _ = self.gpu_ctx.device.poll(wgpu::PollType::Wait {
+                submission_index: None,
+                timeout: None,
+            });
+
             vram::track_texture_drop(&self._hm1m_texture, "hm1m_tex");
             let texture = vram::create_texture_tracked(
                 &self.gpu_ctx.device,
@@ -196,6 +289,7 @@ impl GpuScene {
             );
             self._hm1m_view = texture.create_view(&wgpu::TextureViewDescriptor::default());
             self._hm1m_texture = texture;
+
             vram::track_texture_drop(&self._hm1m_normal_tex, "hm1m_normal_tex");
             let normal_tex = vram::create_texture_tracked(
                 &self.gpu_ctx.device,
@@ -218,11 +312,9 @@ impl GpuScene {
             self._hm1m_normal_view =
                 normal_tex.create_view(&wgpu::TextureViewDescriptor::default());
             self._hm1m_normal_tex = normal_tex;
-        }
 
-        if buf_too_small {
-            let size = needed_elems * 4;
             vram::track_buffer_drop(&self._hm1m_shadow_buf, "hm1m_shadow");
+            let size = needed_elems * 4;
             self._hm1m_shadow_buf = vram::create_buffer_tracked(
                 &self.gpu_ctx.device,
                 &wgpu::BufferDescriptor {
@@ -234,9 +326,7 @@ impl GpuScene {
                 "hm1m_shadow",
             );
             self.hm1m_buf_elems = needed_elems;
-        }
 
-        if size_changed || buf_too_small {
             self.rebuild_bind_group();
         }
 
@@ -284,8 +374,30 @@ impl GpuScene {
         self.hm1m_sin_rot = rot_rad.sin();
     }
 
-    /// Disables the 1m fine-tier by zeroing hm1m_extent_x.
+    /// Disable the 1 m fine tier and eagerly free its GPU resources.
+    /// See `set_hm5m_inactive` for the mechanism.
     pub fn set_hm1m_inactive(&mut self) {
+        if self.hm1m_cols == 0 && self.hm1m_rows == 0 && self.hm1m_extent_x == 0.0 {
+            return;
+        }
         self.hm1m_extent_x = 0.0;
+        vram::track_texture_drop(&self._hm1m_texture, "hm1m_tex");
+        vram::track_texture_drop(&self._hm1m_normal_tex, "hm1m_normal_tex");
+        vram::track_buffer_drop(&self._hm1m_shadow_buf, "hm1m_shadow");
+        let (ph_tex, ph_view, ph_ntex, ph_nview, ph_sbuf) =
+            super::make_tier_size_placeholders(&self.gpu_ctx.device, &self.gpu_ctx.queue, "hm1m");
+        self._hm1m_texture = ph_tex;
+        self._hm1m_view = ph_view;
+        self._hm1m_normal_tex = ph_ntex;
+        self._hm1m_normal_view = ph_nview;
+        self._hm1m_shadow_buf = ph_sbuf;
+        self.hm1m_cols = 0;
+        self.hm1m_rows = 0;
+        self.hm1m_buf_elems = 1;
+        self.rebuild_bind_group();
+        let _ = self.gpu_ctx.device.poll(wgpu::PollType::Wait {
+            submission_index: None,
+            timeout: None,
+        });
     }
 }
