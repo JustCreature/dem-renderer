@@ -5,7 +5,9 @@ mod scene;
 mod vector_utils;
 pub mod vram;
 
-pub use context::{GpuContext, VramClass};
+pub use context::{
+    GpuContext, OOM_COUNT, OOM_OBSERVED, VramClass, clear_oom_flag, signal_oom_for_testing,
+};
 pub use render_rexture::render_gpu_texture;
 pub use scene::GpuScene;
 

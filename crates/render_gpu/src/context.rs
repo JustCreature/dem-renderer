@@ -1,4 +1,30 @@
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
+
 use wgpu::{Adapter, Instance};
+
+/// Set by `device.on_uncaptured_error` when wgpu reports `OutOfMemory`. The
+/// viewer's frame loop polls this each tick and downgrades the active tier
+/// preset (fine first, close second) instead of letting wgpu panic.
+///
+/// Counts up-edges so the viewer can distinguish "one OOM happened" from "two
+/// OOMs happened" between polls — important because a single failed allocation
+/// may produce multiple OOM events as wgpu retries on different heaps.
+pub static OOM_OBSERVED: AtomicBool = AtomicBool::new(false);
+pub static OOM_COUNT: AtomicU32 = AtomicU32::new(0);
+
+/// Test-only entry point: simulate an OOM signal from the debug hotkey.
+/// Identical to what `device.on_uncaptured_error` does on a real OOM.
+pub fn signal_oom_for_testing() {
+    OOM_OBSERVED.store(true, Ordering::SeqCst);
+    OOM_COUNT.fetch_add(1, Ordering::SeqCst);
+}
+
+/// Reset both OOM atomics. Called by the viewer after it has reacted to a
+/// degradation event so the next OOM can be distinguished from the prior one.
+pub fn clear_oom_flag() {
+    OOM_OBSERVED.store(false, Ordering::SeqCst);
+}
 
 /// Coarse VRAM budget class used to drive tier-radius scaling.
 ///
@@ -138,6 +164,20 @@ impl GpuContext {
                 })
                 .await
                 .expect("failed to get device");
+
+            // OOM safety net: wgpu's default behaviour on a failed allocation is
+            // to panic from a worker thread, which kills the whole process. The
+            // handler here logs the error and sets a flag that the viewer's
+            // frame loop polls to degrade gracefully (disable fine tier, then
+            // close tier) instead of crashing. Runs on wgpu's internal thread —
+            // no blocking, no allocation, just an atomic store.
+            device.on_uncaptured_error(Arc::new(|err: wgpu::Error| {
+                eprintln!("[GPU ERROR] {err:?}");
+                if matches!(err, wgpu::Error::OutOfMemory { .. }) {
+                    OOM_OBSERVED.store(true, Ordering::SeqCst);
+                    OOM_COUNT.fetch_add(1, Ordering::SeqCst);
+                }
+            }));
 
             GpuContext {
                 instance,
