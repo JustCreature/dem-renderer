@@ -1,0 +1,73 @@
+name: Rust Release
+
+on:
+  push:
+    # Triggers on any tag that looks like a version number (e.g., 0.1.0)
+    tags:
+      - '*.*.*'
+
+env:
+  CARGO_TERM_COLOR: always
+
+permissions:
+  contents: write
+
+jobs:
+  build-and-release:
+    runs-on: ${{ matrix.os }}
+    
+    env:
+      RUSTFLAGS: ${{ matrix.rustflags }}
+
+    strategy:
+      matrix:
+        include:
+          - os: ubuntu-latest
+            asset_prefix: dem_renderer_linux_x86_64
+            binary_name: dem_renderer
+            ext: ""
+            rustflags: "-C target-cpu=x86-64-v3"
+            
+          - os: macos-latest
+            asset_prefix: dem_renderer_apple_arm
+            binary_name: dem_renderer
+            ext: ""
+            rustflags: ""
+            
+          - os: macos-13
+            asset_prefix: dem_renderer_apple_darwin_x86_64
+            binary_name: dem_renderer
+            ext: ""
+            rustflags: ""
+            
+          - os: windows-latest
+            asset_prefix: dem_renderer_win_x86_64
+            binary_name: dem_renderer.exe
+            ext: ".exe"
+            rustflags: "-C target-cpu=x86-64-v3"
+
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Setup Rust cache
+      uses: Swatinem/rust-cache@v2
+    
+    - name: Build
+      run: cargo build --release --verbose
+      
+    - name: Run tests
+      run: cargo test --verbose
+      
+    # Injects the 'v' right before the tag name (${{ github.ref_name }})
+    - name: Rename executable
+      shell: bash
+      run: |
+        mv target/release/${{ matrix.binary_name }} target/release/${{ matrix.asset_prefix }}_v${{ github.ref_name }}${{ matrix.ext }}
+        
+    - name: Create Draft Release and Upload Asset
+      uses: softprops/action-gh-release@v2
+      with:
+        # Keeps the release name exactly as the tag (e.g., 0.1.0)
+        name: ${{ github.ref_name }}
+        draft: true
+        files: target/release/${{ matrix.asset_prefix }}_v${{ github.ref_name }}${{ matrix.ext }}
