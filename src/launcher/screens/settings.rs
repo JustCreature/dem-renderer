@@ -1,4 +1,4 @@
-use crate::launcher::config::LauncherSettings;
+use crate::launcher::config::{LauncherSettings, VramBudget};
 use crate::launcher::style::*;
 use crate::launcher::widgets::*;
 use egui::{Id, Sense, Stroke, Ui, vec2};
@@ -44,6 +44,25 @@ pub fn show(ui: &mut Ui, settings: &mut LauncherSettings) {
             &["Off", "SSAO×8", "SSAO×16", "HBAO×4", "HBAO×8", "True Hemi."],
             &mut settings.ao_mode,
         );
+    });
+
+    opt_row(ui, "06", "VRAM Budget", |ui| {
+        let mut idx: u32 = match settings.vram_budget {
+            VramBudget::Low => 0,
+            VramBudget::Mid => 1,
+            VramBudget::High => 2,
+        };
+        dropdown(
+            ui,
+            Id::new("vram_budget"),
+            &["Low (≤4 GB)", "Mid (4–8 GB)", "High (8 GB+)"],
+            &mut idx,
+        );
+        settings.vram_budget = match idx {
+            0 => VramBudget::Low,
+            2 => VramBudget::High,
+            _ => VramBudget::Mid,
+        };
     });
 
     // Bottom hairline closes the last row visually

@@ -37,8 +37,7 @@ use crate::viewer::hud_renderer::HudRenderer;
 use self::geo::{latlon_to_tile_metres, sun_position};
 use self::scene_init::{INIT_SIM_DAY, INIT_SIM_HOUR, compute_ao_cropped};
 use self::tiers::{
-    AO_DRIFT_THRESHOLD_M, BEV_BASE_DRIFT_THRESHOLD_M, BevBaseState,
-    cross_crs_world_origin_and_extent,
+    AO_DRIFT_THRESHOLD_M, BevBaseState, TierRadii, cross_crs_world_origin_and_extent, tier_radii,
 };
 use crate::consts::{GPU_SAFE_PX, M_PER_DEG};
 
@@ -97,6 +96,20 @@ pub(crate) struct Viewer {
     // base heightmap (shared with shadow worker; replaced on tile slide)
     hm: Arc<Heightmap>,
     bev_base: Option<BevBaseState>,
+    /// Resolved tier radii for the active VRAM class. Used for drift threshold
+    /// recalibration after a base reload and for select_ifd() in single-file
+    /// streaming mode. The OOM handler mutates this in place to disable tiers
+    /// at runtime (`fine_radius_m = 0.0`, then `close_radius_m = 0.0`).
+    tier_radii: TierRadii,
+    /// Runtime kill switch for the close tier — separate from `tier_radii`
+    /// because the worker thread already captured the old radius at spawn.
+    /// True when an OOM degradation has disabled close-tier reloads; the worker
+    /// stays parked on `recv()` because we stop sending it requests.
+    close_tier_disabled: bool,
+    /// True when the fine tier was disabled by the runtime OOM handler (NOT
+    /// when the preset shipped without a fine tier — that case leaves the HUD
+    /// banner silent). Drives the red "OOM prevented" warning in the HUD.
+    fine_disabled_by_oom: bool,
     align_mode_viz: bool, // V key: show all 3 tiers as separate colored surfaces
 }
 
@@ -225,6 +238,10 @@ impl ApplicationHandler for Viewer {
         match event {
             WindowEvent::CloseRequested => event_loop.exit(),
             WindowEvent::RedrawRequested => {
+                // OOM safety net: react before any new allocation can be requested
+                // this frame, so the degradation lands before the next reload tries.
+                self.poll_and_handle_oom();
+
                 // // delta time for frame-rate-independent camera movement
                 let dt = self.last_frame.elapsed().as_secs_f32();
                 self.last_frame = std::time::Instant::now();
@@ -431,7 +448,7 @@ impl ApplicationHandler for Viewer {
                         let new_half_m = (self.hm.cols as f64 * self.hm.dx_meters)
                             .min(self.hm.rows as f64 * self.hm.dy_meters)
                             * 0.5;
-                        let new_thresh = BEV_BASE_DRIFT_THRESHOLD_M.min(new_half_m * 0.5);
+                        let new_thresh = self.tier_radii.base_drift_m.min(new_half_m * 0.5);
                         // Geographic base tracks position in degrees; convert the metre threshold.
                         let new_thresh_unit = if dem_io::crs::is_geographic(&self.hm.crs_proj4) {
                             new_thresh / M_PER_DEG
@@ -500,24 +517,31 @@ impl ApplicationHandler for Viewer {
 
                     // ── 5 m close tier ──
                     if let Some(data) = bev_base.close.try_recv() {
-                        let (origin_x, origin_y, extent_x, extent_y, rot_rad) =
-                            cross_crs_world_origin_and_extent(&data.hm, &self.hm);
-                        self.scene.as_mut().unwrap().upload_hm5m(
-                            origin_x,
-                            origin_y,
-                            rot_rad,
-                            extent_x,
-                            extent_y,
-                            &data.hm,
-                            &data.gpu_normals_rg16,
-                            &data.shadow,
-                        );
-                        println!(
-                            "5m tier updated: {}×{} at {:.1}m/px",
-                            data.hm.cols, data.hm.rows, data.hm.dx_meters
-                        );
+                        // After an OOM-driven shutdown the worker may still
+                        // deliver one in-flight reload — drop it on the floor
+                        // instead of re-allocating the texture we just freed.
+                        if self.close_tier_disabled {
+                            eprintln!("[OOM] discarding in-flight close reload (tier disabled)");
+                        } else {
+                            let (origin_x, origin_y, extent_x, extent_y, rot_rad) =
+                                cross_crs_world_origin_and_extent(&data.hm, &self.hm);
+                            self.scene.as_mut().unwrap().upload_hm5m(
+                                origin_x,
+                                origin_y,
+                                rot_rad,
+                                extent_x,
+                                extent_y,
+                                &data.hm,
+                                &data.gpu_normals_rg16,
+                                &data.shadow,
+                            );
+                            println!(
+                                "5m tier updated: {}×{} at {:.1}m/px",
+                                data.hm.cols, data.hm.rows, data.hm.dx_meters
+                            );
+                        }
                     }
-                    if detail_allowed && !bev_base.close.computing {
+                    if detail_allowed && !bev_base.close.computing && !self.close_tier_disabled {
                         let (lat, lon) = cam_wgs84(self.cam_pos, &self.hm);
                         if bev_base.close.needs_reload(lat, lon)
                             && bev_base.close.try_trigger(lat, lon)
@@ -614,7 +638,9 @@ impl ApplicationHandler for Viewer {
                     let surface_view = surface_texture
                         .texture
                         .create_view(&wgpu::TextureViewDescriptor::default());
-                    self.hud_renderer.as_mut().expect("no hud renderer").draw(
+                    let hud = self.hud_renderer.as_mut().expect("no hud renderer");
+                    hud.set_oom_state(self.fine_disabled_by_oom, self.close_tier_disabled);
+                    hud.draw(
                         &scene.get_gpu_ctx().queue,
                         &scene.get_gpu_ctx().device,
                         &mut encoder,
@@ -719,6 +745,27 @@ impl ApplicationHandler for Viewer {
                             .position(|&r| r >= self.smooth_radius_m)
                             .unwrap_or(0);
                         self.smooth_radius_m = presets[(cur + 1) % presets.len()];
+                        return;
+                    }
+                    // Debug: force close + fine tier reloads on the next frame.
+                    // Used to repro tier-swap memory peaks without flying.
+                    if kc == KeyCode::KeyR && event.state == winit::event::ElementState::Pressed {
+                        if let Some(ref mut bev_base) = self.bev_base {
+                            bev_base.close.invalidate();
+                            if let Some(ref mut fine) = bev_base.fine {
+                                fine.invalidate();
+                            }
+                            eprintln!("[vram] debug: close + fine tiers invalidated (R)");
+                        }
+                        return;
+                    }
+                    // Debug: simulate a wgpu OOM event. Used to test the
+                    // degradation path on machines that don't actually OOM
+                    // (M4 Max, high-VRAM cards). Each press steps down one
+                    // tier (fine → close → no-op).
+                    if kc == KeyCode::KeyO && event.state == winit::event::ElementState::Pressed {
+                        render_gpu::signal_oom_for_testing();
+                        eprintln!("[vram] debug: simulated OOM (O)");
                         return;
                     }
                     if kc == KeyCode::SuperLeft || kc == KeyCode::AltLeft {
@@ -849,6 +896,58 @@ fn cam_wgs84(cam_pos: [f32; 3], hm: &Heightmap) -> (f64, f64) {
 }
 
 impl Viewer {
+    /// Poll the global OOM flag set by `device.on_uncaptured_error` and degrade
+    /// the active tier set instead of letting the next allocation panic.
+    ///
+    /// Step-down order:
+    ///  1. Fine tier — disabled, GPU memory reclaimed via `set_hm1m_inactive`.
+    ///  2. Close tier — disabled, GPU memory reclaimed via `set_hm5m_inactive`.
+    ///  3. If both already disabled and we still OOM, give up — the base tier
+    ///     itself isn't safe to drop, so we let wgpu's default behaviour panic.
+    fn poll_and_handle_oom(&mut self) {
+        if !render_gpu::OOM_OBSERVED.load(std::sync::atomic::Ordering::Relaxed) {
+            return;
+        }
+        render_gpu::clear_oom_flag();
+        let count = render_gpu::OOM_COUNT.load(std::sync::atomic::Ordering::Relaxed);
+
+        let Some(scene) = self.scene.as_mut() else {
+            return;
+        };
+
+        // Step 1: kill fine tier if it's still alive.
+        if let Some(ref mut bev_base) = self.bev_base {
+            if bev_base.fine.is_some() {
+                eprintln!(
+                    "[OOM #{count}] disabling fine tier — freeing ~hm1m_tex + normal + shadow memory"
+                );
+                scene.set_hm1m_inactive();
+                bev_base.fine = None;
+                self.tier_radii.fine_radius_m = 0.0;
+                self.tier_radii.fine_drift_m = 0.0;
+                self.fine_disabled_by_oom = true;
+                return;
+            }
+        }
+
+        // Step 2: kill close tier.
+        if !self.close_tier_disabled {
+            eprintln!(
+                "[OOM #{count}] disabling close tier — freeing ~hm5m_tex + normal + shadow memory"
+            );
+            scene.set_hm5m_inactive();
+            self.close_tier_disabled = true;
+            self.tier_radii.close_radius_m = 0.0;
+            self.tier_radii.close_drift_m = 0.0;
+            return;
+        }
+
+        // Step 3: both detail tiers gone and the base tier won't fit. There's
+        // no graceful path from here — keep running on whatever's currently
+        // bound and let the user see the warning.
+        eprintln!("[OOM #{count}] all detail tiers already disabled — base tier is the floor");
+    }
+
     /// Build a fully wired `Viewer` from a pre-loaded scene (used by the combined
     /// `App` handler in main.rs).  Surface configuration and HUD setup happen later
     /// inside `resumed()`, which the combined handler calls immediately after this.
@@ -865,6 +964,7 @@ impl Viewer {
         vat_mode: u32,
         lod_mode: u32,
         ao_mode: u32,
+        vram_budget: crate::launcher::config::VramBudget,
     ) -> Self {
         // Named camera position: Hintertux glacier tongue, WGS84.
         // Converted to tile-local metres at runtime — works for any tile that contains this point.
@@ -882,6 +982,23 @@ impl Viewer {
         } = prepared;
         let dx: f32 = scene.get_dx_meters();
         let dy: f32 = scene.get_dy_meters();
+
+        // Resolve tier radii from the user-chosen budget. The adapter-derived
+        // `vram_class` is logged for context but never overrides the choice —
+        // the user always picks (default `Mid`).
+        let chosen_class = vram_budget.to_class();
+        let tier_radii = tier_radii(chosen_class);
+        eprintln!(
+            "[tier] vram_budget={vram_budget:?} (adapter detected={:?}); \
+             radii: base {:.0} km / drift {:.0} km, close {:.0} km / drift {:.0} km, fine {:.1} km / drift {:.1} km",
+            scene.get_gpu_ctx().vram_class,
+            tier_radii.base_radius_m / 1000.0,
+            tier_radii.base_drift_m / 1000.0,
+            tier_radii.close_radius_m / 1000.0,
+            tier_radii.close_drift_m / 1000.0,
+            tier_radii.fine_radius_m / 1000.0,
+            tier_radii.fine_drift_m / 1000.0,
+        );
 
         let init_cam_pos = latlon_to_tile_metres(CAM_LAT, CAM_LON, &hm)
             .map(|(x, y)| [x, y, CAM_ELEV])
@@ -949,6 +1066,7 @@ impl Viewer {
                 cam_lat_d,
                 cam_lon_d,
                 lat_rad,
+                tier_radii,
                 &hm,
                 &mut scene,
             ));
@@ -988,14 +1106,14 @@ impl Viewer {
             let close_ifd = tiers::select_ifd(
                 &close_scales,
                 5.0,
-                tiers::BEV_5M_RADIUS_M,
+                tier_radii.close_radius_m,
                 GPU_SAFE_PX as u32,
             );
             // Base tier: pixel scale ≥ 30 m/px AND window fits in GPU_SAFE_PX
             let base_ifd = tiers::select_ifd(
                 &tier_scales,
                 30.0,
-                tiers::BEV_BASE_RADIUS_M,
+                tier_radii.base_radius_m,
                 GPU_SAFE_PX as u32,
             );
             // Fine tier: always uses the original file at IFD-0 when source is sub-5m.
@@ -1036,12 +1154,18 @@ impl Viewer {
             }
             let close_index = Arc::new(close_vec);
 
-            let fine_index = if let Some(fi) = fine_ifd {
-                let mut fine_vec = tile_index::build_tile_index(&[tile_path.to_path_buf()]);
-                if let Some(e) = fine_vec.get_mut(0) {
-                    e.ifd = fi;
+            // When the VRAM preset disables the fine tier (Low), don't index any 1m
+            // source either — BevBaseState::new short-circuits on an empty fine_index.
+            let fine_index = if tier_radii.fine_radius_m > 0.0 {
+                if let Some(fi) = fine_ifd {
+                    let mut fine_vec = tile_index::build_tile_index(&[tile_path.to_path_buf()]);
+                    if let Some(e) = fine_vec.get_mut(0) {
+                        e.ifd = fi;
+                    }
+                    Arc::new(fine_vec)
+                } else {
+                    Arc::new(vec![])
                 }
-                Arc::new(fine_vec)
             } else {
                 Arc::new(vec![])
             };
@@ -1053,6 +1177,7 @@ impl Viewer {
                 CAM_LAT,
                 CAM_LON,
                 lat_rad,
+                tier_radii,
                 &hm,
                 &mut scene,
             ));
@@ -1107,6 +1232,9 @@ impl Viewer {
             detail_allowed_since: Some(std::time::Instant::now()),
             hm,
             bev_base,
+            tier_radii,
+            close_tier_disabled: false,
+            fine_disabled_by_oom: false,
             align_mode_viz: false,
         }
     }

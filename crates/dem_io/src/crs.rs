@@ -52,7 +52,9 @@ pub(crate) fn proj4_from_keys(data: &GeoKeyData) -> Result<String, DemError> {
                 let end = p4[pos..].find(' ').map_or(p4.len(), |i| pos + i);
                 let existing = &p4[pos..end];
                 // Only override the zero-shift fallback; respect non-zero values the file provides.
-                let is_zero = existing.split('=').nth(1)
+                let is_zero = existing
+                    .split('=')
+                    .nth(1)
                     .unwrap_or("")
                     .split(',')
                     .all(|s| s.trim().parse::<f64>().unwrap_or(1.0) == 0.0);

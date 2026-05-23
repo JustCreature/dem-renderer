@@ -23,7 +23,7 @@ The original development used Austrian BEV data (5 m and 1 m) and Copernicus GLO
 | File | Purpose |
 |---|---|
 | `src/launcher/mod.rs` | `LauncherApp` (ApplicationHandler), screen dispatch, load/download polling, GPU context creation |
-| `src/launcher/config.rs` | `LauncherSettings` (TOML-persisted), `DemoViewConfig`, `SelectedView` (None / DemoView / CustomFile), `LauncherOutcome` |
+| `src/launcher/config.rs` | `LauncherSettings` (TOML-persisted), `DemoViewConfig`, `SelectedView` (None / DemoView / CustomFile), `LauncherOutcome`, `VramBudget` (Low/Mid/High → `VramClass`) |
 | `src/launcher/renderer.rs` | `EguiRenderer` — egui-winit + egui-wgpu integration, font registration (Space Grotesk, JetBrains Mono), `mountain-bg.png` texture |
 | `src/launcher/background.rs` | Background painters (image, gradient, vignette, corner marks, metadata labels) |
 | `src/launcher/style.rs` | Color palette + font helpers (mono, prop, prop_medium) |
@@ -31,7 +31,7 @@ The original development used Austrian BEV data (5 m and 1 m) and Copernicus GLO
 | `src/launcher/downloader.rs` | Background HTTP Range-resume downloader (ureq); ships the demo bundle (4× Copernicus GLO-30 + DGM_R5 5 m + 2× CRS3035 1 m) |
 | `src/launcher/screens/main_menu.rs` | Main screen — Select DEM / Settings / Start / Exit |
 | `src/launcher/screens/select_dem.rs` | Choose source — file picker (any `.tif`) or "Recommended demo view" with download modal |
-| `src/launcher/screens/settings.rs` | Overall Quality, Level of Detail, Shadows, Fog, AO mode (writes to `LauncherSettings`) |
+| `src/launcher/screens/settings.rs` | Overall Quality, Level of Detail, Shadows, Fog, AO mode, VRAM Budget (writes to `LauncherSettings`) |
 | `src/launcher/screens/loading.rs` | Progress bar shown while terrain is being prepared on a background thread |
 | `src/launcher/screens/download_card.rs` | Floating download progress card with animated radial ring + speed EMA |
 
@@ -43,7 +43,7 @@ Settings persist to `dirs::config_dir() / dem_renderer / config.toml` (macOS: `~
 |---|---|
 | `src/viewer/mod.rs` | `Viewer` (ApplicationHandler), WASD+mouse, sun animation, tile streaming dispatch, key bindings |
 | `src/viewer/scene_init.rs` | `prepare_scene_with_ctx` (single-tile / projected-CRS streaming), `prepare_demo_scene_with_ctx` (3×3 Copernicus base), `compute_ao_cropped` |
-| `src/viewer/tiers.rs` | `StreamingTier` (drift-detected reload), `BevBaseState` (base/close/fine workers), `cross_crs_world_origin_and_extent`, `select_ifd`, `cap_to_gpu_limit` |
+| `src/viewer/tiers.rs` | `StreamingTier` (drift-detected reload), `BevBaseState` (base/close/fine workers), `TierRadii` + `tier_radii(VramClass)` preset mapping, `cross_crs_world_origin_and_extent`, `select_ifd`, `cap_to_gpu_limit` |
 | `src/viewer/tile_index.rs` | `TileEntry` + `TileIndex` — discover WGS84 bounds of multiple tiles per tier; `tiles_overlapping_wgs84` |
 | `src/viewer/geo.rs` | `latlon_to_tile_metres` (handles both geographic and projected CRSes), `sun_position` |
 | `src/viewer/hud_renderer.rs` | glyphon HUD overlay, sun indicator, settings panel |
@@ -90,15 +90,16 @@ dem_renderer/
 │   │   └── shadow_avx2.rs                  # AVX2 shadow DDA (x86_64 only)
 │   ├── render_gpu/src/
 │   │   ├── lib.rs                          # public exports + CPU-side helpers (hm_to_f16_bytes, gen_hm_mip_bytes, pack_normals_*, pack_ao_u8)
-│   │   ├── context.rs                      # GpuContext (Arc-backed Device/Queue, Instance, Adapter)
+│   │   ├── context.rs                      # GpuContext (Arc-backed Device/Queue, Instance, Adapter, VramClass); OOM atomics + on_uncaptured_error
+│   │   ├── vram.rs                         # AtomicU64 alloc/drop accounting; create_*_tracked wrappers around wgpu allocations
 │   │   ├── camera.rs                       # CameraUniforms — std140-aligned struct mirrored in WGSL
 │   │   ├── vector_utils.rs
 │   │   ├── render_rexture.rs
 │   │   ├── shader_texture.wgsl             # main compute raymarcher (3-tier blend, AO, fog, LOD, bicubic Catmull-Rom)
 │   │   └── scene/
-│   │       ├── mod.rs                      # GpuScene::{new, resize, update_heightmap, update_shadow, update_ao, dispatch_frame}
+│   │       ├── mod.rs                      # GpuScene::{new, resize, update_heightmap, update_shadow, update_ao, dispatch_frame}; make_tier_size_placeholders
 │   │       ├── bind_group.rs               # rebuild_bind_group — 20-entry canonical BG (binding 0–19)
-│   │       └── tiers.rs                    # upload_hm5m / upload_hm1m / set_hm5m_inactive / set_hm1m_inactive (grow-only)
+│   │       └── tiers.rs                    # upload_hm5m / upload_hm1m / set_hm5m_inactive / set_hm1m_inactive (drop-first eager dealloc + device.poll(Wait))
 │   └── profiling/src/lib.rs                # cntvct_el0 / rdtsc cycle counters, CSV emit
 ├── tiles/                                  # gitignored; user-supplied DEM tiles
 │   ├── Copernicus_DSM_COG_10_N*_00_E*_00_DEM/
@@ -114,7 +115,11 @@ dem_renderer/
     ├── learnings/
     ├── improvements/
     └── sessions/                           # per-phase session restore points
+                                            #   vgpu-oom-crash-phase-{1..5}.md — issue #33 OOM fix walkthrough
+                                            #   base-tier-r16float-stairs.md — known artefact (R16Float quantisation)
 ```
+
+`docs/vram-limitation.md` at the repo root documents why Windows "Shared GPU Memory" can't be used as a wgpu allocation target — useful reference whenever someone asks why we don't just spill the fine tier into system RAM.
 
 ### Dependency DAG
 
@@ -137,20 +142,20 @@ Types are defined in the crate that produces them: `Heightmap` in `dem_io`, `Nor
 
 - **`dem_io`** — Read SRTM `.hgt`/`.bil` and any GeoTIFF (including BigTIFF). `parse_geotiff_auto` reads the CRS from GeoKey 3072 / WKT (tag 34737) and resolves it via `proj4rs` / `proj4wkt` / `crs-definitions` — no hardcoded CRS knowledge. `extract_window` performs selective COG reads at a chosen IFD level. `assemble_grid` / `load_grid_from_paths` build 3×3 or arbitrary Copernicus mosaics. `stitch_windows_geographic` and `stitch_windows` stitch BEV / projected windows from multiple overlapping tiles. `ensure_overview_cache` builds a `.tmp_dem_pre_calc_<filename>.tif` next to any large single-IFD tile (box-averaged to ~8 m and ~32 m levels) so subsequent runs and tier reloads stay fast. `fill_nodata_from_base` smooth-blends a higher-resolution window over a coarser base so seams between tiers disappear.
 - **`terrain`** — Surface normals (Sobel SoA, NEON 4-wide and 8-wide on aarch64, AVX2 8-wide on x86_64). DDA shadow sweep with arbitrary azimuth and penumbra (scalar / NEON / AVX2 variants, rayon-parallel). True-hemisphere AO (`compute_ao_true_hemi` — 16-azimuth DDA averaged).
-- **`render_gpu`** — wgpu compute-shader raymarcher. `GpuScene` owns all GPU resources persistently; mutable per-frame work is the camera uniform write and an optional shadow/AO/heightmap buffer/texture refresh. Three tiers are blended in WGSL with a 500 m blend margin. Bicubic Catmull-Rom interpolation is enabled within `smooth_radius_m` of the camera (default 2000 m, `B` key cycles 0/500/1000/2000/5000 m). Public helpers `hm_to_f16_bytes`, `gen_hm_mip_bytes`, `pack_normals_u32_bytes`, `pack_normals_rg16_bytes`, `pack_ao_u8` let workers pre-pack bytes off the main thread.
+- **`render_gpu`** — wgpu compute-shader raymarcher. `GpuScene` owns all GPU resources persistently; mutable per-frame work is the camera uniform write and an optional shadow/AO/heightmap buffer/texture refresh. Three tiers are blended in WGSL with a 500 m blend margin. Bicubic Catmull-Rom interpolation is enabled within `smooth_radius_m` of the camera (default 2000 m, `B` key cycles 0/500/1000/2000/5000 m). Public helpers `hm_to_f16_bytes`, `gen_hm_mip_bytes`, `pack_normals_u32_bytes`, `pack_normals_rg16_bytes`, `pack_ao_u8` let workers pre-pack bytes off the main thread. Tier reloads follow a drop-first cycle: swap to 1×1 placeholders → `rebuild_bind_group` → `device.poll(PollType::Wait)` to drain wgpu's destroy queue → allocate new → second `rebuild_bind_group`. `vram.rs` tracks every allocation through an `AtomicU64`; `context.rs::on_uncaptured_error` sets an `OOM_OBSERVED` flag that the viewer polls each frame to disable the fine tier (then the close tier) instead of crashing.
 - **`profiling`** — `cntvct_el0` (AArch64) / `rdtsc` (x86) cycle counters, CSV timing emitter.
 
 ### Multi-tier Streaming Model
 
-For projected single-file mode and demo mode, the viewer spawns three background workers that hold WGS84 `(lat, lon)` and translate per-tile:
+For projected single-file mode and demo mode, the viewer spawns three background workers that hold WGS84 `(lat, lon)` and translate per-tile. Radii and drift thresholds come from the active `VramClass` preset (set via the launcher's VRAM Budget dropdown — defaults to `Mid`); the table below shows the `High` preset (full radii, used on Apple Silicon / 8 GB+ discrete):
 
-| Tier | Radius | Drift threshold | Format on GPU |
+| Tier | Radius (High / Mid / Low) | Drift threshold (High / Mid / Low) | Format on GPU |
 |---|---|---|---|
-| **base** | 90 km | 30 km | R16Float texture + 8 mips; packed-u32 normal storage buffer; R8Unorm AO; f32 shadow buffer |
-| **close** (≈5 m) | 20 km | 3 km | R32Float texture; Rg16Snorm normal texture; f32 shadow buffer |
-| **fine** (≈1 m) | 3.5 km | 1 km | R32Float texture; Rg16Snorm normal texture; f32 shadow buffer |
+| **base** | 90 / 70 / 50 km | 30 / 23 / 17 km | R16Float texture + 8 mips; packed-u32 normal storage buffer; R8Unorm AO; f32 shadow buffer |
+| **close** (≈5 m) | 20 / 14 / 8 km | 3 / 2 / 1.5 km | R32Float texture; Rg16Snorm normal texture; f32 shadow buffer |
+| **fine** (≈1 m) | 3.5 / 2.5 / 1 km | 1 / 0.8 / 0.3 km | R32Float texture; Rg16Snorm normal texture; f32 shadow buffer |
 
-`StreamingTier::needs_reload` fires when the camera drifts past the threshold; the worker re-reads via `extract_window`, recomputes normals/shadows on the worker thread, pre-packs all GPU bytes, and sends a `TierData` bundle. The main thread does only `write_texture` / `write_buffer`. Detail tiers are suppressed while the camera moves > 2 500 m/s (400 ms debounce) — a 20 km close window is pointless when the camera leaves it before the load finishes. The base tier also recalibrates its drift threshold to half the actual loaded window after each reload (so GPU-capped windows on 1 m sources stay reload-stable).
+`StreamingTier::needs_reload` fires when the camera drifts past the threshold; the worker re-reads via `extract_window`, recomputes normals/shadows on the worker thread, pre-packs all GPU bytes, and sends a `TierData` bundle. The main thread does only `write_texture` / `write_buffer`. Detail tiers are suppressed while the camera moves > 2 500 m/s (400 ms debounce) — a 20 km close window is pointless when the camera leaves it before the load finishes. The base tier also recalibrates its drift threshold to half the actual loaded window after each reload (so GPU-capped windows on 1 m sources stay reload-stable). The runtime OOM handler can zero `fine_radius_m` (and then `close_radius_m`) in place if a reload spike trips wgpu's allocator anyway — the bev_base.fine `Option` becomes `None`, the close worker is gated behind `close_tier_disabled`, and the HUD shows a red warning banner.
 
 ### Bind Group Layout (Single Canonical BG, 20 Entries)
 
@@ -218,6 +223,9 @@ For projected single-file mode and demo mode, the viewer spawns three background
 - Texture dimension limit 8192 px (hardware max, not wgpu default) — `GPU_SAFE_PX = 8192`, source windows above this are cropped centred on the camera
 - wgpu does not expose VkSparseBinding or Metal sparse textures; software indirection is the only option
 - Workgroup size (64–256 threads, 8×8 to 32×8): all within ±3% when readback dominates
+- Dropping a `wgpu::Texture` Rust handle is **not** enough to free GPU memory — the BindGroup keeps an internal `Arc<TextureInner>` until the BindGroup itself is rebuilt AND the next submission retires. `device.poll(PollType::Wait { submission_index: None, timeout: None })` is the only way to drain the destroy-after-submission queue synchronously; without it, a reload sees `old + new` GPU memory peak instead of `max(old, new)`. Safe to call from reload paths (they already cause a perceptual hitch); never call from the steady-state frame loop (blocks until the next submission completes ≥ 16 ms)
+- wgpu 0.29 changed `device.on_uncaptured_error` to take `Arc<dyn UncapturedErrorHandler>` (was `Box<dyn Fn(Error) + Send + Sync>` in 0.20). Handler runs on wgpu's internal thread — must not block or allocate; safe pattern is an `AtomicBool` flag the frame loop polls
+- wgpu does not expose VRAM capacity per device. Detection is heuristic: `adapter.get_info().name` substring match for known-tiny SKUs, `device_type` fallback, Apple Silicon detection. The Windows "Shared GPU Memory" pool is a driver-internal eviction target, not an application-visible allocation heap — see `docs/vram-limitation.md`
 
 ### GeoTIFF / CRS
 - CRS is read from each tile, not assumed: `tile_proj4` reads WKT from tag 34737 (via proj4wkt) or falls back to the EPSG code in GeoKey 3072/2048 (via crs-definitions). proj4rs handles the transforms in both directions
@@ -248,7 +256,9 @@ For projected single-file mode and demo mode, the viewer spawns three background
 - `fill_nodata` division-by-zero if all 4 directions hit boundary without finding valid data
 - Supersampled ray optimization: march 1 reference ray, approximate 3 neighbours via gradient. Breaks at sharp peaks.
 - Dynamic tile list in the Select DEM screen (planned `src/launcher/scanner.rs` to discover `tiles/` contents and feed the UI live)
-- Custom configure-view UI (let the user point each tier at arbitrary GeoTIFFs without editing the TOML by hand)
+- Custom configure-view UI (let the user point each tier at arbitrary GeoTIFFs without editing the TOML by hand). When this lands, `TierRadii` should become a public serde-derived struct embedded per-view so each saved view carries its own radii instead of inheriting the global `vram_budget`.
+- Base-tier R16Float quantisation at high elevations causes visible "amphitheater" stairs above ~2 km — see `docs/sessions/base-tier-r16float-stairs.md`. Most plausible fix: CPU-side dither before f16 conversion.
+- Issue #40 — Windows-only failure when reading some LZW-compressed GeoTIFFs (NZ LINZ LiDAR). `tiff-0.11.3`'s LZW reader rejects strips that don't end with the EOI code; macOS reads the same bytes fine. Plan in the issue is a lenient `weezl`-driven reader bypassing `BufReader<File>`.
 
 ---
 
@@ -286,7 +296,11 @@ Use `#[inline(never)]` during profiling so functions appear as distinct symbols.
 | Branchless inner loops | SIMD masks / `cmov` in shadow sweep, ray termination |
 | Worker-side byte packing | Main thread never spends time converting f32→f16 / scaling AO / packing normals |
 | Single canonical 20-entry bind group | `rebuild_bind_group()` runs only when a tier texture/buffer is resized |
-| Grow-only tier buffers | Steady-state reloads do not allocate; only `write_texture`/`write_buffer` |
+| Drop-first tier reload cycle | Swap fields to 1×1 placeholders → `rebuild_bind_group` → `device.poll(PollType::Wait)` → allocate new → second `rebuild_bind_group`. Reload peak goes from `old + new` to `max(old, new)` because the BindGroup holds an `Arc<TextureInner>` until rebuild + poll |
+| `set_hm*_inactive` actually frees | Same drop-first sequence (no real alloc on the other end). Used by the base-reload completion path and by the OOM degradation step — neither of which would ever return VRAM under the previous "set extent_x to 0" approach |
+| VRAM budget presets (Low / Mid / High) | `TierRadii` per `VramClass`; launcher dropdown persists the choice. Adapter-detected class is informational only — the user always picks |
+| OOM safety net via `on_uncaptured_error` | wgpu panics from a worker thread by default. The handler sets an atomic; the frame loop polls and steps down (disable fine tier → disable close tier → no-op). HUD shows a red banner when the path has fired |
+| Allocation tracker in `vram.rs` | `AtomicU64` counters via `create_*_tracked` / `track_*_drop` wrappers. Lets us validate the drop-first ordering on a high-VRAM machine where the bug doesn't manifest naturally |
 | `GPU_SAFE_PX = 8192` cap | Hardware texture dimension limit; oversized source windows are cropped around the camera |
 | Speed-gated detail loads | At boost speed (5 km/s) a 20 km close window outlives its load time; gate at 2.5 km/s with 400 ms debounce |
 | CPU shadow, GPU render | Running-max is serial → CPU wins; raymarching embarrassingly parallel → GPU wins |

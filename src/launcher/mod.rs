@@ -189,6 +189,7 @@ impl LauncherApp {
         let is_demo = self.settings.selected_view == SelectedView::DemoView;
         let demo_cfg = self.settings.demo_view.clone();
         let tile_path = self.settings.tile_5m_path.clone();
+        let vram_budget = self.settings.vram_budget;
 
         std::thread::spawn(move || {
             let prepared = if is_demo {
@@ -213,6 +214,7 @@ impl LauncherApp {
                     WINDOW_H,
                     DEFAULT_CAM_LAT,
                     DEFAULT_CAM_LON,
+                    vram_budget,
                     |frac, label| {
                         let _ = tx.send(LoadProgress {
                             frac,

@@ -3,10 +3,10 @@ mod tiers;
 
 use dem_io::Heightmap;
 use terrain::{NormalMap, ShadowMask};
-use wgpu::util::DeviceExt;
 
 use crate::camera::CameraUniforms;
 use crate::context::GpuContext;
+use crate::vram;
 
 /// Persistent GPU scene: static data uploaded once, only camera uniform
 /// written per frame.  Shadow can be updated cheaply via `update_shadow`.
@@ -100,20 +100,25 @@ pub(super) fn create_tier_placeholder(
 ) {
     // Heightmap placeholder: R16Float 1×1
     let ph_tex_data: [half::f16; 1] = [half::f16::from_f32(0.0)];
-    let texture = device.create_texture(&wgpu::TextureDescriptor {
-        label: Some(&format!("{}_tex", label)),
-        size: wgpu::Extent3d {
-            width: 1,
-            height: 1,
-            depth_or_array_layers: 1,
+    let tex_label_owned = format!("{}_tex", label);
+    let texture = vram::create_texture_tracked(
+        device,
+        &wgpu::TextureDescriptor {
+            label: Some(&tex_label_owned),
+            size: wgpu::Extent3d {
+                width: 1,
+                height: 1,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::R16Float,
+            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+            view_formats: &[],
         },
-        mip_level_count: 1,
-        sample_count: 1,
-        dimension: wgpu::TextureDimension::D2,
-        format: wgpu::TextureFormat::R16Float,
-        usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
-        view_formats: &[],
-    });
+        &tex_label_owned,
+    );
     queue.write_texture(
         texture.as_image_copy(),
         bytemuck::cast_slice(&ph_tex_data),
@@ -136,20 +141,25 @@ pub(super) fn create_tier_placeholder(
     });
     // Normal placeholder: Rgba8Snorm 1×1, [0, 0] decodes to (x=0, y=0) → z=1 (up normal)
     let ph_normal_data: [i8; 4] = [0, 0, 0, 0];
-    let normal_tex = device.create_texture(&wgpu::TextureDescriptor {
-        label: Some(&format!("{}_normal_tex", label)),
-        size: wgpu::Extent3d {
-            width: 1,
-            height: 1,
-            depth_or_array_layers: 1,
+    let normal_label_owned = format!("{}_normal_tex", label);
+    let normal_tex = vram::create_texture_tracked(
+        device,
+        &wgpu::TextureDescriptor {
+            label: Some(&normal_label_owned),
+            size: wgpu::Extent3d {
+                width: 1,
+                height: 1,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::Rgba8Snorm,
+            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+            view_formats: &[],
         },
-        mip_level_count: 1,
-        sample_count: 1,
-        dimension: wgpu::TextureDimension::D2,
-        format: wgpu::TextureFormat::Rgba8Snorm,
-        usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
-        view_formats: &[],
-    });
+        &normal_label_owned,
+    );
     queue.write_texture(
         normal_tex.as_image_copy(),
         bytemuck::cast_slice(&ph_normal_data),
@@ -172,11 +182,16 @@ pub(super) fn create_tier_placeholder(
     });
     // Shadow placeholder: 1-element f32 buffer
     let ph_buf_data: [f32; 1] = [0.0];
-    let shadow_buf = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-        label: Some(&format!("{}_shadow", label)),
-        contents: bytemuck::cast_slice(&ph_buf_data),
-        usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
-    });
+    let shadow_label_owned = format!("{}_shadow", label);
+    let shadow_buf = vram::create_buffer_init_tracked(
+        device,
+        &wgpu::util::BufferInitDescriptor {
+            label: Some(&shadow_label_owned),
+            contents: bytemuck::cast_slice(&ph_buf_data),
+            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+        },
+        &shadow_label_owned,
+    );
     (
         texture,
         view,
@@ -186,6 +201,113 @@ pub(super) fn create_tier_placeholder(
         normal_sampler,
         shadow_buf,
     )
+}
+
+/// Build the three size-tied placeholder resources (1×1 hm texture, 1×1 normal texture,
+/// 1-element shadow buffer) for a close/fine tier. Used by the drop-first reload cycle
+/// to release wgpu's Arc on the previous large resources before allocating new ones —
+/// keeping reload peak memory close to `max(old, new)` instead of `old + new`.
+///
+/// Samplers are not regenerated; the bind group keeps using the originals.
+pub(super) fn make_tier_size_placeholders(
+    device: &wgpu::Device,
+    queue: &wgpu::Queue,
+    label: &str,
+) -> (
+    wgpu::Texture,
+    wgpu::TextureView,
+    wgpu::Texture,
+    wgpu::TextureView,
+    wgpu::Buffer,
+) {
+    let tex_label = format!("{}_tex", label);
+    let texture = vram::create_texture_tracked(
+        device,
+        &wgpu::TextureDescriptor {
+            label: Some(&tex_label),
+            size: wgpu::Extent3d {
+                width: 1,
+                height: 1,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::R16Float,
+            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+            view_formats: &[],
+        },
+        &tex_label,
+    );
+    let ph_tex_data: [half::f16; 1] = [half::f16::from_f32(0.0)];
+    queue.write_texture(
+        texture.as_image_copy(),
+        bytemuck::cast_slice(&ph_tex_data),
+        wgpu::TexelCopyBufferLayout {
+            offset: 0,
+            bytes_per_row: Some(2),
+            rows_per_image: None,
+        },
+        wgpu::Extent3d {
+            width: 1,
+            height: 1,
+            depth_or_array_layers: 1,
+        },
+    );
+    let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+
+    let normal_label = format!("{}_normal_tex", label);
+    let normal_tex = vram::create_texture_tracked(
+        device,
+        &wgpu::TextureDescriptor {
+            label: Some(&normal_label),
+            size: wgpu::Extent3d {
+                width: 1,
+                height: 1,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::Rgba8Snorm,
+            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+            view_formats: &[],
+        },
+        &normal_label,
+    );
+    let ph_normal_data: [i8; 4] = [0, 0, 0, 0];
+    queue.write_texture(
+        normal_tex.as_image_copy(),
+        bytemuck::cast_slice(&ph_normal_data),
+        wgpu::TexelCopyBufferLayout {
+            offset: 0,
+            bytes_per_row: Some(4),
+            rows_per_image: None,
+        },
+        wgpu::Extent3d {
+            width: 1,
+            height: 1,
+            depth_or_array_layers: 1,
+        },
+    );
+    let normal_view = normal_tex.create_view(&wgpu::TextureViewDescriptor::default());
+
+    use wgpu::util::DeviceExt;
+    let buf_label = format!("{}_shadow", label);
+    let ph_buf_data: [f32; 1] = [0.0];
+    let bytes = bytemuck::cast_slice::<f32, u8>(&ph_buf_data).len() as u64;
+    vram::GPU_BUFFER_BYTES.fetch_add(bytes, std::sync::atomic::Ordering::Relaxed);
+    let shadow_buf = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+        label: Some(&buf_label),
+        contents: bytemuck::cast_slice(&ph_buf_data),
+        usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+    });
+    eprintln!(
+        "[vram] alloc buf {:<22} +   0.00 MB  (tier placeholder swap)",
+        buf_label
+    );
+
+    (texture, view, normal_tex, normal_view, shadow_buf)
 }
 
 /// Generate mip levels 1..7 for a heightmap texture using a max filter.
@@ -229,20 +351,24 @@ impl GpuScene {
     ) -> Self {
         // heightmap texture
         let hm_data: Vec<half::f16> = hm.data.iter().map(|&v| half::f16::from_f32(v)).collect();
-        let hm_texture = gpu_ctx.device.create_texture(&wgpu::TextureDescriptor {
-            label: Some("scene_hm_tex"),
-            size: wgpu::Extent3d {
-                width: hm.cols as u32,
-                height: hm.rows as u32,
-                depth_or_array_layers: 1,
+        let hm_texture = vram::create_texture_tracked(
+            &gpu_ctx.device,
+            &wgpu::TextureDescriptor {
+                label: Some("scene_hm_tex"),
+                size: wgpu::Extent3d {
+                    width: hm.cols as u32,
+                    height: hm.rows as u32,
+                    depth_or_array_layers: 1,
+                },
+                mip_level_count: 8,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format: wgpu::TextureFormat::R16Float,
+                usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+                view_formats: &[],
             },
-            mip_level_count: 8,
-            sample_count: 1,
-            dimension: wgpu::TextureDimension::D2,
-            format: wgpu::TextureFormat::R16Float,
-            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
-            view_formats: &[],
-        });
+            "scene_hm_tex",
+        );
         gpu_ctx.queue.write_texture(
             hm_texture.as_image_copy(),
             bytemuck::cast_slice(&hm_data),
@@ -274,20 +400,24 @@ impl GpuScene {
             .iter()
             .map(|&v| (v * 255.0) as u8)
             .collect::<Vec<u8>>();
-        let ao_texture = gpu_ctx.device.create_texture(&wgpu::TextureDescriptor {
-            label: Some("scene_ao_tex"),
-            size: wgpu::Extent3d {
-                width: hm.cols as u32,
-                height: hm.rows as u32,
-                depth_or_array_layers: 1,
+        let ao_texture = vram::create_texture_tracked(
+            &gpu_ctx.device,
+            &wgpu::TextureDescriptor {
+                label: Some("scene_ao_tex"),
+                size: wgpu::Extent3d {
+                    width: hm.cols as u32,
+                    height: hm.rows as u32,
+                    depth_or_array_layers: 1,
+                },
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format: wgpu::TextureFormat::R8Unorm,
+                usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+                view_formats: &[],
             },
-            mip_level_count: 1,
-            sample_count: 1,
-            dimension: wgpu::TextureDimension::D2,
-            format: wgpu::TextureFormat::R8Unorm,
-            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
-            view_formats: &[],
-        });
+            "scene_ao_tex",
+        );
         gpu_ctx.queue.write_texture(
             ao_texture.as_image_copy(),
             bytemuck::cast_slice(&ao_data),
@@ -341,45 +471,60 @@ impl GpuScene {
                 ((xi as u32) << 16) | (yi as u16 as u32)
             })
             .collect();
-        let normals_packed_buf =
-            gpu_ctx
-                .device
-                .create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                    label: Some("normals_packed"),
-                    contents: bytemuck::cast_slice(&normals_packed),
-                    usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
-                });
+        let normals_packed_buf = vram::create_buffer_init_tracked(
+            &gpu_ctx.device,
+            &wgpu::util::BufferInitDescriptor {
+                label: Some("normals_packed"),
+                contents: bytemuck::cast_slice(&normals_packed),
+                usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+            },
+            "normals_packed",
+        );
 
         // shadow buffer (COPY_DST so update_shadow can write_buffer)
-        let shadow_buf = gpu_ctx
-            .device
-            .create_buffer_init(&wgpu::util::BufferInitDescriptor {
+        let shadow_buf = vram::create_buffer_init_tracked(
+            &gpu_ctx.device,
+            &wgpu::util::BufferInitDescriptor {
                 label: Some("shadow"),
                 contents: bytemuck::cast_slice(&shadow_mask.data),
                 usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
-            });
+            },
+            "shadow",
+        );
 
         // camera uniform (128 bytes, overwritten every frame)
-        let cam_buf = gpu_ctx.device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("cam"),
-            size: std::mem::size_of::<CameraUniforms>() as u64,
-            mapped_at_creation: false,
-            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-        });
+        let cam_buf = vram::create_buffer_tracked(
+            &gpu_ctx.device,
+            &wgpu::BufferDescriptor {
+                label: Some("cam"),
+                size: std::mem::size_of::<CameraUniforms>() as u64,
+                mapped_at_creation: false,
+                usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            },
+            "cam",
+        );
 
         // output + readback buffers (fixed size, reused every frame)
-        let output_buf = gpu_ctx.device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("output"),
-            size: (width * height * 4) as u64,
-            mapped_at_creation: false,
-            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
-        });
-        let readback_buf = gpu_ctx.device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("readback"),
-            size: (width * height * 4) as u64,
-            mapped_at_creation: false,
-            usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
-        });
+        let output_buf = vram::create_buffer_tracked(
+            &gpu_ctx.device,
+            &wgpu::BufferDescriptor {
+                label: Some("output"),
+                size: (width * height * 4) as u64,
+                mapped_at_creation: false,
+                usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
+            },
+            "output",
+        );
+        let readback_buf = vram::create_buffer_tracked(
+            &gpu_ctx.device,
+            &wgpu::BufferDescriptor {
+                label: Some("readback"),
+                size: (width * height * 4) as u64,
+                mapped_at_creation: false,
+                usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
+            },
+            "readback",
+        );
 
         // render pipeline + bind group (built once, reused every frame)
         let render_bgl =
@@ -932,19 +1077,29 @@ impl GpuScene {
         self.width = width;
         self.height = height;
 
-        self.output_buf = self.gpu_ctx.device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("output"),
-            size: (width * height * 4) as u64,
-            mapped_at_creation: false,
-            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
-        });
+        vram::track_buffer_drop(&self.output_buf, "output");
+        self.output_buf = vram::create_buffer_tracked(
+            &self.gpu_ctx.device,
+            &wgpu::BufferDescriptor {
+                label: Some("output"),
+                size: (width * height * 4) as u64,
+                mapped_at_creation: false,
+                usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
+            },
+            "output",
+        );
 
-        self.readback_buf = self.gpu_ctx.device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("readback"),
-            size: (width * height * 4) as u64,
-            mapped_at_creation: false,
-            usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
-        });
+        vram::track_buffer_drop(&self.readback_buf, "readback");
+        self.readback_buf = vram::create_buffer_tracked(
+            &self.gpu_ctx.device,
+            &wgpu::BufferDescriptor {
+                label: Some("readback"),
+                size: (width * height * 4) as u64,
+                mapped_at_creation: false,
+                usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
+            },
+            "readback",
+        );
 
         self.rebuild_bind_group();
     }
@@ -996,10 +1151,99 @@ impl GpuScene {
         let new_rows = hm.rows as u32;
 
         if new_cols != self.hm_cols || new_rows != self.hm_rows {
-            self._hm_texture = self
-                .gpu_ctx
-                .device
-                .create_texture(&wgpu::TextureDescriptor {
+            // Drop-first cycle for the base tier: release the BindGroup's Arcs on
+            // the old hm/ao/normals/shadow resources before allocating the new
+            // ones. With the 10800×10800 Tirol demo grid the base tier alone is
+            // ~1.3 GB; on a 4 GB GPU, holding the old plus the new is ~2.6 GB,
+            // which combined with the close+fine tiers is what trips OOM. The
+            // poll(Wait) drains wgpu's destroy-after-submission queue so the
+            // free actually happens before the next allocation.
+            //
+            // The shader keeps sampling self._hm_texture during the swap window,
+            // but reload events are dispatched between frames (update_heightmap is
+            // called from the main loop in-between dispatch_frame calls), so no
+            // concurrent compute pass observes the 1×1 placeholder.
+            vram::track_texture_drop(&self._hm_texture, "scene_hm_tex");
+            vram::track_texture_drop(&self._ao_texture, "scene_ao_tex");
+            vram::track_buffer_drop(&self._normals_packed_buf, "normals_packed");
+            vram::track_buffer_drop(&self.shadow_buf, "shadow");
+
+            // 1×1 placeholders. Sample type matches the bind group layout
+            // (Float filterable / Storage), so binding 1/4/7/8 stay valid.
+            let ph_hm = vram::create_texture_tracked(
+                &self.gpu_ctx.device,
+                &wgpu::TextureDescriptor {
+                    label: Some("scene_hm_tex"),
+                    size: wgpu::Extent3d {
+                        width: 1,
+                        height: 1,
+                        depth_or_array_layers: 1,
+                    },
+                    mip_level_count: 1,
+                    sample_count: 1,
+                    dimension: wgpu::TextureDimension::D2,
+                    format: wgpu::TextureFormat::R16Float,
+                    usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+                    view_formats: &[],
+                },
+                "scene_hm_tex",
+            );
+            self._hm_view = ph_hm.create_view(&wgpu::TextureViewDescriptor::default());
+            self._hm_texture = ph_hm;
+
+            let ph_ao = vram::create_texture_tracked(
+                &self.gpu_ctx.device,
+                &wgpu::TextureDescriptor {
+                    label: Some("scene_ao_tex"),
+                    size: wgpu::Extent3d {
+                        width: 1,
+                        height: 1,
+                        depth_or_array_layers: 1,
+                    },
+                    mip_level_count: 1,
+                    sample_count: 1,
+                    dimension: wgpu::TextureDimension::D2,
+                    format: wgpu::TextureFormat::R8Unorm,
+                    usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+                    view_formats: &[],
+                },
+                "scene_ao_tex",
+            );
+            self._ao_view = ph_ao.create_view(&wgpu::TextureViewDescriptor::default());
+            self._ao_texture = ph_ao;
+
+            self._normals_packed_buf = vram::create_buffer_tracked(
+                &self.gpu_ctx.device,
+                &wgpu::BufferDescriptor {
+                    label: Some("normals_packed"),
+                    size: 4,
+                    mapped_at_creation: false,
+                    usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+                },
+                "normals_packed",
+            );
+            self.shadow_buf = vram::create_buffer_tracked(
+                &self.gpu_ctx.device,
+                &wgpu::BufferDescriptor {
+                    label: Some("shadow"),
+                    size: 4,
+                    usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+                    mapped_at_creation: false,
+                },
+                "shadow",
+            );
+
+            self.rebuild_bind_group();
+            let _ = self.gpu_ctx.device.poll(wgpu::PollType::Wait {
+                submission_index: None,
+                timeout: None,
+            });
+
+            // Old resources are now actually freed on the GPU. Allocate the real new ones.
+            vram::track_texture_drop(&self._hm_texture, "scene_hm_tex");
+            self._hm_texture = vram::create_texture_tracked(
+                &self.gpu_ctx.device,
+                &wgpu::TextureDescriptor {
                     label: Some("scene_hm_tex"),
                     size: wgpu::Extent3d {
                         width: new_cols,
@@ -1012,15 +1256,17 @@ impl GpuScene {
                     format: wgpu::TextureFormat::R16Float,
                     usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
                     view_formats: &[],
-                });
+                },
+                "scene_hm_tex",
+            );
             self._hm_view = self
                 ._hm_texture
                 .create_view(&wgpu::TextureViewDescriptor::default());
 
-            self._ao_texture = self
-                .gpu_ctx
-                .device
-                .create_texture(&wgpu::TextureDescriptor {
+            vram::track_texture_drop(&self._ao_texture, "scene_ao_tex");
+            self._ao_texture = vram::create_texture_tracked(
+                &self.gpu_ctx.device,
+                &wgpu::TextureDescriptor {
                     label: Some("scene_ao_tex"),
                     size: wgpu::Extent3d {
                         width: new_cols,
@@ -1033,25 +1279,37 @@ impl GpuScene {
                     format: wgpu::TextureFormat::R8Unorm,
                     usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
                     view_formats: &[],
-                });
+                },
+                "scene_ao_tex",
+            );
             self._ao_view = self
                 ._ao_texture
                 .create_view(&wgpu::TextureViewDescriptor::default());
 
-            self._normals_packed_buf = self.gpu_ctx.device.create_buffer(&wgpu::BufferDescriptor {
-                label: Some("normals_packed"),
-                size: new_cols as u64 * new_rows as u64 * 4,
-                mapped_at_creation: false,
-                usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
-            });
+            vram::track_buffer_drop(&self._normals_packed_buf, "normals_packed");
+            self._normals_packed_buf = vram::create_buffer_tracked(
+                &self.gpu_ctx.device,
+                &wgpu::BufferDescriptor {
+                    label: Some("normals_packed"),
+                    size: new_cols as u64 * new_rows as u64 * 4,
+                    mapped_at_creation: false,
+                    usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+                },
+                "normals_packed",
+            );
 
             // No init: update_shadow is always called immediately after update_heightmap.
-            self.shadow_buf = self.gpu_ctx.device.create_buffer(&wgpu::BufferDescriptor {
-                label: Some("shadow"),
-                size: new_cols as u64 * new_rows as u64 * 4,
-                usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
-                mapped_at_creation: false,
-            });
+            vram::track_buffer_drop(&self.shadow_buf, "shadow");
+            self.shadow_buf = vram::create_buffer_tracked(
+                &self.gpu_ctx.device,
+                &wgpu::BufferDescriptor {
+                    label: Some("shadow"),
+                    size: new_cols as u64 * new_rows as u64 * 4,
+                    usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+                    mapped_at_creation: false,
+                },
+                "shadow",
+            );
 
             self.rebuild_bind_group();
         }

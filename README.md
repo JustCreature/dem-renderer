@@ -8,7 +8,8 @@ A real-time 3D terrain renderer in Rust that raymarches real-world elevation dat
 
 - **Generic CRS support** — any GeoTIFF whose CRS is in the EPSG database, or that carries WKT, works without code changes (proj4rs + proj4wkt + crs-definitions, 7-parameter Helmert shifts for MGI / DHDN / OSGB36 / ED50 / CH1903 / Tokyo / NZGD49 built in)
 - **Multi-resolution terrain** — up to three streamed tiers blended in the raymarcher with no seams; feathered 500 m blend margin and per-tier rotation correction for meridian-convergence between projections
-- **Built-in launcher** — egui-based UI for picking a DEM file, configuring render quality, and downloading the demo bundle; settings persist in `~/.config/dem_renderer/config.toml`
+- **Built-in launcher** — egui-based UI for picking a DEM file, configuring render quality, choosing a VRAM budget preset (`Low` / `Mid` / `High`), and downloading the demo bundle; settings persist in `~/.config/dem_renderer/config.toml`
+- **Graceful OOM handling** — wgpu allocation failures are caught and the renderer steps the active preset down (fine tier first, then close) with a red HUD warning, instead of panicking
 - **Interactive fly-through** — WASD + mouse look, altitude control, 10× speed boost; tiles slide automatically as you move past the drift threshold
 - **Real sun position** — date/time-driven sun animation; shadows recomputed on-the-fly via DDA sweep as the sun moves
 - **Ambient occlusion** — true hemisphere AO (16-azimuth DDA), SSAO ×8/×16, and HBAO ×4/×8 modes, all toggleable at runtime
@@ -89,6 +90,8 @@ Total ~45 GB; the download is resumable (HTTP Range) and skips files that are al
 The default camera spawn for the demo view is the Hintertux glacier tongue (47.0762° N, 11.6876° E, elev. 3258 m). You can override any of this by editing `~/Library/Application Support/dem_renderer/config.toml` on macOS (or `dirs::config_dir() / dem_renderer / config.toml` on other platforms):
 
 ```toml
+vram_budget = "Mid"            # Low | Mid | High — overrides the auto-detected class
+
 [demo_view]
 camera_lat = 47.076211
 camera_lon = 11.687592
@@ -247,6 +250,10 @@ git-fetch-with-cli = true
 ### Tile dimension > 8192 px
 
 Hardware texture dimension limit. The viewer crops oversized windows around the camera automatically (see `GPU_SAFE_PX` in `src/consts.rs`). If you want a different cap, change the constant and rebuild.
+
+### Red HUD banner: "OOM prevented — not enough VRAM"
+
+The runtime OOM safety net fired and disabled a detail tier. The renderer keeps running on a coarser preset; no crash. To make it stop happening, open the launcher Settings and drop the **VRAM Budget** dropdown one step (`High` → `Mid` → `Low`). The choice persists in `config.toml` as `vram_budget = "..."`. See [`docs/vram-limitation.md`](docs/vram-limitation.md) for why Windows' "Shared GPU Memory" can't be used as a fallback and what the realistic options are.
 
 ## Architecture
 

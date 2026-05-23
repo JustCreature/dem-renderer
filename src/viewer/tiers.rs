@@ -4,17 +4,80 @@ use dem_io::{Heightmap, crop, extract_window, stitch_windows, stitch_windows_geo
 use render_gpu::GpuScene;
 use terrain::ShadowMask;
 
+use render_gpu::VramClass;
+
 use super::geo::sun_position;
 use super::scene_init::{INIT_SIM_DAY, INIT_SIM_HOUR, compute_ao_cropped};
 use crate::consts::{GPU_SAFE_PX, M_PER_DEG};
 
-// BEV COG tier geometry.
-pub(super) const BEV_BASE_RADIUS_M: f64 = 90_000.0;
-pub(super) const BEV_BASE_DRIFT_THRESHOLD_M: f64 = 30_000.0;
-pub(super) const BEV_5M_RADIUS_M: f64 = 20_000.0;
-pub(super) const BEV_5M_DRIFT_THRESHOLD_M: f64 = 3_000.0;
-pub(super) const BEV_1M_RADIUS_M: f64 = 3_500.0;
-pub(super) const BEV_1M_DRIFT_THRESHOLD_M: f64 = 1_000.0;
+/// Resolved tier geometry for the active VRAM class.
+///
+/// `fine.radius_m == 0.0` is the sentinel for "don't spawn the fine tier
+/// worker"; the BevBaseState stores `fine: None` in that case and the viewer's
+/// reload loop short-circuits on it. None of the shipped presets set it to
+/// zero — the Low preset keeps a tiny fine window (1 km radius / 300 m drift)
+/// so the user still sees 1 m detail right around the camera. The runtime OOM
+/// handler mutates it to 0.0 if the actual GPU pressure turns out to be
+/// tighter than the preset assumed.
+#[derive(Clone, Copy, Debug)]
+pub(super) struct TierRadii {
+    pub(super) base_radius_m: f64,
+    pub(super) base_drift_m: f64,
+    pub(super) close_radius_m: f64,
+    pub(super) close_drift_m: f64,
+    pub(super) fine_radius_m: f64,
+    pub(super) fine_drift_m: f64,
+}
+
+/// Map a VRAM class to tier radii / drift thresholds.
+///
+/// Memory math (Tirol demo, with the drop-first eager-dealloc reload cycle):
+///
+/// | preset | base | close | fine | steady mem | reload peak |
+/// |---|---|---|---|---|---|
+/// | High  | 90 km / 30 km drift | 20 km / 3 km drift | 3.5 km / 1 km drift | ~2.6 GB | ~2.6 GB |
+/// | Mid   | 70 km / 23 km drift | 14 km / 2 km drift | 2.5 km / 800 m drift | ~1.7 GB | ~1.7 GB |
+/// | Low   | 50 km / 17 km drift | 8 km / 1.5 km drift | 1 km / 300 m drift  | ~0.7 GB | ~0.7 GB |
+///
+/// The "High" row is the project's original hardcoded geometry; it stays the
+/// reference for systems with no memory pressure (Apple Silicon, 8 GB+ discrete).
+///
+/// Low's fine tier loads ~2000×2000 R32Float (≈ 48 MB across hm + normal +
+/// shadow) which is cheap enough to fit on a 4 GB card and gives a small island
+/// of 1 m detail right around the camera. The drift threshold is tighter (300 m
+/// vs the High preset's 1 km) because the smaller window means the camera
+/// leaves it sooner — but the source is local IO + CPU work, not GPU memory,
+/// so frequent reloads are fine.
+pub(super) fn tier_radii(class: VramClass) -> TierRadii {
+    match class {
+        VramClass::High => TierRadii {
+            base_radius_m: 90_000.0,
+            base_drift_m: 30_000.0,
+            close_radius_m: 20_000.0,
+            close_drift_m: 3_000.0,
+            fine_radius_m: 3_500.0,
+            fine_drift_m: 1_000.0,
+        },
+        VramClass::Mid => TierRadii {
+            base_radius_m: 70_000.0,
+            base_drift_m: 23_000.0,
+            close_radius_m: 14_000.0,
+            close_drift_m: 2_000.0,
+            fine_radius_m: 2_500.0,
+            fine_drift_m: 800.0,
+        },
+        VramClass::Low => TierRadii {
+            base_radius_m: 50_000.0,
+            base_drift_m: 17_000.0,
+            close_radius_m: 8_000.0,
+            close_drift_m: 1_500.0,
+            // Tiny fine window — still useful at low altitudes, ~48 MB of GPU
+            // memory total. The runtime OOM handler may zero this on pressure.
+            fine_radius_m: 1_000.0,
+            fine_drift_m: 300.0,
+        },
+    }
+}
 
 /// Crop a heightmap to at most `GPU_SAFE_PX × GPU_SAFE_PX` pixels centered on
 /// `(centre_e, centre_n)` (CRS-native: easting/northing for projected, lon/lat for geographic).
@@ -183,10 +246,15 @@ impl BevBaseState {
         cam_lat: f64,
         cam_lon: f64,
         lat_rad: f32,
+        radii: TierRadii,
         hm: &Arc<Heightmap>,
         scene: &mut GpuScene,
     ) -> Self {
         use super::tile_index::tiles_overlapping_wgs84;
+
+        let base_radius_m = radii.base_radius_m;
+        let close_radius_m = radii.close_radius_m;
+        let fine_radius_m = radii.fine_radius_m;
 
         // ── base worker ────────────────────────────────────────────────────────────────
         let (base_tx, base_worker_rx) = mpsc::sync_channel::<(f64, f64)>(1);
@@ -195,9 +263,9 @@ impl BevBaseState {
         let lat_rad_b = lat_rad;
         std::thread::spawn(move || {
             while let Ok((lat, lon)) = base_worker_rx.recv() {
-                let radius_deg_lat = BEV_BASE_RADIUS_M / M_PER_DEG;
-                let radius_deg_lon = BEV_BASE_RADIUS_M / (M_PER_DEG * lat.to_radians().cos());
-                let overlapping = tiles_overlapping_wgs84(&base_idx, lat, lon, BEV_BASE_RADIUS_M);
+                let radius_deg_lat = base_radius_m / M_PER_DEG;
+                let radius_deg_lon = base_radius_m / (M_PER_DEG * lat.to_radians().cos());
+                let overlapping = tiles_overlapping_wgs84(&base_idx, lat, lon, base_radius_m);
                 if overlapping.is_empty() {
                     continue;
                 }
@@ -218,7 +286,7 @@ impl BevBaseState {
                         let radius = if is_geo {
                             radius_deg_lon.max(radius_deg_lat)
                         } else {
-                            BEV_BASE_RADIUS_M
+                            base_radius_m
                         };
                         extract_window(&e.path, (cx, cy), radius, e.ifd).ok()
                     })
@@ -283,7 +351,7 @@ impl BevBaseState {
         let base_hm_close = Arc::clone(hm);
         std::thread::spawn(move || {
             while let Ok((lat, lon)) = hm5m_worker_rx.recv() {
-                let overlapping = tiles_overlapping_wgs84(&close_idx, lat, lon, BEV_5M_RADIUS_M);
+                let overlapping = tiles_overlapping_wgs84(&close_idx, lat, lon, close_radius_m);
                 if overlapping.is_empty() {
                     continue;
                 }
@@ -291,8 +359,7 @@ impl BevBaseState {
                 let Ok((cx, cy)) = dem_io::crs::from_wgs84(lat, lon, &entry.crs_proj4) else {
                     continue;
                 };
-                let Ok(hm5m_raw) =
-                    extract_window(&entry.path, (cx, cy), BEV_5M_RADIUS_M, entry.ifd)
+                let Ok(hm5m_raw) = extract_window(&entry.path, (cx, cy), close_radius_m, entry.ifd)
                 else {
                     continue;
                 };
@@ -334,24 +401,24 @@ impl BevBaseState {
         // rather than waiting for the first drift threshold to fire.
         let mut last_5m_lat = 0.0_f64;
         let mut last_5m_lon = 0.0_f64;
-        let mut effective_close_threshold = BEV_5M_DRIFT_THRESHOLD_M;
+        let mut effective_close_threshold = radii.close_drift_m;
         let overlapping_close =
-            tiles_overlapping_wgs84(&close_index, cam_lat, cam_lon, BEV_5M_RADIUS_M);
+            tiles_overlapping_wgs84(&close_index, cam_lat, cam_lon, close_radius_m);
         if let Some(&ci) = overlapping_close.first() {
             let entry = &close_index[ci];
             if let Ok((cx, cy)) = dem_io::crs::from_wgs84(cam_lat, cam_lon, &entry.crs_proj4) {
                 if let Ok(hm5m_init) =
-                    extract_window(&entry.path, (cx, cy), BEV_5M_RADIUS_M, entry.ifd)
+                    extract_window(&entry.path, (cx, cy), close_radius_m, entry.ifd)
                 {
                     let mut hm5m_init = cap_to_gpu_limit(hm5m_init, cx, cy);
                     dem_io::fill_nodata_from_base(&mut hm5m_init, hm);
-                    // When the GPU cap shrinks the window below BEV_5M_RADIUS_M (e.g. 1m tiles with no
+                    // When the GPU cap shrinks the window below close_radius_m (e.g. 1m tiles with no
                     // overviews), keep the threshold at ≤ half the actual window half-extent so the
                     // camera never exits the loaded window before a reload fires.
                     let close_half_m = (hm5m_init.cols as f64 * hm5m_init.dx_meters)
                         .min(hm5m_init.rows as f64 * hm5m_init.dy_meters)
                         * 0.5;
-                    effective_close_threshold = BEV_5M_DRIFT_THRESHOLD_M.min(close_half_m * 0.5);
+                    effective_close_threshold = radii.close_drift_m.min(close_half_m * 0.5);
                     let (origin_x, origin_y, extent_x, extent_y, rot_rad) =
                         cross_crs_world_origin_and_extent(&hm5m_init, hm);
                     let hm5m_init = Arc::new(hm5m_init);
@@ -381,7 +448,14 @@ impl BevBaseState {
         }
 
         // ── fine worker ────────────────────────────────────────────────────────────────
-        let fine = if fine_index.is_empty() {
+        // fine_radius_m == 0.0 is the runtime kill sentinel (set by the OOM
+        // degradation path). None of the launcher presets currently set it to
+        // zero — even Low loads a tiny 1 km fine window — but we keep the gate
+        // so a future preset (or a hand-edited config) can opt out cleanly.
+        let fine = if fine_index.is_empty() || fine_radius_m <= 0.0 {
+            if fine_radius_m <= 0.0 {
+                eprintln!("[tier] fine tier disabled (radius = 0)");
+            }
             None
         } else {
             let (hm1m_tx, hm1m_worker_rx) = mpsc::sync_channel::<(f64, f64)>(1);
@@ -391,7 +465,7 @@ impl BevBaseState {
             let recent_5m_w = recent_5m_fine;
             std::thread::spawn(move || {
                 while let Ok((lat, lon)) = hm1m_worker_rx.recv() {
-                    let overlapping = tiles_overlapping_wgs84(&fine_idx, lat, lon, BEV_1M_RADIUS_M);
+                    let overlapping = tiles_overlapping_wgs84(&fine_idx, lat, lon, fine_radius_m);
                     if overlapping.is_empty() {
                         continue;
                     }
@@ -408,7 +482,7 @@ impl BevBaseState {
                             else {
                                 return None;
                             };
-                            extract_window(&e.path, (et, nt), BEV_1M_RADIUS_M, e.ifd).ok()
+                            extract_window(&e.path, (et, nt), fine_radius_m, e.ifd).ok()
                         })
                         .collect();
                     if windows.is_empty() {
@@ -417,7 +491,7 @@ impl BevBaseState {
                     let raw1m = if windows.len() == 1 {
                         windows.into_iter().next().unwrap()
                     } else {
-                        stitch_windows(windows, e_tile, n_tile, BEV_1M_RADIUS_M)
+                        stitch_windows(windows, e_tile, n_tile, fine_radius_m)
                     };
                     let mut raw1m = cap_to_gpu_limit(raw1m, e_tile, n_tile);
                     if let Ok(g) = recent_5m_w.lock() {
@@ -455,16 +529,16 @@ impl BevBaseState {
                 hm1m_rx,
                 0.0,
                 0.0,
-                BEV_1M_DRIFT_THRESHOLD_M / M_PER_DEG,
+                radii.fine_drift_m / M_PER_DEG,
             ))
         };
 
         // Base drift threshold: cap to half the actual window half-extent so that the camera
         // always stays inside the loaded window between reloads.  For large-overview tiles
-        // the window >> BEV_BASE_RADIUS_M and the constant wins; for GPU-capped tiles
+        // the window >> base_radius_m and the constant wins; for GPU-capped tiles
         // (e.g. 1m NZ LiDAR, 8192 px = 8 km) the derived value is much smaller.
         let base_half_m = (hm.cols as f64 * hm.dx_meters).min(hm.rows as f64 * hm.dy_meters) * 0.5;
-        let effective_base_threshold = BEV_BASE_DRIFT_THRESHOLD_M.min(base_half_m * 0.5);
+        let effective_base_threshold = radii.base_drift_m.min(base_half_m * 0.5);
         let base_drift_deg = effective_base_threshold / M_PER_DEG;
 
         BevBaseState {
