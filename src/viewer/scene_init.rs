@@ -5,7 +5,7 @@ use dem_io::{Heightmap, crop, extract_window, load_grid_from_paths};
 use render_gpu::{GpuContext, GpuScene};
 
 use super::geo::{latlon_to_tile_metres, sun_position};
-use super::tiers::{AO_RADIUS_M, BEV_BASE_RADIUS_M, cap_to_gpu_limit, select_ifd};
+use super::tiers::{AO_RADIUS_M, cap_to_gpu_limit, select_ifd, tier_radii};
 use crate::consts::GPU_SAFE_PX;
 
 // Day 172 = June 21 (summer solstice). Must match sim_day / sim_hour in the Viewer init
@@ -160,13 +160,17 @@ pub(crate) fn prepare_scene_with_ctx(
             let t0 = std::time::Instant::now();
             report(0.50, "Reading terrain data…");
             let scales = dem_io::ifd_scales(tier_path).unwrap_or_else(|_| vec![1.0]);
-            let base_ifd = select_ifd(&scales, 30.0, BEV_BASE_RADIUS_M, GPU_SAFE_PX as u32);
-            let loaded = match extract_window(tier_path, centre_crs, BEV_BASE_RADIUS_M, base_ifd)
-                .or_else(|_| extract_window(tier_path, centre_crs, BEV_BASE_RADIUS_M, 1))
+            // Initial base load uses the VRAM-class radius so a Low preset
+            // doesn't waste time reading a 90 km window we'd immediately crop.
+            let init_radii = tier_radii(gpu_ctx.vram_class);
+            let base_radius = init_radii.base_radius_m;
+            let base_ifd = select_ifd(&scales, 30.0, base_radius, GPU_SAFE_PX as u32);
+            let loaded = match extract_window(tier_path, centre_crs, base_radius, base_ifd)
+                .or_else(|_| extract_window(tier_path, centre_crs, base_radius, 1))
                 .or_else(|_| {
                     // Camera outside tile — retry from tile geographic centre
                     dem_io::tile_centre_crs(tier_path)
-                        .and_then(|tc| extract_window(tier_path, tc, BEV_BASE_RADIUS_M, base_ifd))
+                        .and_then(|tc| extract_window(tier_path, tc, base_radius, base_ifd))
                 }) {
                 Ok(hm) => {
                     println!(

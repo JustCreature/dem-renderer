@@ -5,7 +5,7 @@ mod scene;
 mod vector_utils;
 pub mod vram;
 
-pub use context::GpuContext;
+pub use context::{GpuContext, VramClass};
 pub use render_rexture::render_gpu_texture;
 pub use scene::GpuScene;
 

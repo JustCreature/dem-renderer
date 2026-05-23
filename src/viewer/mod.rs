@@ -37,8 +37,7 @@ use crate::viewer::hud_renderer::HudRenderer;
 use self::geo::{latlon_to_tile_metres, sun_position};
 use self::scene_init::{INIT_SIM_DAY, INIT_SIM_HOUR, compute_ao_cropped};
 use self::tiers::{
-    AO_DRIFT_THRESHOLD_M, BEV_BASE_DRIFT_THRESHOLD_M, BevBaseState,
-    cross_crs_world_origin_and_extent,
+    AO_DRIFT_THRESHOLD_M, BevBaseState, TierRadii, cross_crs_world_origin_and_extent, tier_radii,
 };
 use crate::consts::{GPU_SAFE_PX, M_PER_DEG};
 
@@ -97,6 +96,10 @@ pub(crate) struct Viewer {
     // base heightmap (shared with shadow worker; replaced on tile slide)
     hm: Arc<Heightmap>,
     bev_base: Option<BevBaseState>,
+    /// Resolved tier radii for the active VRAM class. Used for drift threshold
+    /// recalibration after a base reload and for select_ifd() in single-file
+    /// streaming mode.
+    tier_radii: TierRadii,
     align_mode_viz: bool, // V key: show all 3 tiers as separate colored surfaces
 }
 
@@ -431,7 +434,7 @@ impl ApplicationHandler for Viewer {
                         let new_half_m = (self.hm.cols as f64 * self.hm.dx_meters)
                             .min(self.hm.rows as f64 * self.hm.dy_meters)
                             * 0.5;
-                        let new_thresh = BEV_BASE_DRIFT_THRESHOLD_M.min(new_half_m * 0.5);
+                        let new_thresh = self.tier_radii.base_drift_m.min(new_half_m * 0.5);
                         // Geographic base tracks position in degrees; convert the metre threshold.
                         let new_thresh_unit = if dem_io::crs::is_geographic(&self.hm.crs_proj4) {
                             new_thresh / M_PER_DEG
@@ -895,6 +898,19 @@ impl Viewer {
         let dx: f32 = scene.get_dx_meters();
         let dy: f32 = scene.get_dy_meters();
 
+        // Resolve tier radii from the GPU context's detected VRAM class.
+        // A launcher-side override will eventually plumb through here.
+        let tier_radii = tier_radii(scene.get_gpu_ctx().vram_class);
+        eprintln!(
+            "[tier] radii: base {:.0} km / drift {:.0} km, close {:.0} km / drift {:.0} km, fine {:.1} km / drift {:.1} km",
+            tier_radii.base_radius_m / 1000.0,
+            tier_radii.base_drift_m / 1000.0,
+            tier_radii.close_radius_m / 1000.0,
+            tier_radii.close_drift_m / 1000.0,
+            tier_radii.fine_radius_m / 1000.0,
+            tier_radii.fine_drift_m / 1000.0,
+        );
+
         let init_cam_pos = latlon_to_tile_metres(CAM_LAT, CAM_LON, &hm)
             .map(|(x, y)| [x, y, CAM_ELEV])
             .unwrap_or_else(|| {
@@ -961,6 +977,7 @@ impl Viewer {
                 cam_lat_d,
                 cam_lon_d,
                 lat_rad,
+                tier_radii,
                 &hm,
                 &mut scene,
             ));
@@ -1000,14 +1017,14 @@ impl Viewer {
             let close_ifd = tiers::select_ifd(
                 &close_scales,
                 5.0,
-                tiers::BEV_5M_RADIUS_M,
+                tier_radii.close_radius_m,
                 GPU_SAFE_PX as u32,
             );
             // Base tier: pixel scale ≥ 30 m/px AND window fits in GPU_SAFE_PX
             let base_ifd = tiers::select_ifd(
                 &tier_scales,
                 30.0,
-                tiers::BEV_BASE_RADIUS_M,
+                tier_radii.base_radius_m,
                 GPU_SAFE_PX as u32,
             );
             // Fine tier: always uses the original file at IFD-0 when source is sub-5m.
@@ -1048,12 +1065,18 @@ impl Viewer {
             }
             let close_index = Arc::new(close_vec);
 
-            let fine_index = if let Some(fi) = fine_ifd {
-                let mut fine_vec = tile_index::build_tile_index(&[tile_path.to_path_buf()]);
-                if let Some(e) = fine_vec.get_mut(0) {
-                    e.ifd = fi;
+            // When the VRAM preset disables the fine tier (Low), don't index any 1m
+            // source either — BevBaseState::new short-circuits on an empty fine_index.
+            let fine_index = if tier_radii.fine_radius_m > 0.0 {
+                if let Some(fi) = fine_ifd {
+                    let mut fine_vec = tile_index::build_tile_index(&[tile_path.to_path_buf()]);
+                    if let Some(e) = fine_vec.get_mut(0) {
+                        e.ifd = fi;
+                    }
+                    Arc::new(fine_vec)
+                } else {
+                    Arc::new(vec![])
                 }
-                Arc::new(fine_vec)
             } else {
                 Arc::new(vec![])
             };
@@ -1065,6 +1088,7 @@ impl Viewer {
                 CAM_LAT,
                 CAM_LON,
                 lat_rad,
+                tier_radii,
                 &hm,
                 &mut scene,
             ));
@@ -1119,6 +1143,7 @@ impl Viewer {
             detail_allowed_since: Some(std::time::Instant::now()),
             hm,
             bev_base,
+            tier_radii,
             align_mode_viz: false,
         }
     }
