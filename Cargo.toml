@@ -36,3 +36,12 @@ toml = "1.1.2"
 dirs = "6.0.0"
 rfd = "0.17.2"
 ureq = { version = "3.3.0", features = ["_tls"] }
+
+[build-dependencies]
+winres = "0.1.12"
+
+[package.metadata.bundle]
+name = "dem_renderer"
+identifier = "com.JustCreature.dem_renderer"
+# cargo-bundle is smart enough to pick the .icns for Mac and the .png for Linux
+icon = ["assets/icon_source.png", "assets/icon.icns"]
