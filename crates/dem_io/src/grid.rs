@@ -88,6 +88,21 @@ pub fn assemble_grid(grid: &[[Option<&Heightmap>; 3]; 3]) -> Heightmap {
     let nw_tile: &Heightmap =
         grid[0][0].expect("no NW tile provided, NW should always be provided");
 
+    // assemble_grid indexes every sibling tile using nw_tile.cols/rows. That's correct
+    // for the only current callers (3×3 Copernicus GLO-30 grids, where all tiles share
+    // a 3600×3600 pixel layout) but it's a latent assumption — a mixed-resolution or
+    // partial-overview grid would silently produce shifted rows or panic on slice OOB.
+    // Catch that misuse before it surfaces as corrupted terrain.
+    debug_assert!(
+        grid.iter()
+            .flatten()
+            .flatten()
+            .all(|t| t.cols == nw_tile.cols && t.rows == nw_tile.rows),
+        "assemble_grid: all tiles must match nw_tile dims ({}×{}), got mismatch — sibling tile sources are not uniform",
+        nw_tile.rows,
+        nw_tile.cols,
+    );
+
     let mut assembled_data: Vec<f32> =
         Vec::with_capacity(grid.len() * nw_tile.rows * grid[0].len() * nw_tile.cols);
 

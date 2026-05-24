@@ -32,7 +32,45 @@ pub use shadow_avx2::{
 // On x86_64  → AVX2 when detected at runtime, scalar fallback otherwise.
 // Other platforms → scalar only.
 
+// Every Sobel/DDA kernel below indexes `[r-1]`, `[r+1]`, `[c-1]`, `[c+1]` and loops
+// `1..rows-1`. With `rows = 0` the `rows - 1` underflows `usize` to `usize::MAX` in
+// release builds → runaway loop with OOB heap reads. With `rows ∈ {1, 2}` the loop
+// is empty and the output stays zero — also wrong, but not catastrophic. Guarding
+// at the dispatcher means every backend (scalar / NEON / AVX2 / parallel variants)
+// is covered in one place.
+const MIN_KERNEL_DIM: usize = 3;
+
+fn dims_below_kernel(hm: &Heightmap) -> bool {
+    hm.rows < MIN_KERNEL_DIM || hm.cols < MIN_KERNEL_DIM
+}
+
+fn neutral_normals(hm: &Heightmap) -> NormalMap {
+    let n = hm.rows * hm.cols;
+    NormalMap {
+        nx: vec![0.0; n],
+        ny: vec![0.0; n],
+        nz: vec![1.0; n],
+        rows: hm.rows,
+        cols: hm.cols,
+    }
+}
+
+fn neutral_shadow(hm: &Heightmap) -> ShadowMask {
+    ShadowMask {
+        data: vec![1.0; hm.rows * hm.cols],
+        rows: hm.rows,
+        cols: hm.cols,
+    }
+}
+
 pub fn compute_normals_vector(hm: &dem_io::Heightmap) -> NormalMap {
+    if dims_below_kernel(hm) {
+        eprintln!(
+            "[terrain] compute_normals_vector: skipping {}×{} input < {MIN_KERNEL_DIM}×{MIN_KERNEL_DIM}",
+            hm.rows, hm.cols
+        );
+        return neutral_normals(hm);
+    }
     #[cfg(target_arch = "aarch64")]
     return unsafe { row_major::compute_normals_neon(hm) };
 
@@ -52,6 +90,13 @@ pub fn compute_normals_vector(hm: &dem_io::Heightmap) -> NormalMap {
 }
 
 pub fn compute_normals_vector_par(hm: &dem_io::Heightmap) -> NormalMap {
+    if dims_below_kernel(hm) {
+        eprintln!(
+            "[terrain] compute_normals_vector_par: skipping {}×{} input < {MIN_KERNEL_DIM}×{MIN_KERNEL_DIM}",
+            hm.rows, hm.cols
+        );
+        return neutral_normals(hm);
+    }
     #[cfg(target_arch = "aarch64")]
     return unsafe { row_major::compute_normals_neon_parallel(hm) };
 
@@ -71,6 +116,13 @@ pub fn compute_normals_vector_par(hm: &dem_io::Heightmap) -> NormalMap {
 }
 
 pub fn compute_shadow_vector(hm: &dem_io::Heightmap, sun_elevation_rad: f32) -> ShadowMask {
+    if dims_below_kernel(hm) {
+        eprintln!(
+            "[terrain] compute_shadow_vector: skipping {}×{} input < {MIN_KERNEL_DIM}×{MIN_KERNEL_DIM}",
+            hm.rows, hm.cols
+        );
+        return neutral_shadow(hm);
+    }
     #[cfg(target_arch = "aarch64")]
     return unsafe { shadow::compute_shadow_neon(hm, sun_elevation_rad) };
 
@@ -90,6 +142,13 @@ pub fn compute_shadow_vector(hm: &dem_io::Heightmap, sun_elevation_rad: f32) -> 
 }
 
 pub fn compute_shadow_vector_par(hm: &dem_io::Heightmap, sun_elevation_rad: f32) -> ShadowMask {
+    if dims_below_kernel(hm) {
+        eprintln!(
+            "[terrain] compute_shadow_vector_par: skipping {}×{} input < {MIN_KERNEL_DIM}×{MIN_KERNEL_DIM}",
+            hm.rows, hm.cols
+        );
+        return neutral_shadow(hm);
+    }
     #[cfg(target_arch = "aarch64")]
     return unsafe { shadow::compute_shadow_neon_parallel(hm, sun_elevation_rad) };
 
@@ -114,6 +173,13 @@ pub fn compute_shadow_vector_par_with_azimuth(
     sun_elevation_rad: f32,
     penumbra_meters: f32,
 ) -> ShadowMask {
+    if dims_below_kernel(hm) {
+        eprintln!(
+            "[terrain] compute_shadow_vector_par_with_azimuth: skipping {}×{} input < {MIN_KERNEL_DIM}×{MIN_KERNEL_DIM}",
+            hm.rows, hm.cols
+        );
+        return neutral_shadow(hm);
+    }
     #[cfg(target_arch = "aarch64")]
     return unsafe {
         shadow::compute_shadow_neon_parallel_with_azimuth(

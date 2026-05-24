@@ -21,18 +21,28 @@ pub fn hm_to_f16_bytes(data: &[f32]) -> Vec<u8> {
     out
 }
 
-/// Generate mip level byte data (levels 1–7) from a base R16Float byte buffer.
-/// Returns `(width, height, bytes)` per mip level.
+/// Total mip level count we use for the base heightmap texture.
+/// Clamped to whatever the texture size actually supports (wgpu rejects counts
+/// greater than `floor(log2(max(W, H))) + 1`) and capped at 8 — the engine
+/// convention for the base tier.
+pub fn hm_mip_count(cols: u32, rows: u32) -> u32 {
+    let max_dim = cols.max(rows).max(1);
+    (max_dim.ilog2() + 1).min(8)
+}
+
+/// Generate mip level byte data (levels 1..N-1, where N = `hm_mip_count(cols, rows)`)
+/// from a base R16Float byte buffer. Returns `(width, height, bytes)` per mip level.
 /// Call on a background thread before `GpuScene::update_heightmap`.
 pub fn gen_hm_mip_bytes(
     base_f16_bytes: &[u8],
     cols: usize,
     rows: usize,
 ) -> Vec<(u32, u32, Vec<u8>)> {
-    let mut mips: Vec<(u32, u32, Vec<u8>)> = Vec::with_capacity(7);
+    let extra_mips = (hm_mip_count(cols as u32, rows as u32) as usize).saturating_sub(1);
+    let mut mips: Vec<(u32, u32, Vec<u8>)> = Vec::with_capacity(extra_mips);
     let mut prev_w = cols;
     let mut prev_h = rows;
-    for i in 0..7_usize {
+    for i in 0..extra_mips {
         let w = (prev_w / 2).max(1);
         let h = (prev_h / 2).max(1);
         let mip_bytes = {

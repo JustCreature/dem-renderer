@@ -51,9 +51,10 @@ pub(crate) fn prepare_demo_scene_with_ctx(
 
     report(0.10, "Reading terrain data…");
     let t0 = std::time::Instant::now();
-    let hm = load_grid_from_paths(&demo_view.base_tile_paths, |p| {
+    let mut hm = load_grid_from_paths(&demo_view.base_tile_paths, |p| {
         dem_io::parse_geotiff_auto(p).ok()
     });
+    dem_io::clamp_nodata_to_sea(&mut hm);
     println!(
         "demo base 3×3 grid: {}×{} at {:.4}°/px  ({:.2?})",
         hm.cols,
@@ -121,7 +122,7 @@ pub(crate) fn prepare_scene_with_ctx(
     vram_budget: crate::launcher::config::VramBudget,
     report: impl Fn(f32, &str),
 ) -> crate::viewer::PreparedScene {
-    let (hm, cache_path) = {
+    let (mut hm, cache_path) = {
         let proj4 = dem_io::crs::tile_proj4(tile_path).expect("failed to resolve CRS from tile");
         let is_geo = dem_io::crs::is_geographic(&proj4);
 
@@ -231,6 +232,7 @@ pub(crate) fn prepare_scene_with_ctx(
             (cap_to_gpu_limit(loaded, centre_e, centre_n), cache_path)
         }
     };
+    dem_io::clamp_nodata_to_sea(&mut hm);
 
     let lat_rad = (cam_lat as f32).to_radians();
     let (cam_x, cam_y) = latlon_to_tile_metres(cam_lat, cam_lon, &hm)

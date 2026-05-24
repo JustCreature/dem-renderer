@@ -153,6 +153,20 @@ pub(crate) fn fill_nodata(data: &mut [f32], rows: usize, cols: usize, nodata: f3
     }
 }
 
+/// Replace every cell whose height is below the `-1000` NoData sentinel with sea level
+/// (0.0). The interim policy for sub-radius / coastal datasets where the source
+/// genuinely has no terrain over ocean (NOAA Oahu LiDAR is the motivating case): we
+/// would rather see a flat sea than a 9 km chasm. See `docs/improvements/nodata_policy.md`
+/// for the design discussion and the planned `NodataPolicy` enum that will eventually
+/// let the caller choose between sea-clamp, neighbour-fill, and leave-sentinel.
+pub fn clamp_nodata_to_sea(hm: &mut Heightmap) {
+    for v in hm.data.iter_mut() {
+        if *v < -1000.0 {
+            *v = 0.0;
+        }
+    }
+}
+
 /// Fill every cell in `hm` with height < -1000 (extract_window NODATA sentinel) by
 /// sampling `base` at the corresponding world position, then smoothing the transition
 /// in two passes:
