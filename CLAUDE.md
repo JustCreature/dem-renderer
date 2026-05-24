@@ -309,6 +309,11 @@ Displaying a full absolute path in a row or label will overflow into adjacent te
 - All CPU-heavy pre-upload work (`hm_to_f16_bytes`, `gen_hm_mip_bytes`, `pack_normals_u32_bytes` / `pack_normals_rg16_bytes`, `pack_ao_u8`) is now performed on tier worker threads; the main thread only calls `write_texture` / `write_buffer`. Removing the f32→f16 pass and the mip generation from the GPU upload path eliminated multi-frame stalls on tile slides
 - The base tier reload also respawns shadow and AO workers because both close over `Arc<Heightmap>` — replacing the heightmap requires respawning their senders/receivers, and AO is force-recomputed at the new tile centre by setting `ao_last_x = f64::MAX`
 
+### Latent assumptions in data sizes
+- The same shape of bug almost certainly exists elsewhere in the codebase: any other place where a dimension, a count, or a stride is hardcoded to a value that "always works" for the data the author tested with. Worth keeping the smell in mind when reading code in this repo — especially around streaming and GPU upload paths.
+- Example precedent: `scene_hm_tex` had `mip_level_count: 8` hardcoded. This held for every Tirol / Copernicus dataset (windows ≥ 128 px on the long axis → `log2(128)+1 = 8`), but crashed wgpu validation the moment a tile like Diamond Head (a 3.6 km × 3.3 km NOAA Oahu LiDAR extract) made the base tier walk to its coarsest overview (115×105 → max 7 mips). Fix: derive the count from actual cols/rows via `render_gpu::hm_mip_count(cols, rows)`, capped at 8.
+- Rule of thumb when adding a new GPU resource or upload path: if a literal integer appears next to a `size:` / `mip_level_count:` / `bytes_per_row:` / `rows_per_image:` / `array_layer_count:` field, ask "what shape of input invalidates this?" before committing it.
+
 ---
 
 ## Open Items
