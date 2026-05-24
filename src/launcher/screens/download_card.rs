@@ -6,6 +6,7 @@ use egui::{Color32, Id, Margin, Order, Pos2, Sense, Shape, Stroke, Vec2};
 
 use crate::launcher::downloader::DownloadProgress;
 use crate::launcher::style::*;
+use crate::launcher::widgets::*;
 
 pub enum DownloadCardEvent {
     Cancel,
@@ -239,10 +240,10 @@ pub fn show(ctx: &egui::Context, progress: &DownloadProgress) -> Option<Download
 
                             // Action button
                             if progress.is_complete || progress.error.is_some() {
-                                if card_btn(ui, "OK", prop_medium(12.0), TEXT_PRIMARY).clicked() {
+                                if small_button(ui, "OK", ButtonVariant::Apply) {
                                     event = Some(DownloadCardEvent::Dismiss);
                                 }
-                            } else if card_btn(ui, "Cancel", prop(12.0), TEXT_SECONDARY).clicked() {
+                            } else if small_button(ui, "Cancel", ButtonVariant::Reject) {
                                 event = Some(DownloadCardEvent::Cancel);
                             }
                         });
@@ -251,16 +252,6 @@ pub fn show(ctx: &egui::Context, progress: &DownloadProgress) -> Option<Download
         });
 
     event
-}
-
-fn card_btn(ui: &mut egui::Ui, label: &str, font: egui::FontId, color: Color32) -> egui::Response {
-    ui.add(
-        egui::Button::new(egui::RichText::new(label).font(font).color(color))
-            .fill(Color32::TRANSPARENT)
-            .stroke(Stroke::new(1.0, TEXT_MUTED_55))
-            .min_size(Vec2::new(80.0, 28.0))
-            .corner_radius(egui::CornerRadius::same(0)),
-    )
 }
 
 fn overall_frac(p: &DownloadProgress) -> f32 {

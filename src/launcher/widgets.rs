@@ -542,7 +542,7 @@ pub fn dropdown(ui: &mut Ui, id: Id, options: &[&str], current: &mut u32) -> boo
 
 /// Visual style variants for [`small_button`].
 #[derive(Clone, Copy)]
-pub enum SmallButtonVariant {
+pub enum ButtonVariant {
     /// Standard interactive action — normal text, visible border.
     Primary,
     /// De-emphasised action (e.g. Reset) — muted text, dimmer border.
@@ -558,26 +558,24 @@ pub enum SmallButtonVariant {
 /// Small inline button with a dark background and a visible border.
 /// Styled consistently with the rest of the launcher UI.
 /// Returns `true` if clicked this frame.
-pub fn small_button(ui: &mut Ui, label: &str, variant: SmallButtonVariant) -> bool {
+pub fn small_button(ui: &mut Ui, label: &str, variant: ButtonVariant) -> bool {
     let bg = Color32::from_rgba_premultiplied(16, 16, 14, 210);
     let bg_hover = Color32::from_rgba_premultiplied(34, 34, 32, 230);
 
     let (fg, border) = match variant {
-        SmallButtonVariant::Primary => (
+        ButtonVariant::Primary => (
             TEXT_SECONDARY,
             Color32::from_rgba_premultiplied(80, 80, 76, 130),
         ),
-        SmallButtonVariant::Secondary => (
+        ButtonVariant::Secondary => (
             TEXT_MUTED_55,
             Color32::from_rgba_premultiplied(44, 44, 42, 90),
         ),
-        SmallButtonVariant::Apply => (
+        ButtonVariant::Apply => (
             GREEN_DOT,
             Color32::from_rgba_premultiplied(62, 100, 72, 150),
         ),
-        SmallButtonVariant::Reject => {
-            (DANGER, Color32::from_rgba_premultiplied(217, 156, 122, 150))
-        }
+        ButtonVariant::Reject => (DANGER, Color32::from_rgba_premultiplied(217, 156, 122, 150)),
     };
 
     let galley = ui
@@ -676,6 +674,126 @@ pub fn copy_icon_button(ui: &mut Ui) -> bool {
         egui::CornerRadius::same(0),
         icon_stroke,
         egui::StrokeKind::Outside,
+    );
+
+    if hovered {
+        ui.ctx()
+            .output_mut(|o| o.cursor_icon = egui::CursorIcon::PointingHand);
+    }
+
+    response.clicked()
+}
+
+/// Dark-framed monospace text area.
+/// Pass `editable: false` for a selectable read-only display; `true` for an inline text field.
+/// When editable, the buffer is stored in egui's temp data under `id` so edits survive redraws.
+/// To read the current edited value back: `ui.ctx().data(|d| d.get_temp::<String>(id))`.
+pub fn text_area(ui: &mut Ui, id: Id, text: &str, editable: bool) {
+    egui::Frame::NONE
+        .fill(Color32::from_rgba_premultiplied(6, 6, 8, 220))
+        .stroke(Stroke::new(1.0, HAIRLINE))
+        .inner_margin(egui::Margin::symmetric(10, 8))
+        .show(ui, |ui| {
+            ui.set_width(ui.available_width());
+            if editable {
+                let mut buf = ui
+                    .ctx()
+                    .data(|d| d.get_temp::<String>(id))
+                    .unwrap_or_else(|| text.to_string());
+                ui.add(
+                    egui::TextEdit::multiline(&mut buf)
+                        .font(mono(11.0))
+                        .text_color(TEXT_SECONDARY)
+                        .desired_width(f32::INFINITY),
+                );
+                ui.ctx().data_mut(|d| d.insert_temp(id, buf));
+            } else {
+                ui.add(
+                    egui::Label::new(
+                        egui::RichText::new(text)
+                            .font(mono(11.0))
+                            .color(TEXT_SECONDARY),
+                    )
+                    .selectable(true)
+                    .wrap(),
+                );
+            }
+        });
+}
+
+/// Large action button for modal footers and confirmation dialogs.
+/// Same variant set as [`small_button`]; Primary is the accent cream fill,
+/// Secondary is a ghost (transparent) style. Returns `true` if clicked this frame.
+pub fn main_button(ui: &mut Ui, label: &str, variant: ButtonVariant) -> bool {
+    let (fg, fg_hover, fill, fill_hover, border, font, min_w) = match variant {
+        ButtonVariant::Primary => (
+            Color32::from_rgb(17, 17, 17),
+            Color32::from_rgb(0, 0, 0),
+            Color32::from_rgba_premultiplied(232, 228, 220, 235),
+            Color32::from_rgba_premultiplied(248, 245, 238, 255),
+            TEXT_PRIMARY,
+            prop_medium(13.0),
+            160.0_f32,
+        ),
+        ButtonVariant::Secondary => (
+            TEXT_SECONDARY,
+            TEXT_PRIMARY,
+            Color32::TRANSPARENT,
+            Color32::from_rgba_premultiplied(30, 30, 28, 40),
+            TEXT_MUTED_55,
+            prop(13.0),
+            90.0_f32,
+        ),
+        ButtonVariant::Apply => (
+            Color32::from_rgb(12, 24, 14),
+            Color32::from_rgb(5, 15, 7),
+            Color32::from_rgba_premultiplied(80, 170, 100, 220),
+            Color32::from_rgba_premultiplied(95, 190, 115, 240),
+            GREEN_DOT,
+            prop_medium(13.0),
+            160.0_f32,
+        ),
+        ButtonVariant::Reject => (
+            DANGER,
+            Color32::WHITE,
+            Color32::TRANSPARENT,
+            Color32::from_rgba_premultiplied(60, 20, 15, 60),
+            DANGER,
+            prop(13.0),
+            90.0_f32,
+        ),
+    };
+
+    // PLACEHOLDER tells painter.galley to use its fallback_color argument,
+    // so we can switch text color on hover without re-laying-out the galley.
+    let galley = ui
+        .ctx()
+        .fonts_mut(|f| f.layout_no_wrap(label.to_string(), font, Color32::PLACEHOLDER));
+    let btn_w = (galley.size().x + 32.0).max(min_w);
+    let btn_h = 38.0_f32;
+
+    let (response, painter) = ui.allocate_painter(vec2(btn_w, btn_h), Sense::click());
+    let rect = response.rect;
+    let hovered = response.hovered();
+
+    painter.rect_filled(
+        rect,
+        egui::CornerRadius::same(0),
+        if hovered { fill_hover } else { fill },
+    );
+    painter.rect_stroke(
+        rect,
+        egui::CornerRadius::same(0),
+        Stroke::new(1.0, border),
+        egui::StrokeKind::Outside,
+    );
+    painter.galley(
+        pos2(
+            rect.center().x - galley.size().x * 0.5,
+            rect.center().y - galley.size().y * 0.5,
+        ),
+        galley,
+        if hovered { fg_hover } else { fg },
     );
 
     if hovered {

@@ -67,7 +67,7 @@ pub fn show(ui: &mut Ui, settings: &mut LauncherSettings) {
 
     opt_row(ui, "07", "Tiles directory", |ui| {
         // RTL: first added = rightmost
-        if small_button(ui, "Browse…", SmallButtonVariant::Primary) {
+        if small_button(ui, "Browse…", ButtonVariant::Primary) {
             if let Some(dir) = rfd::FileDialog::new()
                 .set_directory(&settings.tiles_dir)
                 .pick_folder()
@@ -83,7 +83,7 @@ pub fn show(ui: &mut Ui, settings: &mut LauncherSettings) {
         let default_dir = resolve_default_tiles_dir();
         if settings.tiles_dir != default_dir {
             ui.add_space(4.0);
-            if small_button(ui, "Reset", SmallButtonVariant::Secondary) {
+            if small_button(ui, "Reset", ButtonVariant::Secondary) {
                 settings.tiles_dir = default_dir;
             }
         }

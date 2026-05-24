@@ -191,57 +191,18 @@ fn show_download_modal(
                     hairline_rule(ui);
                     ui.add_space(12.0);
 
-                    // Selectable path code block — user can click and drag to copy
-                    // NOTE: Extract it to a component later
                     let path_str = tiles_dir.join("big_size").to_string_lossy().into_owned();
-                    egui::Frame::NONE
-                        .fill(Color32::from_rgba_premultiplied(6, 6, 8, 220))
-                        .stroke(Stroke::new(1.0, HAIRLINE))
-                        .inner_margin(egui::Margin::symmetric(10, 8))
-                        .show(ui, |ui| {
-                            ui.set_width(ui.available_width());
-                            ui.add(
-                                egui::Label::new(
-                                    egui::RichText::new(&path_str)
-                                        .font(mono(11.0))
-                                        .color(TEXT_SECONDARY),
-                                )
-                                .selectable(true)
-                                .wrap(),
-                            );
-                        });
+                    text_area(ui, Id::new("download_path"), &path_str, false);
                     ui.add_space(16.0);
 
-                    // NOTE: Extract it to a component later
                     ui.horizontal(|ui| {
                         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                            let primary = egui::Button::new(
-                                egui::RichText::new("DOWNLOAD & START")
-                                    .font(prop_medium(13.0))
-                                    .color(Color32::from_rgb(17, 17, 17)),
-                            )
-                            .fill(Color32::from_rgba_premultiplied(232, 228, 220, 235))
-                            .stroke(Stroke::new(1.0, TEXT_PRIMARY))
-                            .min_size(vec2(160.0, 38.0))
-                            .corner_radius(egui::CornerRadius::same(0));
-
-                            if ui.add(primary).clicked() {
+                            if main_button(ui, "DOWNLOAD & START", ButtonVariant::Primary) {
                                 *modal_open = false;
                                 event = Some(SelectDemEvent::DemoView);
                             }
                             ui.add_space(10.0);
-
-                            let cancel = egui::Button::new(
-                                egui::RichText::new("CANCEL")
-                                    .font(prop(13.0))
-                                    .color(TEXT_SECONDARY),
-                            )
-                            .fill(Color32::TRANSPARENT)
-                            .stroke(Stroke::new(1.0, TEXT_MUTED_55))
-                            .min_size(vec2(90.0, 38.0))
-                            .corner_radius(egui::CornerRadius::same(0));
-
-                            if ui.add(cancel).clicked() {
+                            if main_button(ui, "CANCEL", ButtonVariant::Secondary) {
                                 *modal_open = false;
                             }
                         });
