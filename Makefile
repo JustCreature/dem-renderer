@@ -60,4 +60,16 @@ generate_windows_icon:
 	# brew install imagemagick
 	magick assets/icon_source.png -define icon:auto-resize=256,128,64,48,32,16 assets/icon.ico
 
-.PHONY: build_arm build_x86 run view view-vsync view-1m config download-tiles
+# ── Release ───────────────────────────────────────────────────────────────────
+
+release:
+	git tag $(VERSION)
+	git push origin $(VERSION)
+
+release_force:
+	git tag -d $(VERSION) || true
+	git push origin :refs/tags/$(VERSION) || true
+	git tag $(VERSION)
+	git push origin $(VERSION)
+
+.PHONY: build_arm build_x86 run view view-vsync view-1m config download-tiles release release_force

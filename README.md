@@ -192,6 +192,17 @@ The launcher opens by default. Set `skip_launcher = true` in `config.toml` to ju
 All other flags from earlier versions (`--1m-tiles-dir`, `--view`) have been removed; their behaviour is now controlled by `config.toml` or the launcher UI.
 
 
+## Releasing
+
+Tag the commit you want to ship and push the tag — the CI release workflow builds all four platform binaries and creates a draft GitHub release automatically.
+
+```sh
+make release VERSION=0.2.0        # tag + push
+make release_force VERSION=0.2.0  # delete existing tag first, then re-tag + push
+```
+
+Open the draft release on GitHub, edit the notes, and publish.
+
 ## CRS utility commands
 
 The renderer no longer needs external CRS reprojection — it handles any EPSG CRS natively. The commands below are still useful for cropping or one-off reprojection (requires `gdal`):
