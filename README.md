@@ -4,6 +4,13 @@ A real-time 3D terrain renderer in Rust that raymarches real-world elevation dat
 
 ![Hintertux glacier area, Tyrol](docs/screenshot.png)
 
+## MacOS installation
+
+If installed app doesn't open and OS tells you to move it to Trash, open your terminal and execute this command:
+```sh
+xattr -cr /Applications/dem_renderer.app
+```
+
 ## Features
 
 - **Generic CRS support** — any GeoTIFF whose CRS is in the EPSG database, or that carries WKT, works without code changes (proj4rs + proj4wkt + crs-definitions, 7-parameter Helmert shifts for MGI / DHDN / OSGB36 / ED50 / CH1903 / Tokyo / NZGD49 built in)

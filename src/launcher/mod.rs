@@ -150,8 +150,7 @@ impl LauncherApp {
     }
 
     fn begin_download(&mut self) {
-        let dest_root = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
-        let (rx, cancel) = downloader::begin_download(dest_root);
+        let (rx, cancel) = downloader::begin_download(self.settings.tiles_dir.clone());
         self.dl_rx = Some(rx);
         self.dl_cancel = Some(cancel);
         self.dl_progress = None;
@@ -187,7 +186,26 @@ impl LauncherApp {
             .clone();
 
         let is_demo = self.settings.selected_view == SelectedView::DemoView;
-        let demo_cfg = self.settings.demo_view.clone();
+        let demo_cfg = {
+            let mut cfg = self.settings.demo_view.clone();
+            let td = &self.settings.tiles_dir;
+            let resolve = |paths: Vec<std::path::PathBuf>| -> Vec<std::path::PathBuf> {
+                paths
+                    .into_iter()
+                    .map(|p| if p.is_absolute() { p } else { td.join(&p) })
+                    .collect()
+            };
+            cfg.fine_tile_paths = resolve(cfg.fine_tile_paths);
+            cfg.close_tile_paths = resolve(cfg.close_tile_paths);
+            cfg.base_tile_paths = resolve(cfg.base_tile_paths);
+            cfg
+        };
+        // Write resolved absolute paths back into settings so LauncherOutcome::Start
+        // carries them into the viewer's streaming workers (main.rs passes
+        // settings.demo_view directly to Viewer::from_launcher).
+        if is_demo {
+            self.settings.demo_view = demo_cfg.clone();
+        }
         let tile_path = self.settings.tile_5m_path.clone();
         let vram_budget = self.settings.vram_budget;
 
@@ -463,7 +481,7 @@ impl ApplicationHandler for LauncherApp {
                     let panel_w = 540.0_f32;
                     let panel_right_margin = 56.0_f32;
                     let panel_x = screen_rect.max.x - panel_right_margin - panel_w;
-                    let panel_top = (screen_rect.center().y - 220.0).max(screen_rect.min.y + 20.0);
+                    let panel_top = (screen_rect.center().y - 260.0).max(screen_rect.min.y + 20.0);
 
                     egui::Area::new(egui::Id::new("launcher_panel"))
                         .fixed_pos(egui::pos2(panel_x, panel_top))
@@ -480,7 +498,7 @@ impl ApplicationHandler for LauncherApp {
                                 })
                                 .show(ui, |ui| {
                                     ui.set_width(panel_w - 80.0);
-                                    ui.set_min_height(440.0);
+                                    ui.set_min_height(520.0);
 
                                     // ── Header — identical layout for all screens ──────────
                                     // Sub-screens show a back breadcrumb; main/loading get an
@@ -550,6 +568,7 @@ impl ApplicationHandler for LauncherApp {
                                                 &tile_5m_display,
                                                 tile_5m_is_custom,
                                                 &selected_view_snap,
+                                                &settings.tiles_dir,
                                             );
                                         }
                                         Screen::Settings => {

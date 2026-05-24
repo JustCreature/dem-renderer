@@ -174,6 +174,66 @@ For projected single-file mode and demo mode, the viewer spawns three background
 
 ---
 
+## Launcher UI — Development Rules
+
+These rules are derived from real mistakes made during launcher development. Follow them strictly.
+
+### Component-first: extract before writing inline
+
+Before writing inline egui layout code, check whether `src/launcher/widgets.rs` already has a component that fits. If similar inline code already exists in a screen file, extract it into a widget immediately — don't leave a `// NOTE: Extract it to a component later` comment. The available widgets are:
+
+| Widget | Purpose |
+|---|---|
+| `small_button(ui, label, ButtonVariant)` | Small inline action button (22 px tall), painter-drawn with hover |
+| `main_button(ui, label, ButtonVariant)` | Large modal / confirmation button (38 px tall), painter-drawn with hover |
+| `copy_icon_button(ui)` | Square icon button with painter-drawn copy icon |
+| `text_area(ui, id, text, editable)` | Dark-framed monospace text block; selectable when `editable: false`, persistent TextEdit when `true` |
+| `ButtonVariant` | `Primary` / `Secondary` / `Apply` / `Reject` — shared by both button sizes |
+| `segmented_control`, `dropdown` | Settings-row controls |
+| `choice_item`, `menu_row` | Animated card / row with hover slide |
+| `hairline_rule`, `breadcrumb`, `brand_block`, `status_footer` | Structural / chrome widgets |
+
+### Hover: always painter-drawn, never egui::Button
+
+Use `ui.allocate_painter` + `Sense::click()` for any button that needs custom hover colors. `egui::Button` only applies egui's own hover overlay, which does not respect our custom fill colors and produces inconsistent results. Always follow the pattern in `small_button`: allocate → check `response.hovered()` → paint fill, stroke, then galley.
+
+To make text color change on hover, lay out the galley with `Color32::PLACEHOLDER` (not the real color) so `painter.galley(pos, galley, fallback_color)` can switch the color each frame without re-laying-out.
+
+### Preserve existing style exactly when replacing inline code
+
+When replacing inline egui widgets with a shared component, verify the visual output matches before and after. Key differences that break style:
+- `egui::Button` defaults to `fill(ui.visuals().widgets.inactive.bg_fill)` unless overridden — always set `.fill()` explicitly
+- Transparent-fill buttons (`fill(Color32::TRANSPARENT)`) look different from our dark-bg `small_button` — check which the design calls for
+- Font size and weight must match: `prop_medium` ≠ `prop`, `mono` ≠ `prop`
+
+### Uniform panel sizing — no per-screen heights
+
+All launcher screens must use the same `panel_top` and `min_height` values. Per-screen heights cause a visible jump when navigating between screens. If a new settings row makes the panel too small, increase the shared values for all screens together.
+
+### Font coverage — use painter-drawn icons
+
+The loaded fonts are **Space Grotesk** (proportional) and **JetBrains Mono** (monospace). Neither covers all Unicode. Special symbols such as `⎘` (U+2398) or uncommon arrows render as `?`. Use painter-drawn icons (`allocate_painter` + rect/line/circle primitives) for any UI icon that isn't a standard ASCII character or a common arrow (`→`).
+
+### egui state persistence for editable widgets
+
+egui redraws every frame. Any `String` (or other value) computed fresh each frame will overwrite user input. For editable state, store it in egui's temp data under a stable `Id`:
+
+```rust
+// Read or initialise
+let mut buf = ui.ctx().data(|d| d.get_temp::<String>(id)).unwrap_or_else(|| initial.to_string());
+// … show TextEdit against &mut buf …
+// Write back every frame
+ui.ctx().data_mut(|d| d.insert_temp(id, buf));
+```
+
+This is how `text_area(ui, id, text, editable: true)` works internally.
+
+### Long paths — truncate with tooltip
+
+Displaying a full absolute path in a row or label will overflow into adjacent text. Show only the leaf segment (`…/tiles`) as the label and put the full path in `.on_hover_text(full_path)`. See the "Tiles directory" row in `src/launcher/screens/settings.rs` for the reference implementation.
+
+---
+
 ## Interaction Mode
 
 - **Guide.** The user is building this to learn. Explain *why* something works at the hardware level, point to the right direction, suggest experiments — but do not write code or execute commands unless explicitly asked.

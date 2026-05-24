@@ -1,4 +1,4 @@
-use crate::launcher::config::{LauncherSettings, VramBudget};
+use crate::launcher::config::{LauncherSettings, VramBudget, resolve_default_tiles_dir};
 use crate::launcher::style::*;
 use crate::launcher::widgets::*;
 use egui::{Id, Sense, Stroke, Ui, vec2};
@@ -63,6 +63,45 @@ pub fn show(ui: &mut Ui, settings: &mut LauncherSettings) {
             2 => VramBudget::High,
             _ => VramBudget::Mid,
         };
+    });
+
+    opt_row(ui, "07", "Tiles directory", |ui| {
+        // RTL: first added = rightmost
+        if small_button(ui, "Browse…", ButtonVariant::Primary) {
+            if let Some(dir) = rfd::FileDialog::new()
+                .set_directory(&settings.tiles_dir)
+                .pick_folder()
+            {
+                settings.tiles_dir = dir;
+            }
+        }
+        ui.add_space(4.0);
+        if copy_icon_button(ui) {
+            ui.ctx()
+                .copy_text(settings.tiles_dir.to_string_lossy().into_owned());
+        }
+        let default_dir = resolve_default_tiles_dir();
+        if settings.tiles_dir != default_dir {
+            ui.add_space(4.0);
+            if small_button(ui, "Reset", ButtonVariant::Secondary) {
+                settings.tiles_dir = default_dir;
+            }
+        }
+        ui.add_space(8.0);
+        // Show only the leaf folder name to avoid overlapping the row label.
+        // Hovering reveals the full path via tooltip.
+        let full_path = settings.tiles_dir.to_string_lossy().into_owned();
+        let display = settings
+            .tiles_dir
+            .file_name()
+            .map(|n| format!("…/{}", n.to_string_lossy()))
+            .unwrap_or_else(|| full_path.clone());
+        ui.label(
+            egui::RichText::new(display)
+                .font(mono(10.0))
+                .color(TEXT_MUTED),
+        )
+        .on_hover_text(&full_path);
     });
 
     // Bottom hairline closes the last row visually
