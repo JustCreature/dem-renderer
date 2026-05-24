@@ -80,6 +80,15 @@ struct CameraUniforms {
 // smoothstep from 0 (edge, fully base tier) to BLEND_MARGIN (inner, fully close tier).
 const BLEND_MARGIN: f32 = 500.0;
 
+// NoData fallback for base-tier samples. CPU clamps residual `-9999` sentinels to 0
+// before upload (see dem_io::clamp_nodata_to_sea), but any cell that still ends up
+// below sea level — extreme R16Float quantisation, a not-yet-clamped source path —
+// would render as a kilometre-deep chasm. Clamp at sample time so the worst-case
+// failure mode is "flat sea" rather than "void in the ground". Close/fine tiers use
+// the existing `> -1000` skip-blend check, which keeps the base value visible where
+// the overlay has no data; this constant is only consulted by base-tier sites.
+const SEA_LEVEL_M: f32 = 0.0;
+
 var<private> ssao_16x_kernel: array<vec3<f32>, 16> = array<vec3<f32>, 16>(
     // x = cos(el) * cos(az)
     // y = cos(el) * sin(az)
@@ -290,7 +299,7 @@ fn sample_h_exact(pos_xy: vec2<f32>) -> f32 {
         (pos_xy.x / cam.dx_meters + 0.5) / f32(cam.hm_cols),
         (pos_xy.y / cam.dy_meters + 0.5) / f32(cam.hm_rows),
     );
-    var h = textureSampleLevel(hm_tex, hm_sampler, uv_base, 0.0).r;
+    var h = max(textureSampleLevel(hm_tex, hm_sampler, uv_base, 0.0).r, SEA_LEVEL_M);
     if cam.hm5m_extent_x > 0.0 {
         let lx5 = pos_xy.x - cam.hm5m_origin_x;
         let ly5 = pos_xy.y - cam.hm5m_origin_y;
@@ -380,7 +389,7 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
             // Base tier height
             let uv_v = vec2<f32>((pv.x / cam.dx_meters + 0.5) / f32(cam.hm_cols),
                 (pv.y / cam.dy_meters + 0.5) / f32(cam.hm_rows));
-            let h_bv = textureSampleLevel(hm_tex, hm_sampler, uv_v, 0.0).r;
+            let h_bv = max(textureSampleLevel(hm_tex, hm_sampler, uv_v, 0.0).r, SEA_LEVEL_M);
 
             // Close tier height (independent sample — no blending)
             var h_cv = h_bv - 100000.0;
@@ -516,7 +525,7 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
         let mip_lod = log2(1.0 + t / lod_mip_div);  // mipmap downsampling start at distance CONFIG_PERFORMANCE
 
         // ── height sample: base → 5m → 1m blend ──
-        var h: f32 = textureSampleLevel(hm_tex, hm_sampler, uv, mip_lod).r;
+        var h: f32 = max(textureSampleLevel(hm_tex, hm_sampler, uv, mip_lod).r, SEA_LEVEL_M);
         let lx_loop = pos.x - cam.hm5m_origin_x;
         let ly_loop = pos.y - cam.hm5m_origin_y;
         let in_close_l = cam.hm5m_extent_x > 0.0 && lx_loop >= 0.0 && lx_loop < cam.hm5m_extent_x && ly_loop >= 0.0 && ly_loop < cam.hm5m_extent_y;
@@ -694,7 +703,7 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
                     (sample_pos.x / cam.dx_meters + 0.5) / f32(cam.hm_cols),
                     (sample_pos.y / cam.dy_meters + 0.5) / f32(cam.hm_rows)
                 );
-                let sample_h = textureSampleLevel(hm_tex, hm_sampler, sample_uv, 0.0).r;
+                let sample_h = max(textureSampleLevel(hm_tex, hm_sampler, sample_uv, 0.0).r, SEA_LEVEL_M);
 
                 open_factor += smoothstep(-50.0, 50.0, sample_pos.z - sample_h);
             }
@@ -721,7 +730,7 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
                         (sample_pos.x / cam.dx_meters + 0.5) / f32(cam.hm_cols),
                         (sample_pos.y / cam.dy_meters + 0.5) / f32(cam.hm_rows)
                     );
-                    let sample_h = textureSampleLevel(hm_tex, hm_sampler, sample_uv, 0.0).r;
+                    let sample_h = max(textureSampleLevel(hm_tex, hm_sampler, sample_uv, 0.0).r, SEA_LEVEL_M);
 
                     let cur_angle = atan2(sample_h - sample_pos.z, probe_dist);
                     max_angle = select(max_angle, cur_angle, cur_angle > max_angle);
@@ -742,6 +751,8 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
         let brightness = (ambient * ao_factor + (1.0 - ambient) * diffuse) * shadow_factor;
 
         // set colors for different heights
+        let sea = vec3<f32>(50.0, 100.0, 160.0);
+        let turquoise = vec3<f32>(80.0, 190.0, 180.0);
         let green = vec3<f32>(120.0, 160.0, 80.0);
         let light_green = vec3<f32>(160.0, 175.0, 130.0);
         let rock = vec3<f32>(200.0, 200.0, 195.0);
@@ -751,7 +762,22 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
         let t2 = smoothstep(2000.0, 2200.0, pos.z);  // light_green → rock
         let t3 = smoothstep(2600.0, 2800.0, pos.z);  // rock → snow
 
-        let base = mix(mix(mix(green, light_green, t1), rock, t2), snow, t3);
+        let land = mix(mix(mix(green, light_green, t1), rock, t2), snow, t3);
+
+        // Coastal band: deep sea (≤0m) → turquoise shallows (peaks ~1.5m) → land (≥3m).
+        // Two consecutive smoothsteps give a continuous three-stop blend with the
+        // turquoise as the peak of the transition. The band exists because DEM cells
+        // near the waterline are noisy (LiDAR water-surface returns at tide stage,
+        // bathymetric returns clamped to 0, beach-elevation triangulation into surf
+        // zone) — rendering 0–3m as reef turquoise instead of "blue or grass" hides
+        // the noise and matches what shallow tropical water actually looks like.
+        // Sea → turquoise uses a linear ramp instead of smoothstep so the gradient is
+        // visually uniform across the whole 0–15.5 m range — smoothstep concentrates
+        // ~70% of its slope in the middle, which on a wide range reads as a banded
+        // mid-depth ring. Turquoise → land keeps smoothstep because the 1.5 m range
+        // is narrow enough that the easing is what gives the coastline its crisp edge.
+        let coastal = mix(sea, turquoise, clamp(pos.z / 15.5, 0.0, 1.0));
+        let base = mix(coastal, land, smoothstep(15.5, 17.0, pos.z));
         let base_r = base.x;
         let base_g = base.y;
         let base_b = base.z;

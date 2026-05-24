@@ -299,7 +299,9 @@ impl BevBaseState {
                 } else {
                     stitch_windows_geographic(windows, lon, lat, radius_deg_lon, radius_deg_lat)
                 };
-                let hm = Arc::new(cap_to_gpu_limit(raw, cam_cx, cam_cy));
+                let mut hm = cap_to_gpu_limit(raw, cam_cx, cam_cy);
+                dem_io::clamp_nodata_to_sea(&mut hm);
+                let hm = Arc::new(hm);
                 let normals = terrain::compute_normals_vector_par(&hm);
                 let (az, el) = sun_position(lat_rad_b, INIT_SIM_DAY, INIT_SIM_HOUR);
                 let shadow = terrain::compute_shadow_vector_par_with_azimuth(&hm, az, el, 200.0);
@@ -365,6 +367,7 @@ impl BevBaseState {
                 };
                 let mut hm5m_raw = cap_to_gpu_limit(hm5m_raw, cx, cy);
                 dem_io::fill_nodata_from_base(&mut hm5m_raw, &base_hm_close);
+                dem_io::clamp_nodata_to_sea(&mut hm5m_raw);
                 let hm5m = Arc::new(hm5m_raw);
                 if let Ok(mut g) = recent_5m_close.lock() {
                     *g = Some(Arc::clone(&hm5m));
@@ -412,6 +415,7 @@ impl BevBaseState {
                 {
                     let mut hm5m_init = cap_to_gpu_limit(hm5m_init, cx, cy);
                     dem_io::fill_nodata_from_base(&mut hm5m_init, hm);
+                    dem_io::clamp_nodata_to_sea(&mut hm5m_init);
                     // When the GPU cap shrinks the window below close_radius_m (e.g. 1m tiles with no
                     // overviews), keep the threshold at ≤ half the actual window half-extent so the
                     // camera never exits the loaded window before a reload fires.
@@ -499,6 +503,7 @@ impl BevBaseState {
                             dem_io::fill_nodata_from_base(&mut raw1m, close_hm);
                         }
                     }
+                    dem_io::clamp_nodata_to_sea(&mut raw1m);
                     let hm1m = Arc::new(raw1m);
                     let normals = terrain::compute_normals_vector_par(&hm1m);
                     let (az, el) = sun_position(lat_rad_1m, INIT_SIM_DAY, INIT_SIM_HOUR);
