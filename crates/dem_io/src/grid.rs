@@ -94,9 +94,13 @@ pub fn assemble_grid(grid: &[[Option<&Heightmap>; 3]; 3]) -> Heightmap {
     // partial-overview grid would silently produce shifted rows or panic on slice OOB.
     // Catch that misuse before it surfaces as corrupted terrain.
     debug_assert!(
-        grid.iter().flatten().flatten().all(|t| t.cols == nw_tile.cols && t.rows == nw_tile.rows),
+        grid.iter()
+            .flatten()
+            .flatten()
+            .all(|t| t.cols == nw_tile.cols && t.rows == nw_tile.rows),
         "assemble_grid: all tiles must match nw_tile dims ({}×{}), got mismatch — sibling tile sources are not uniform",
-        nw_tile.rows, nw_tile.cols,
+        nw_tile.rows,
+        nw_tile.cols,
     );
 
     let mut assembled_data: Vec<f32> =
