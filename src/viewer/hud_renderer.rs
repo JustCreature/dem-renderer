@@ -503,7 +503,7 @@ impl HudRenderer {
         hint_buffer.set_size(&mut font_system, Some(width as f32), Some(40.0));
         hint_buffer.set_text(
             &mut font_system,
-            "Q - immersive mode; Alt - speed boost; E - hide/show HUD; +/- - time; [/] - days; V - tier viz (green=30m blue=5m red=1m)",
+            "Q - immersive mode; Shift - speed boost; Space/Alt - up/down; E - hide/show HUD; +/- - time; [/] - days; V - tier viz (green=30m blue=5m red=1m)",
             &glyphon::Attrs::new(),
             glyphon::Shaping::Basic,
             Some(glyphon::cosmic_text::Align::Center),

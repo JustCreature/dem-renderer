@@ -274,7 +274,9 @@ impl ApplicationHandler for Viewer {
                 if self.keys_held.contains(&KeyCode::Space) {
                     self.cam_pos[2] += speed * dt;
                 }
-                if self.keys_held.contains(&KeyCode::ShiftLeft) {
+                if self.keys_held.contains(&KeyCode::AltLeft)
+                    || self.keys_held.contains(&KeyCode::SuperLeft)
+                {
                     self.cam_pos[2] -= speed * dt;
                 }
 
@@ -768,7 +770,7 @@ impl ApplicationHandler for Viewer {
                         eprintln!("[vram] debug: simulated OOM (O)");
                         return;
                     }
-                    if kc == KeyCode::SuperLeft || kc == KeyCode::AltLeft {
+                    if kc == KeyCode::ShiftLeft {
                         match event.state {
                             winit::event::ElementState::Pressed => {
                                 self.speed_boost = true;
