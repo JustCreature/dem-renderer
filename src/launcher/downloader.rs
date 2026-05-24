@@ -36,7 +36,7 @@ struct FileTask {
     resume_from: u64,
 }
 
-fn all_entries(dest_root: &Path) -> Vec<DownloadEntry> {
+fn all_entries(tiles_dir: &Path) -> Vec<DownloadEntry> {
     let mut entries = Vec::new();
 
     // Camera tile + east + south + south-east of default camera position (N47/E011)
@@ -44,35 +44,26 @@ fn all_entries(dest_root: &Path) -> Vec<DownloadEntry> {
         let name = format!("Copernicus_DSM_COG_10_N{lat:02}_00_E{lon:03}_00_DEM");
         entries.push(DownloadEntry {
             url: format!("https://copernicus-dem-30m.s3.amazonaws.com/{name}/{name}.tif"),
-            dest_path: dest_root
-                .join("tiles")
-                .join(&name)
-                .join(format!("{name}.tif")),
+            dest_path: tiles_dir.join(&name).join(format!("{name}.tif")),
             display_name: format!("{name}.tif"),
         });
     }
 
     entries.push(DownloadEntry {
         url: "https://data.bev.gv.at/download/DGM/Hoehenraster/DGM_R5.tif".to_string(),
-        dest_path: dest_root.join("tiles").join("big_size").join("DGM_R5.tif"),
+        dest_path: tiles_dir.join("big_size").join("DGM_R5.tif"),
         display_name: "DGM_R5.tif".to_string(),
     });
 
     entries.push(DownloadEntry {
         url: "https://data.bev.gv.at/download/ALS/DTM/20240915/ALS_DTM_CRS3035RES50000mN2650000E4400000.tif".to_string(),
-        dest_path: dest_root
-            .join("tiles")
-            .join("big_size")
-            .join("CRS3035RES50000mN2650000E4400000.tif"),
+        dest_path: tiles_dir.join("big_size").join("CRS3035RES50000mN2650000E4400000.tif"),
         display_name: "CRS3035RES50000mN2650000E4400000.tif".to_string(),
     });
 
     entries.push(DownloadEntry {
         url: "https://data.bev.gv.at/download/ALS/DTM/20240915/ALS_DTM_CRS3035RES50000mN2650000E4450000.tif".to_string(),
-        dest_path: dest_root
-            .join("tiles")
-            .join("big_size")
-            .join("CRS3035RES50000mN2650000E4450000.tif"),
+        dest_path: tiles_dir.join("big_size").join("CRS3035RES50000mN2650000E4450000.tif"),
         display_name: "CRS3035RES50000mN2650000E4450000.tif".to_string(),
     });
 
@@ -92,13 +83,13 @@ fn head_content_length(url: &str) -> u64 {
         .unwrap_or(0)
 }
 
-pub fn begin_download(dest_root: PathBuf) -> (mpsc::Receiver<DownloadProgress>, Arc<AtomicBool>) {
+pub fn begin_download(tiles_dir: PathBuf) -> (mpsc::Receiver<DownloadProgress>, Arc<AtomicBool>) {
     let (tx, rx) = mpsc::channel::<DownloadProgress>();
     let cancel = Arc::new(AtomicBool::new(false));
     let cancel_clone = Arc::clone(&cancel);
 
     std::thread::spawn(move || {
-        let entries = all_entries(&dest_root);
+        let entries = all_entries(&tiles_dir);
         let total_files = entries.len();
 
         // Show the card immediately before any network activity.

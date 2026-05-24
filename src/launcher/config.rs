@@ -32,13 +32,13 @@ fn default_demo_cam_elev() -> f32 {
 
 fn default_fine_paths() -> Vec<PathBuf> {
     vec![
-        PathBuf::from("tiles/big_size/CRS3035RES50000mN2650000E4400000.tif"),
-        PathBuf::from("tiles/big_size/CRS3035RES50000mN2650000E4450000.tif"),
+        PathBuf::from("big_size/CRS3035RES50000mN2650000E4400000.tif"),
+        PathBuf::from("big_size/CRS3035RES50000mN2650000E4450000.tif"),
     ]
 }
 
 fn default_close_paths() -> Vec<PathBuf> {
-    vec![PathBuf::from("tiles/big_size/DGM_R5.tif")]
+    vec![PathBuf::from("big_size/DGM_R5.tif")]
 }
 
 fn default_base_paths() -> Vec<PathBuf> {
@@ -47,11 +47,38 @@ fn default_base_paths() -> Vec<PathBuf> {
         .iter()
         .map(|&(lat, lon)| {
             PathBuf::from(format!(
-                "tiles/Copernicus_DSM_COG_10_N{lat:02}_00_E{lon:03}_00_DEM/\
+                "Copernicus_DSM_COG_10_N{lat:02}_00_E{lon:03}_00_DEM/\
                  Copernicus_DSM_COG_10_N{lat:02}_00_E{lon:03}_00_DEM.tif"
             ))
         })
         .collect()
+}
+
+/// Resolves the directory where demo tiles are stored.
+/// Tries the platform data directory first, falls back to the config directory,
+/// and finally to `./tiles` so dev runs from the repo root still work.
+pub fn resolve_default_tiles_dir() -> PathBuf {
+    // macOS:   ~/Library/Application Support/dem_renderer/tiles
+    // Windows: %APPDATA%\dem_renderer\tiles
+    // Linux:   ~/.local/share/dem_renderer/tiles
+    if let Some(d) = dirs::data_dir() {
+        let candidate = d.join("dem_renderer").join("tiles");
+        if std::fs::create_dir_all(&candidate).is_ok() {
+            return candidate;
+        }
+    }
+    // Same parent folder as config.toml
+    if let Some(d) = dirs::config_dir() {
+        let candidate = d.join("dem_renderer").join("tiles");
+        if std::fs::create_dir_all(&candidate).is_ok() {
+            return candidate;
+        }
+    }
+    PathBuf::from("tiles")
+}
+
+fn default_tiles_dir() -> PathBuf {
+    resolve_default_tiles_dir()
 }
 
 impl Default for DemoViewConfig {
@@ -125,6 +152,11 @@ pub struct LauncherSettings {
     /// not affect tier sizing. Persisted across launches via config.toml.
     #[serde(default)]
     pub vram_budget: VramBudget,
+    /// Directory where demo tiles are downloaded and where relative tile paths
+    /// in `demo_view` are resolved against. Absolute path; persisted in config.toml
+    /// so the user can move the tiles and point the app at the new location.
+    #[serde(default = "default_tiles_dir")]
+    pub tiles_dir: PathBuf,
 }
 
 impl Default for LauncherSettings {
@@ -141,6 +173,7 @@ impl Default for LauncherSettings {
             tile_5m_path: PathBuf::from(DEFAULT_TILE_5M_PATH),
             selected_view: SelectedView::None,
             vram_budget: VramBudget::Mid,
+            tiles_dir: resolve_default_tiles_dir(),
         }
     }
 }

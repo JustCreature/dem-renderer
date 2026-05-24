@@ -1,7 +1,8 @@
 use crate::launcher::config::SelectedView;
 use crate::launcher::style::*;
 use crate::launcher::widgets::*;
-use egui::{Color32, Id, Sense, Stroke, Ui, pos2, vec2};
+use egui::{Color32, Id, Sense, Stroke, Ui, vec2};
+use std::path::Path;
 
 #[derive(Default)]
 pub struct SelectDemAnim {
@@ -23,13 +24,16 @@ pub fn show(
     tile_display: &str,
     tile_is_custom: bool,
     selected_view: &SelectedView,
+    tiles_dir: &Path,
 ) -> Option<SelectDemEvent> {
     let mut event = None;
 
-    // Populate free-space cache so mod.rs footer can display it
+    // Populate free-space cache so mod.rs footer can display it.
+    // Cache key includes the tiles_dir so it refreshes when the user changes it.
+    let cache_key = Id::new(("free_space_cache", tiles_dir.to_string_lossy().as_ref()));
     ui.ctx().data_mut(|d| {
-        if d.get_temp::<String>(Id::new("free_space_cache")).is_none() {
-            d.insert_temp(Id::new("free_space_cache"), get_free_space());
+        if d.get_temp::<String>(cache_key).is_none() {
+            d.insert_temp(cache_key, get_free_space(tiles_dir));
         }
     });
 
@@ -92,7 +96,7 @@ pub fn show(
     );
 
     if *modal_open {
-        if let Some(e) = show_download_modal(ui, modal_open) {
+        if let Some(e) = show_download_modal(ui, modal_open, tiles_dir, cache_key) {
             event = Some(e);
         }
     }
@@ -100,7 +104,12 @@ pub fn show(
     event
 }
 
-fn show_download_modal(ui: &mut Ui, modal_open: &mut bool) -> Option<SelectDemEvent> {
+fn show_download_modal(
+    ui: &mut Ui,
+    modal_open: &mut bool,
+    tiles_dir: &Path,
+    cache_key: Id,
+) -> Option<SelectDemEvent> {
     let screen = ui.ctx().content_rect();
 
     let scrim_painter = ui.ctx().layer_painter(egui::LayerId::new(
@@ -114,7 +123,7 @@ fn show_download_modal(ui: &mut Ui, modal_open: &mut bool) -> Option<SelectDemEv
     let id = Id::new("download_modal");
 
     let free_str: String = ui.ctx().data(|d| {
-        d.get_temp::<String>(Id::new("free_space_cache"))
+        d.get_temp::<String>(cache_key)
             .unwrap_or_else(|| "—".to_string())
     });
 
@@ -153,7 +162,7 @@ fn show_download_modal(ui: &mut Ui, modal_open: &mut bool) -> Option<SelectDemEv
 
                     ui.label(
                         egui::RichText::new(
-                            "~45 GB will be downloaded to the tiles/big_size/ directory. \
+                            "~45 GB will be downloaded to the directory shown below. \
                          The download resumes if interrupted and only runs once — \
                          subsequent launches reuse the cached tiles.",
                         )
@@ -182,32 +191,28 @@ fn show_download_modal(ui: &mut Ui, modal_open: &mut bool) -> Option<SelectDemEv
                     hairline_rule(ui);
                     ui.add_space(12.0);
 
-                    // Path styled as a dark code block
-                    let path_galley = ui.ctx().fonts_mut(|f| {
-                        f.layout_no_wrap("tiles/big_size/".to_string(), mono(11.0), TEXT_SECONDARY)
-                    });
-                    let path_h = path_galley.size().y + 14.0;
-                    let (path_resp, path_painter) =
-                        ui.allocate_painter(vec2(ui.available_width(), path_h), Sense::hover());
-                    let pr = path_resp.rect;
-                    path_painter.rect_filled(
-                        pr,
-                        egui::CornerRadius::same(2),
-                        Color32::from_rgba_premultiplied(6, 6, 8, 220),
-                    );
-                    path_painter.rect_stroke(
-                        pr,
-                        egui::CornerRadius::same(2),
-                        Stroke::new(1.0, HAIRLINE),
-                        egui::StrokeKind::Inside,
-                    );
-                    path_painter.galley(
-                        pos2(pr.min.x + 10.0, pr.center().y - path_galley.size().y * 0.5),
-                        path_galley,
-                        TEXT_SECONDARY,
-                    );
+                    // Selectable path code block — user can click and drag to copy
+                    // NOTE: Extract it to a component later
+                    let path_str = tiles_dir.join("big_size").to_string_lossy().into_owned();
+                    egui::Frame::NONE
+                        .fill(Color32::from_rgba_premultiplied(6, 6, 8, 220))
+                        .stroke(Stroke::new(1.0, HAIRLINE))
+                        .inner_margin(egui::Margin::symmetric(10, 8))
+                        .show(ui, |ui| {
+                            ui.set_width(ui.available_width());
+                            ui.add(
+                                egui::Label::new(
+                                    egui::RichText::new(&path_str)
+                                        .font(mono(11.0))
+                                        .color(TEXT_SECONDARY),
+                                )
+                                .selectable(true)
+                                .wrap(),
+                            );
+                        });
                     ui.add_space(16.0);
 
+                    // NOTE: Extract it to a component later
                     ui.horizontal(|ui| {
                         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                             let primary = egui::Button::new(
@@ -271,14 +276,13 @@ fn stat_cell_with_tip(ui: &mut Ui, key: &str, val: &str, tip: &str) {
     ui.add_space(6.0);
 }
 
-fn get_free_space() -> String {
+fn get_free_space(tiles_dir: &Path) -> String {
     let disks = sysinfo::Disks::new_with_refreshed_list();
-    let cwd = std::env::current_dir().ok().unwrap_or_default();
-    let cwd_str = cwd.to_string_lossy().to_string();
+    let dir_str = tiles_dir.to_string_lossy().to_string();
     let mut best: Option<(usize, u64)> = None;
     for disk in disks.list() {
         let mount = disk.mount_point().to_string_lossy().to_string();
-        if cwd_str.starts_with(&mount) {
+        if dir_str.starts_with(&mount) {
             let len = mount.len();
             if len > best.map(|(l, _)| l).unwrap_or(0) {
                 best = Some((len, disk.available_space()));

@@ -540,6 +540,152 @@ pub fn dropdown(ui: &mut Ui, id: Id, options: &[&str], current: &mut u32) -> boo
     changed
 }
 
+/// Visual style variants for [`small_button`].
+#[derive(Clone, Copy)]
+pub enum SmallButtonVariant {
+    /// Standard interactive action — normal text, visible border.
+    Primary,
+    /// De-emphasised action (e.g. Reset) — muted text, dimmer border.
+    Secondary,
+    /// Positive confirmation — green tint.
+    #[allow(dead_code)]
+    Apply,
+    /// Destructive / cancel action — warm-red tint.
+    #[allow(dead_code)]
+    Reject,
+}
+
+/// Small inline button with a dark background and a visible border.
+/// Styled consistently with the rest of the launcher UI.
+/// Returns `true` if clicked this frame.
+pub fn small_button(ui: &mut Ui, label: &str, variant: SmallButtonVariant) -> bool {
+    let bg = Color32::from_rgba_premultiplied(16, 16, 14, 210);
+    let bg_hover = Color32::from_rgba_premultiplied(34, 34, 32, 230);
+
+    let (fg, border) = match variant {
+        SmallButtonVariant::Primary => (
+            TEXT_SECONDARY,
+            Color32::from_rgba_premultiplied(80, 80, 76, 130),
+        ),
+        SmallButtonVariant::Secondary => (
+            TEXT_MUTED_55,
+            Color32::from_rgba_premultiplied(44, 44, 42, 90),
+        ),
+        SmallButtonVariant::Apply => (
+            GREEN_DOT,
+            Color32::from_rgba_premultiplied(62, 100, 72, 150),
+        ),
+        SmallButtonVariant::Reject => {
+            (DANGER, Color32::from_rgba_premultiplied(217, 156, 122, 150))
+        }
+    };
+
+    let galley = ui
+        .ctx()
+        .fonts_mut(|f| f.layout_no_wrap(label.to_string(), mono(10.0), fg));
+    let btn_w = galley.size().x + 16.0;
+    let btn_h = 22.0_f32;
+
+    let (response, painter) = ui.allocate_painter(vec2(btn_w, btn_h), Sense::click());
+    let rect = response.rect;
+    let hovered = response.hovered();
+
+    painter.rect_filled(
+        rect,
+        egui::CornerRadius::same(2),
+        if hovered { bg_hover } else { bg },
+    );
+    painter.rect_stroke(
+        rect,
+        egui::CornerRadius::same(2),
+        Stroke::new(1.0, border),
+        egui::StrokeKind::Outside,
+    );
+    painter.galley(
+        pos2(rect.min.x + 8.0, rect.center().y - galley.size().y * 0.5),
+        galley,
+        if hovered { Color32::WHITE } else { fg },
+    );
+
+    if response.hovered() {
+        ui.ctx()
+            .output_mut(|o| o.cursor_icon = egui::CursorIcon::PointingHand);
+    }
+
+    response.clicked()
+}
+
+/// Square button with a painter-drawn copy-icon (two overlapping rectangles).
+/// Same background/border treatment as [`small_button`].
+/// Returns `true` if clicked this frame.
+pub fn copy_icon_button(ui: &mut Ui) -> bool {
+    let btn_size = 22.0_f32;
+    let bg = Color32::from_rgba_premultiplied(16, 16, 14, 210);
+    let bg_hover = Color32::from_rgba_premultiplied(34, 34, 32, 230);
+    let border = Color32::from_rgba_premultiplied(80, 80, 76, 130);
+
+    let (response, painter) = ui.allocate_painter(vec2(btn_size, btn_size), Sense::click());
+    let rect = response.rect;
+    let hovered = response.hovered();
+
+    painter.rect_filled(
+        rect,
+        egui::CornerRadius::same(2),
+        if hovered { bg_hover } else { bg },
+    );
+    painter.rect_stroke(
+        rect,
+        egui::CornerRadius::same(2),
+        Stroke::new(1.0, border),
+        egui::StrokeKind::Outside,
+    );
+
+    // Draw copy icon: back sheet (top-right offset), front sheet (bottom-left)
+    let cx = rect.center().x;
+    let cy = rect.center().y;
+    let icon_stroke = Stroke::new(
+        1.0,
+        if hovered {
+            Color32::WHITE
+        } else {
+            TEXT_SECONDARY
+        },
+    );
+    let fill = if hovered { bg_hover } else { bg };
+    let w = 5.0_f32;
+    let h = 5.5_f32;
+    let off = 2.0_f32;
+    // back sheet (stroked only, behind)
+    painter.rect_stroke(
+        Rect::from_min_max(
+            pos2(cx - w + off, cy - h - off),
+            pos2(cx + w + off, cy + h - off),
+        ),
+        egui::CornerRadius::same(0),
+        icon_stroke,
+        egui::StrokeKind::Outside,
+    );
+    // front sheet (filled to cover back, then stroked)
+    let front = Rect::from_min_max(
+        pos2(cx - w - off, cy - h + off),
+        pos2(cx + w - off, cy + h + off),
+    );
+    painter.rect_filled(front, egui::CornerRadius::same(0), fill);
+    painter.rect_stroke(
+        front,
+        egui::CornerRadius::same(0),
+        icon_stroke,
+        egui::StrokeKind::Outside,
+    );
+
+    if hovered {
+        ui.ctx()
+            .output_mut(|o| o.cursor_icon = egui::CursorIcon::PointingHand);
+    }
+
+    response.clicked()
+}
+
 /// Thin horizontal divider rule used inside the brand section.
 pub fn hairline_rule(ui: &mut Ui) {
     let (_, painter) = ui.allocate_painter(vec2(ui.available_width(), 1.0), Sense::hover());
