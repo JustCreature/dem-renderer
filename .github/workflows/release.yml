@@ -90,6 +90,11 @@ jobs:
       run: |
         if [ "${{ runner.os }}" == "macOS" ]; then
           cd target/${{ matrix.target }}/release/bundle/osx/
+
+          # 1. Apply a free ad-hoc signature to the .app bundle
+          codesign --force --deep --sign - dem_renderer.app
+
+          # 2. Create the .dmg
           create-dmg \
             --volname "dem_renderer" \
             --window-pos 200 120 \
