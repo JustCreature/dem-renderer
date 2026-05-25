@@ -11,7 +11,7 @@ pub use geotiff::{
     tile_centre_crs,
 };
 pub use grid::{
-    assemble_grid, crop, load_grid, load_grid_from_paths, stitch_windows, stitch_windows_geographic,
+    assemble_grid, crop, load_grid_from_paths, stitch_windows, stitch_windows_geographic,
 };
 pub use heightmap::{Heightmap, clamp_nodata_to_sea, fill_nodata_from_base, parse_bil};
 pub use overview::{BASE_OVERVIEW_TARGET_M, CLOSE_OVERVIEW_TARGET_M, ensure_overview_cache};

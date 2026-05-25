@@ -37,7 +37,7 @@ pub(super) fn compute_ao_cropped(hm: &Heightmap, cam_x: f64, cam_y: f64) -> Vec<
     ao
 }
 
-/// Initial scene for demo mode: loads a Copernicus 3×3 grid from `demo_view.base_tile_paths`,
+/// Initial scene for demo mode: loads an N×M Copernicus grid from `demo_view.base_tile_paths`,
 /// then also builds the overview cache for each close tile so the close worker starts fast.
 pub(crate) fn prepare_demo_scene_with_ctx(
     gpu_ctx: GpuContext,
@@ -55,10 +55,21 @@ pub(crate) fn prepare_demo_scene_with_ctx(
         dem_io::parse_geotiff_auto(p).ok()
     });
     dem_io::clamp_nodata_to_sea(&mut hm);
+    let n_tiles = demo_view.base_tile_paths.len();
+    let (raw_cols, raw_rows) = (hm.cols, hm.rows);
+    // Cap the assembled grid to GPU_SAFE_PX centered on the camera before any
+    // downstream work — normals/shadows/AO/GPU upload all scale with grid area,
+    // and texture dimensions above the adapter limit (8 192–16 384 depending on
+    // hardware) fail validation. cap_to_gpu_limit no-ops when the grid already
+    // fits, so 3×3 demos behave exactly as before.
+    hm = cap_to_gpu_limit(hm, cam_lon, cam_lat);
     println!(
-        "demo base 3×3 grid: {}×{} at {:.4}°/px  ({:.2?})",
+        "demo base grid: {}×{} ({} tiles, cropped from {}×{}) at {:.4}°/px  ({:.2?})",
         hm.cols,
         hm.rows,
+        n_tiles,
+        raw_cols,
+        raw_rows,
         hm.dx_deg,
         t0.elapsed()
     );

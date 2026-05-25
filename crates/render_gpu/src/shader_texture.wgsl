@@ -345,6 +345,26 @@ fn binary_search_hit(t_lo_in: f32, t_hi_in: f32, dir: vec3<f32>, iterations: i32
     return cam.origin + dir * t_lo;
 }
 
+// Mountain sky gradient: horizon stays a familiar pale blue, zenith fades to a
+// near-black navy — mimicking the way the sky darkens overhead at altitude
+// because there's less atmospheric scattering between the viewer and space.
+// Atmospheric density falls roughly exponentially with altitude (scale height
+// ~8 km), so most of the darkening happens in the first few km and then keeps
+// tapering up toward space. Modelled here as two stages: sea level → alpine
+// (0–3 km) and alpine → near-space (3–10 km).
+fn sky_color(dz: f32, alt_m: f32) -> vec3<f32> {
+    let t = clamp(dz, 0.0, 1.0);
+    let curve = pow(t, 0.65);
+    let horizon     = vec3<f32>(110.0, 170.0, 215.0);
+    let zenith_low  = vec3<f32>(95.0,  145.0, 200.0);  // sea level overhead
+    let zenith_mid  = vec3<f32>(8.0,    14.0,  42.0);  // ~3 km overhead
+    let zenith_high = vec3<f32>(2.0,     4.0,  18.0);  // ~10 km+ overhead
+    let stage1 = smoothstep(0.0,    3000.0,  alt_m);
+    let stage2 = smoothstep(3000.0, 10000.0, alt_m);
+    let zenith = mix(mix(zenith_low, zenith_mid, stage1), zenith_high, stage2);
+    return mix(horizon, zenith, curve);
+}
+
 @compute
 @workgroup_size(8, 8, 1)
 fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
@@ -786,10 +806,16 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
         let g = u32(clamp(base_g * brightness, 0.0, 255.0));
         let b = u32(clamp(base_b * brightness, 0.0, 255.0));
 
-        // add fog/haze in the distance
-        let sky = vec3<f32>(135.0, 206.0, 235.0);  // same blue as your sky pixels
-        let fog_near = 15000.0;   // fog starts at 15km
-        let fog_far = 60000.0;   // fully haze at 60km
+        // add fog/haze in the distance — fog colour tracks the sky gradient so
+        // looking up at a distant peak hazes into the correct overhead tone.
+        // Visibility scales with altitude because aerosol density falls roughly
+        // exp(-h/8000) (atmospheric scale height ~8 km), so the optical path
+        // through hazy air shrinks by the same factor as you climb. Capped at
+        // 6× so stratospheric cameras don't push fog out past the world extent.
+        let sky = sky_color(dir.z, cam.origin.z);
+        let alt_visibility_mul = min(exp(max(cam.origin.z, 0.0) / 8000.0), 6.0);
+        let fog_near = 15000.0 * alt_visibility_mul;   // 15 km at sea level
+        let fog_far  = 60000.0 * alt_visibility_mul;   // 60 km at sea level
         let fog_t = select(0.0, smoothstep(fog_near, fog_far, t), cam.fog_enabled == 1u);
 
         let fr = mix(f32(r), sky.x, fog_t);
@@ -798,8 +824,11 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
 
         output[gid.y * cam.img_width + gid.x] = u32(fb) | (u32(fg) << 8u) | (u32(fr) << 16u) | (255u << 24u);  // bgra format
     } else {
-        // sky blue
-        output[gid.y * cam.img_width + gid.x] = 235u | (206u << 8u) | (135u << 16u) | (255u << 24u);  // bgra format
+        let sky = sky_color(dir.z, cam.origin.z);
+        let sr = u32(clamp(sky.x, 0.0, 255.0));
+        let sg = u32(clamp(sky.y, 0.0, 255.0));
+        let sb = u32(clamp(sky.z, 0.0, 255.0));
+        output[gid.y * cam.img_width + gid.x] = sb | (sg << 8u) | (sr << 16u) | (255u << 24u);  // bgra format
     }
 }
 
