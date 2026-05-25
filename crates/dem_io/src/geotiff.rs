@@ -31,9 +31,14 @@ pub fn geotiff_pixel_scale(path: &Path) -> f64 {
 pub fn parse_geotiff_auto(path: &Path) -> Result<Heightmap, DemError> {
     let crs_data = crs::read_geo_key_data(path)?;
     let proj4 = crs::proj4_from_keys(&crs_data)?;
+    // For files whose CRS is encoded as inline GeoKeys (HMA mosaics, etc.) there
+    // is no single EPSG code that captures the projection. We still need a u32
+    // for the legacy Heightmap field; fall back to the geographic base (or 0)
+    // since `crs_proj4` is the authoritative source going forward.
     let epsg = crs_data
-        .epsg
-        .ok_or_else(|| DemError::from("no EPSG GeoKey found"))?;
+        .projected_epsg
+        .or(crs_data.geographic_epsg)
+        .unwrap_or(0);
 
     let file = File::open(path)?;
     let mut decoder = Decoder::new(std::io::BufReader::new(file))?.with_limits(Limits::unlimited());
@@ -206,8 +211,9 @@ pub fn extract_window(
     let crs_data = crs::read_geo_key_data(path)?;
     let proj4 = crs::proj4_from_keys(&crs_data)?;
     let crs_epsg = crs_data
-        .epsg
-        .ok_or_else(|| DemError::from("no EPSG GeoKey found"))?;
+        .projected_epsg
+        .or(crs_data.geographic_epsg)
+        .unwrap_or(0);
 
     let file: File = File::open(path)?;
     // set no limits here to load big 1m resolution
