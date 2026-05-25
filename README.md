@@ -13,7 +13,7 @@ xattr -cr /Applications/dem_renderer.app
 
 ## Features
 
-- **Generic CRS support** — any GeoTIFF whose CRS is in the EPSG database, or that carries WKT, works without code changes (proj4rs + proj4wkt + crs-definitions, 7-parameter Helmert shifts for MGI / DHDN / OSGB36 / ED50 / CH1903 / Tokyo / NZGD49 built in)
+- **Generic CRS support** — any GeoTIFF whose CRS is in the EPSG database, carries WKT, or encodes the projection inline via GeoKeys + `GeoDoubleParams` (PGC HMA mosaics, USGS / NOAA legacy GeoTIFFs) works without code changes (proj4rs + proj4wkt + crs-definitions, 7-parameter Helmert shifts for MGI / DHDN / OSGB36 / ED50 / CH1903 / Tokyo / NZGD49 built in)
 - **Multi-resolution terrain** — up to three streamed tiers blended in the raymarcher with no seams; feathered 500 m blend margin and per-tier rotation correction for meridian-convergence between projections
 - **Built-in launcher** — egui-based UI for picking a DEM file, configuring render quality, choosing a VRAM budget preset (`Low` / `Mid` / `High`), and downloading the demo bundle; settings persist in `~/.config/dem_renderer/config.toml`
 - **Graceful OOM handling** — wgpu allocation failures are caught and the renderer steps the active preset down (fine tier first, then close) with a red HUD warning, instead of panicking

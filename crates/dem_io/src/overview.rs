@@ -29,8 +29,9 @@ pub(crate) fn build_downsampled(
     let crs_data = crs::read_geo_key_data(src_path)?;
     let proj4 = crs::proj4_from_keys(&crs_data)?;
     let epsg = crs_data
-        .epsg
-        .ok_or_else(|| DemError::from("no EPSG in GeoKeyDirectory"))?;
+        .projected_epsg
+        .or(crs_data.geographic_epsg)
+        .unwrap_or(0);
 
     let file = File::open(src_path)?;
     let mut decoder = Decoder::new(std::io::BufReader::new(file))?.with_limits(Limits::unlimited());
@@ -200,11 +201,25 @@ pub(crate) fn build_downsampled(
 }
 
 /// Write `heightmaps` (finest first) as a multi-IFD Float32 GeoTIFF.
-/// IFD-0 gets full geo-tags (33550, 33922, 34735); subsequent IFDs are image
-/// data only — matching what `extract_window` / `ifd_scales` expect for
-/// COG-style overviews.  Writes atomically via a `.partial` rename.
-fn write_overview_tiff(dst_path: &Path, heightmaps: &[&Heightmap]) -> Result<(), DemError> {
+/// IFD-0 gets full geo-tags: 33550 (pixel scale), 33922 (tiepoint), and the
+/// three CRS-defining tags (34735, 34736, 34737) copied verbatim from `src_crs`.
+/// Verbatim copy is what keeps the cache self-describing for files whose CRS
+/// is not a simple EPSG code (HMA's user-defined Albers etc.).
+/// Subsequent IFDs carry image data only — matching the COG convention that
+/// `extract_window` / `ifd_scales` rely on. Writes atomically via a `.partial` rename.
+fn write_overview_tiff(
+    dst_path: &Path,
+    heightmaps: &[&Heightmap],
+    src_crs: &crs::RawCrsTags,
+) -> Result<(), DemError> {
     let partial = dst_path.with_extension("partial");
+
+    // tiff crate stores Short-typed tag entries as u32. Cast back to u16 for writing.
+    let geo_key_dir_u16: Vec<u16> = src_crs
+        .geo_key_directory
+        .iter()
+        .map(|&v| v as u16)
+        .collect();
 
     {
         let file = File::create(&partial)?;
@@ -221,11 +236,16 @@ fn write_overview_tiff(dst_path: &Path, heightmaps: &[&Heightmap]) -> Result<(),
                     Tag::Unknown(33922),
                     &[0.0_f64, 0.0, 0.0, hm.crs_origin_x, hm.crs_origin_y, 0.0],
                 )?;
-                // Minimal GeoKeyDirectory: just ProjectedCSTypeGeoKey (3072) = EPSG.
-                img.encoder().write_tag(
-                    Tag::Unknown(34735),
-                    &[1u16, 1, 0, 1, 3072, 0, 1, hm.crs_epsg as u16],
-                )?;
+                img.encoder()
+                    .write_tag(Tag::Unknown(34735), geo_key_dir_u16.as_slice())?;
+                if !src_crs.geo_double_params.is_empty() {
+                    img.encoder()
+                        .write_tag(Tag::Unknown(34736), src_crs.geo_double_params.as_slice())?;
+                }
+                if let Some(ref ascii) = src_crs.geo_ascii_params {
+                    img.encoder()
+                        .write_tag(Tag::Unknown(34737), ascii.as_str())?;
+                }
             }
 
             img.write_data(hm.data.as_slice())?;
@@ -315,8 +335,9 @@ pub fn ensure_overview_cache(
     );
 
     report(0.9, "Writing overview cache to disk…");
+    let src_crs = crs::read_raw_crs_tags(tile_path)?;
     let refs: Vec<&Heightmap> = overviews.iter().collect();
-    if let Err(e) = write_overview_tiff(&cache_path, &refs) {
+    if let Err(e) = write_overview_tiff(&cache_path, &refs, &src_crs) {
         eprintln!("warning: could not write overview cache ({e}); falling back to slow path");
         return Ok(None);
     }

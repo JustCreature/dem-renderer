@@ -12,6 +12,12 @@ The original development used Austrian BEV data (5 m and 1 m) and Copernicus GLO
 
 ---
 
+## Debugging Tools
+
+- **`cargo run --release -p dem_io --example inspect_geo -- <path/to/file.tif>`** — dumps a GeoTIFF's CRS-defining tags (GeoKeyDirectory 34735, GeoAsciiParams 34737, GeoDoubleParams 34736) and the proj4 string `dem_io::crs::tile_proj4` resolves them to. Reach for this first whenever a tile fails to load with a CRS error, or before adding any logic that depends on how a file encodes its CRS — the dump reveals which of the three discovery paths in `crs::proj4_from_keys` (WKT → inline GeoKey-encoded projection → EPSG lookup) will actually fire. Source: `crates/dem_io/examples/inspect_geo.rs`.
+
+---
+
 ## Architecture
 
 ### Two-Phase Application
@@ -80,8 +86,9 @@ dem_renderer/
 │   │   ├── heightmap.rs                    # Heightmap (f32 data), parse_bil, fill_nodata, fill_nodata_from_base
 │   │   ├── geotiff.rs                      # parse_geotiff_auto, extract_window, ifd_scales, tile_bounds_wgs84, tile_centre_crs
 │   │   ├── grid.rs                         # assemble_grid (N×M), load_grid_from_paths, crop, stitch_windows[_geographic]
-│   │   ├── crs.rs                          # tile_proj4 / to_wgs84 / from_wgs84 / is_geographic / epsg_towgs84 (proj4rs + proj4wkt + crs-definitions)
-│   │   └── overview.rs                     # ensure_overview_cache: build .tmp_dem_pre_calc_*.tif from large single-IFD tiles
+│   │   ├── crs.rs                          # tile_proj4 / to_wgs84 / from_wgs84 / is_geographic / epsg_towgs84 / read_raw_crs_tags (proj4rs + proj4wkt + crs-definitions; WKT → inline-GeoKey → EPSG fallback chain)
+│   │   ├── overview.rs                     # ensure_overview_cache: build .tmp_dem_pre_calc_*.tif from large single-IFD tiles (copies source CRS tags verbatim so cache is self-describing)
+│   │   └── examples/inspect_geo.rs         # debug tool: dump a tile's GeoKey tags + resolved proj4 (see "Debugging Tools" above)
 │   ├── terrain/src/
 │   │   ├── lib.rs                          # Platform dispatchers (#[cfg(target_arch)] guards for AVX2 / NEON)
 │   │   ├── row_major.rs                    # scalar + NEON normals
@@ -140,7 +147,7 @@ Types are defined in the crate that produces them: `Heightmap` in `dem_io`, `Nor
 
 ### Crate Responsibilities
 
-- **`dem_io`** — Read SRTM `.hgt`/`.bil` and any GeoTIFF (including BigTIFF). `parse_geotiff_auto` reads the CRS from GeoKey 3072 / WKT (tag 34737) and resolves it via `proj4rs` / `proj4wkt` / `crs-definitions` — no hardcoded CRS knowledge. `extract_window` performs selective COG reads at a chosen IFD level. `assemble_grid` builds an N×M mosaic from `&[Vec<Option<&Heightmap>>]`; `load_grid_from_paths` derives the bounding box `(max_lat-min_lat+1) × (max_lon-min_lon+1)` from whichever tiles the caller supplies and fills missing cells with zeros. `stitch_windows_geographic` and `stitch_windows` stitch BEV / projected windows from multiple overlapping tiles. `ensure_overview_cache` builds a `.tmp_dem_pre_calc_<filename>.tif` next to any large single-IFD tile (box-averaged to ~8 m and ~32 m levels) so subsequent runs and tier reloads stay fast. `fill_nodata_from_base` smooth-blends a higher-resolution window over a coarser base so seams between tiers disappear.
+- **`dem_io`** — Read SRTM `.hgt`/`.bil` and any GeoTIFF (including BigTIFF). `parse_geotiff_auto` resolves the CRS through `tile_proj4`'s three-path discovery (WKT in tag 34737 via proj4wkt → inline GeoKey-encoded projection from `ProjCoordTransGeoKey` + `GeoDoubleParams` → EPSG code in 3072/2048 via crs-definitions) — no hardcoded CRS knowledge, and the inline path covers files like PGC's HMA mosaics where 3072 is the user-defined sentinel 32767 and the projection lives entirely in inline GeoKeys. `extract_window` performs selective COG reads at a chosen IFD level. `assemble_grid` builds an N×M mosaic from `&[Vec<Option<&Heightmap>>]`; `load_grid_from_paths` derives the bounding box `(max_lat-min_lat+1) × (max_lon-min_lon+1)` from whichever tiles the caller supplies and fills missing cells with zeros. `stitch_windows_geographic` and `stitch_windows` stitch BEV / projected windows from multiple overlapping tiles. `ensure_overview_cache` builds a `.tmp_dem_pre_calc_<filename>.tif` next to any large single-IFD tile (box-averaged to ~8 m and ~32 m levels) so subsequent runs and tier reloads stay fast; the cache copies the source's GeoTIFF CRS tags (34735/34736/34737) verbatim via `read_raw_crs_tags`, so it remains self-describing for any source CRS — including the inline-GeoKey ones that have no single EPSG code. `fill_nodata_from_base` smooth-blends a higher-resolution window over a coarser base so seams between tiers disappear.
 - **`terrain`** — Surface normals (Sobel SoA, NEON 4-wide and 8-wide on aarch64, AVX2 8-wide on x86_64). DDA shadow sweep with arbitrary azimuth and penumbra (scalar / NEON / AVX2 variants, rayon-parallel). True-hemisphere AO (`compute_ao_true_hemi` — 16-azimuth DDA averaged).
 - **`render_gpu`** — wgpu compute-shader raymarcher. `GpuScene` owns all GPU resources persistently; mutable per-frame work is the camera uniform write and an optional shadow/AO/heightmap buffer/texture refresh. Three tiers are blended in WGSL with a 500 m blend margin. Bicubic Catmull-Rom interpolation is enabled within `smooth_radius_m` of the camera (default 2000 m, `B` key cycles 0/500/1000/2000/5000 m). Public helpers `hm_to_f16_bytes`, `gen_hm_mip_bytes`, `pack_normals_u32_bytes`, `pack_normals_rg16_bytes`, `pack_ao_u8` let workers pre-pack bytes off the main thread. Tier reloads follow a drop-first cycle: swap to 1×1 placeholders → `rebuild_bind_group` → `device.poll(PollType::Wait)` to drain wgpu's destroy queue → allocate new → second `rebuild_bind_group`. `vram.rs` tracks every allocation through an `AtomicU64`; `context.rs::on_uncaptured_error` sets an `OOM_OBSERVED` flag that the viewer polls each frame to disable the fine tier (then the close tier) instead of crashing.
 - **`profiling`** — `cntvct_el0` (AArch64) / `rdtsc` (x86) cycle counters, CSV timing emitter.
@@ -288,7 +295,8 @@ Displaying a full absolute path in a row or label will overflow into adjacent te
 - wgpu does not expose VRAM capacity per device. Detection is heuristic: `adapter.get_info().name` substring match for known-tiny SKUs, `device_type` fallback, Apple Silicon detection. The Windows "Shared GPU Memory" pool is a driver-internal eviction target, not an application-visible allocation heap — see `docs/vram-limitation.md`
 
 ### GeoTIFF / CRS
-- CRS is read from each tile, not assumed: `tile_proj4` reads WKT from tag 34737 (via proj4wkt) or falls back to the EPSG code in GeoKey 3072/2048 (via crs-definitions). proj4rs handles the transforms in both directions
+- CRS is read from each tile, not assumed: `tile_proj4` has a three-path discovery chain — (1) WKT from tag 34737 via proj4wkt, (2) inline GeoKey-encoded projection synthesised from `ProjCoordTransGeoKey` (3075) + parameter keys (3078–3095) + `GeoDoubleParams` (34736), (3) EPSG code in GeoKey 3072/2048 via crs-definitions. proj4rs handles the transforms in both directions
+- GeoKey value 32767 is the GeoTIFF spec sentinel for "user-defined", **not** a real EPSG code — `read_geo_key_data` excludes it from `projected_epsg`/`geographic_epsg`, otherwise the EPSG fallback would call `crs_definitions::from_code(32767)` and fail. Older GeoTIFF encoders (PGC's HMA pipeline, some USGS / NOAA products) sit `3072 = 32767` and put the projection entirely in inline GeoKeys + `GeoDoubleParams`, which is what discovery path 2 above is for
 - proj4wkt defaults to `+towgs84=0,0,0,0,0,0,0` for any WKT without an explicit TOWGS84 node; `epsg_towgs84()` overrides that with 7-parameter Helmert shifts for MGI (Austria), DHDN (Germany), OSGB36, ED50, CH1903 (Switzerland), Tokyo, NZGD49 — without these the Austrian 5 m tile sits ~600 m east of the 30 m Copernicus grid
 - A geographic tile stores `dx_meters = dx_deg * 111 320 * cos(lat)`; `extract_window` writes `dx_meters = dx_deg` for geographic tiles (degrees as pixel scale), so all viewer/tier code derives m/px from `dx_deg` for geographic CRSes and reads `dx_meters` directly for projected ones
 - BEV DGM 5 m NoData sentinel = 0.0 (safe: min Austrian elevation >> 0); GLO-30 NaN/<-1000 sentinel; the extract_window NoData sentinel is -9999
@@ -296,7 +304,7 @@ Displaying a full absolute path in a row or label will overflow into adjacent te
 - `tiff` crate default memory limit blocks tiles > 128 MB; fix: `Limits::unlimited()`
 - Tile geometry at mid-latitudes is asymmetric: E-W width shrinks with cos(lat)
 - GLO-30 tiles: 3600×3600 pixel-is-area, pixel centres at ±0.5/3600° from integer degree boundary; adjacent tiles concatenate directly
-- For large single-IFD tiles, `ensure_overview_cache` builds box-averaged pyramids (target ~8 m close + ~32 m base) into a `.tmp_dem_pre_calc_<filename>.tif` next to the source — checked by mtime so subsequent runs hit the cache and base / close tier reloads stay fast
+- For large single-IFD tiles, `ensure_overview_cache` builds box-averaged pyramids (target ~8 m close + ~32 m base) into a `.tmp_dem_pre_calc_<filename>.tif` next to the source — checked by mtime so subsequent runs hit the cache and base / close tier reloads stay fast. The cache writer copies the source's GeoKeyDirectory (34735), GeoDoubleParams (34736) and GeoAsciiParams (34737) verbatim via `read_raw_crs_tags`, so the cache is self-describing for any CRS encoding — a minimal `3072=<epsg>` directory like the original implementation would discard the inline-GeoKey projection on cache reload and corrupt CRS interpretation
 
 ### Multi-resolution tiers
 - True Hemisphere AO = sun shadow DDA generalised: 16 azimuths, averaged — baked once, free at render time
@@ -353,6 +361,8 @@ Use `#[inline(never)]` during profiling so functions appear as distinct symbols.
 | Decision | Rationale |
 |---|---|
 | Generic CRS via proj4rs/proj4wkt | Any GeoTIFF with a CRS works; no per-EPSG branches in the load path |
+| Three-path CRS discovery (WKT → inline GeoKey → EPSG) | Some encoders (PGC HMA, USGS/NOAA legacy) put the projection inline via ProjCoordTransGeoKey + GeoDoubleParams with 3072=32767 sentinel — neither WKT nor EPSG lookup helps; the inline-synthesis path handles them without per-vendor code |
+| Overview cache copies source CRS tags verbatim | Cache stays self-describing for any CRS, including inline-GeoKey projections that have no single EPSG code |
 | Built-in epsg_towgs84 Helmert shifts | proj4wkt zero-fills TOWGS84 for WKT without it; manual override prevents 600 m datum offsets on national grids |
 | Pre-built overview cache for large single-IFD tiles | One slow build instead of slow tier reloads on every run |
 | Two-phase App with shared surface | Launcher and viewer use one window/device/surface — zero visible flash at startup |
