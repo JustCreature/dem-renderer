@@ -2,14 +2,10 @@ use std::path::{Path, PathBuf};
 
 use crate::Heightmap;
 
-fn tile_path(tiles_dir: &Path, lat: i32, lon: i32) -> PathBuf {
-    let name = format!("Copernicus_DSM_COG_10_N{:02}_00_E{:03}_00_DEM", lat, lon);
-    tiles_dir.join(&name).join(format!("{}.tif", name))
-}
-
-/// Like `load_grid` but uses an explicit path list instead of directory convention.
 /// Loads every path, reads tile position from `origin_lat`/`origin_lon` metadata,
-/// finds the NW-most tile, derives the 3×3 centre, and assembles. No filename parsing.
+/// then assembles an N×M rectangle covering the full bounding box of the supplied
+/// tiles. Missing tiles inside the bounding box are filled with 0.0. The caller
+/// chooses the grid extent by deciding which tiles to pass in.
 pub fn load_grid_from_paths<F>(paths: &[PathBuf], loader: F) -> Heightmap
 where
     F: Fn(&Path) -> Option<Heightmap>,
@@ -34,62 +30,55 @@ where
         "load_grid_from_paths: no tiles loaded"
     );
 
-    // NW-most tile = highest lat, lowest lon.
-    // NW offset in a 3×3 grid is (+1, -1) from centre, so centre = (nw_lat-1, nw_lon+1).
-    let nw_lat = tile_map.keys().map(|(la, _)| *la).max().unwrap();
-    let nw_lon = tile_map.keys().map(|(_, lo)| *lo).min().unwrap();
-    let centre_lat = nw_lat - 1;
-    let centre_lon = nw_lon + 1;
+    // Bounding box over actual loaded tiles. The grid is (max_lat - min_lat + 1)
+    // rows × (max_lon - min_lon + 1) cols; any missing cell stays None and
+    // assemble_grid fills it with zeros.
+    let max_lat = tile_map.keys().map(|(la, _)| *la).max().unwrap();
+    let min_lat = tile_map.keys().map(|(la, _)| *la).min().unwrap();
+    let min_lon = tile_map.keys().map(|(_, lo)| *lo).min().unwrap();
+    let max_lon = tile_map.keys().map(|(_, lo)| *lo).max().unwrap();
+    let n_rows = (max_lat - min_lat + 1) as usize;
+    let n_cols = (max_lon - min_lon + 1) as usize;
 
-    let offsets = [
-        [(1, -1), (1, 0), (1, 1)],
-        [(0, -1), (0, 0), (0, 1)],
-        [(-1, -1), (-1, 0), (-1, 1)],
-    ];
-
-    let tiles: [[Option<Heightmap>; 3]; 3] = std::array::from_fn(|row| {
-        std::array::from_fn(|col| {
-            let (dlat, dlon) = offsets[row][col];
-            tile_map.remove(&(centre_lat + dlat, centre_lon + dlon))
+    // Row 0 = northern-most strip (max_lat), col 0 = western-most (min_lon).
+    let tiles: Vec<Vec<Option<Heightmap>>> = (0..n_rows)
+        .map(|row| {
+            let lat = max_lat - row as i32;
+            (0..n_cols)
+                .map(|col| {
+                    let lon = min_lon + col as i32;
+                    tile_map.remove(&(lat, lon))
+                })
+                .collect()
         })
-    });
+        .collect();
 
-    let grid: [[Option<&Heightmap>; 3]; 3] =
-        std::array::from_fn(|row| std::array::from_fn(|col| tiles[row][col].as_ref()));
+    let grid: Vec<Vec<Option<&Heightmap>>> = tiles
+        .iter()
+        .map(|row| row.iter().map(|t| t.as_ref()).collect())
+        .collect();
 
     assemble_grid(&grid)
 }
 
-pub fn load_grid<F>(tiles_dir: &Path, centre_lat: i32, centre_lon: i32, loader: F) -> Heightmap
-where
-    F: Fn(&Path) -> Option<Heightmap>,
-{
-    let offsets = [
-        [(1, -1), (1, 0), (1, 1)],
-        [(0, -1), (0, 0), (0, 1)],
-        [(-1, -1), (-1, 0), (-1, 1)],
-    ];
+/// Assemble an N×M rectangular grid of equally-sized tiles into one heightmap.
+/// `grid[0][0]` is the NW corner and must be present (defines tile dims and origin).
+/// Any other cell may be `None` and is filled with zeros.
+pub fn assemble_grid(grid: &[Vec<Option<&Heightmap>>]) -> Heightmap {
+    assert!(!grid.is_empty(), "assemble_grid: empty grid");
+    let n_rows = grid.len();
+    let n_cols = grid[0].len();
+    assert!(n_cols > 0, "assemble_grid: empty row");
+    assert!(
+        grid.iter().all(|row| row.len() == n_cols),
+        "assemble_grid: ragged grid (rows must all have the same length)"
+    );
 
-    let tiles: [[Option<Heightmap>; 3]; 3] = std::array::from_fn(|row| {
-        std::array::from_fn(|col| {
-            let (dlat, dlon) = offsets[row][col];
-            let path = tile_path(tiles_dir, centre_lat + dlat, centre_lon + dlon);
-            loader(&path)
-        })
-    });
-
-    let grid: [[Option<&Heightmap>; 3]; 3] =
-        std::array::from_fn(|row| std::array::from_fn(|col| tiles[row][col].as_ref()));
-
-    assemble_grid(&grid)
-}
-
-pub fn assemble_grid(grid: &[[Option<&Heightmap>; 3]; 3]) -> Heightmap {
     let nw_tile: &Heightmap =
         grid[0][0].expect("no NW tile provided, NW should always be provided");
 
     // assemble_grid indexes every sibling tile using nw_tile.cols/rows. That's correct
-    // for the only current callers (3×3 Copernicus GLO-30 grids, where all tiles share
+    // for the only current callers (Copernicus GLO-30 grids, where all tiles share
     // a 3600×3600 pixel layout) but it's a latent assumption — a mixed-resolution or
     // partial-overview grid would silently produce shifted rows or panic on slice OOB.
     // Catch that misuse before it surfaces as corrupted terrain.
@@ -104,13 +93,13 @@ pub fn assemble_grid(grid: &[[Option<&Heightmap>; 3]; 3]) -> Heightmap {
     );
 
     let mut assembled_data: Vec<f32> =
-        Vec::with_capacity(grid.len() * nw_tile.rows * grid[0].len() * nw_tile.cols);
+        Vec::with_capacity(n_rows * nw_tile.rows * n_cols * nw_tile.cols);
 
-    for tile_row in 0..3 {
+    for tile_row in 0..n_rows {
         for pixel_row in 0..nw_tile.rows {
-            for tile_col in 0..3 {
+            for tile_col in 0..n_cols {
                 match grid[tile_row][tile_col] {
-                    None => assembled_data.extend(std::iter::repeat(0.0f32).take(nw_tile.cols)),
+                    None => assembled_data.extend(std::iter::repeat_n(0.0f32, nw_tile.cols)),
                     Some(hm) => assembled_data.extend_from_slice(
                         &hm.data[pixel_row * nw_tile.cols..(pixel_row + 1) * nw_tile.cols],
                     ),
@@ -121,8 +110,8 @@ pub fn assemble_grid(grid: &[[Option<&Heightmap>; 3]; 3]) -> Heightmap {
 
     Heightmap {
         data: assembled_data,
-        rows: nw_tile.rows * grid.len(),
-        cols: nw_tile.cols * grid[0].len(),
+        rows: nw_tile.rows * n_rows,
+        cols: nw_tile.cols * n_cols,
         nodata: nw_tile.nodata,
         origin_lat: nw_tile.origin_lat,
         origin_lon: nw_tile.origin_lon,
