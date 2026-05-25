@@ -42,7 +42,7 @@ Settings persist to `dirs::config_dir() / dem_renderer / config.toml` (macOS: `~
 | File | Purpose |
 |---|---|
 | `src/viewer/mod.rs` | `Viewer` (ApplicationHandler), WASD+mouse, sun animation, tile streaming dispatch, key bindings |
-| `src/viewer/scene_init.rs` | `prepare_scene_with_ctx` (single-tile / projected-CRS streaming), `prepare_demo_scene_with_ctx` (3×3 Copernicus base), `compute_ao_cropped` |
+| `src/viewer/scene_init.rs` | `prepare_scene_with_ctx` (single-tile / projected-CRS streaming), `prepare_demo_scene_with_ctx` (N×M Copernicus base, camera-centered crop to `GPU_SAFE_PX`), `compute_ao_cropped` |
 | `src/viewer/tiers.rs` | `StreamingTier` (drift-detected reload), `BevBaseState` (base/close/fine workers), `TierRadii` + `tier_radii(VramClass)` preset mapping, `cross_crs_world_origin_and_extent`, `select_ifd`, `cap_to_gpu_limit` |
 | `src/viewer/tile_index.rs` | `TileEntry` + `TileIndex` — discover WGS84 bounds of multiple tiles per tier; `tiles_overlapping_wgs84` |
 | `src/viewer/geo.rs` | `latlon_to_tile_metres` (handles both geographic and projected CRSes), `sun_position` |
@@ -79,7 +79,7 @@ dem_renderer/
 │   │   ├── lib.rs
 │   │   ├── heightmap.rs                    # Heightmap (f32 data), parse_bil, fill_nodata, fill_nodata_from_base
 │   │   ├── geotiff.rs                      # parse_geotiff_auto, extract_window, ifd_scales, tile_bounds_wgs84, tile_centre_crs
-│   │   ├── grid.rs                         # assemble_grid, load_grid, load_grid_from_paths, crop, stitch_windows[_geographic]
+│   │   ├── grid.rs                         # assemble_grid (N×M), load_grid_from_paths, crop, stitch_windows[_geographic]
 │   │   ├── crs.rs                          # tile_proj4 / to_wgs84 / from_wgs84 / is_geographic / epsg_towgs84 (proj4rs + proj4wkt + crs-definitions)
 │   │   └── overview.rs                     # ensure_overview_cache: build .tmp_dem_pre_calc_*.tif from large single-IFD tiles
 │   ├── terrain/src/
@@ -140,7 +140,7 @@ Types are defined in the crate that produces them: `Heightmap` in `dem_io`, `Nor
 
 ### Crate Responsibilities
 
-- **`dem_io`** — Read SRTM `.hgt`/`.bil` and any GeoTIFF (including BigTIFF). `parse_geotiff_auto` reads the CRS from GeoKey 3072 / WKT (tag 34737) and resolves it via `proj4rs` / `proj4wkt` / `crs-definitions` — no hardcoded CRS knowledge. `extract_window` performs selective COG reads at a chosen IFD level. `assemble_grid` / `load_grid_from_paths` build 3×3 or arbitrary Copernicus mosaics. `stitch_windows_geographic` and `stitch_windows` stitch BEV / projected windows from multiple overlapping tiles. `ensure_overview_cache` builds a `.tmp_dem_pre_calc_<filename>.tif` next to any large single-IFD tile (box-averaged to ~8 m and ~32 m levels) so subsequent runs and tier reloads stay fast. `fill_nodata_from_base` smooth-blends a higher-resolution window over a coarser base so seams between tiers disappear.
+- **`dem_io`** — Read SRTM `.hgt`/`.bil` and any GeoTIFF (including BigTIFF). `parse_geotiff_auto` reads the CRS from GeoKey 3072 / WKT (tag 34737) and resolves it via `proj4rs` / `proj4wkt` / `crs-definitions` — no hardcoded CRS knowledge. `extract_window` performs selective COG reads at a chosen IFD level. `assemble_grid` builds an N×M mosaic from `&[Vec<Option<&Heightmap>>]`; `load_grid_from_paths` derives the bounding box `(max_lat-min_lat+1) × (max_lon-min_lon+1)` from whichever tiles the caller supplies and fills missing cells with zeros. `stitch_windows_geographic` and `stitch_windows` stitch BEV / projected windows from multiple overlapping tiles. `ensure_overview_cache` builds a `.tmp_dem_pre_calc_<filename>.tif` next to any large single-IFD tile (box-averaged to ~8 m and ~32 m levels) so subsequent runs and tier reloads stay fast. `fill_nodata_from_base` smooth-blends a higher-resolution window over a coarser base so seams between tiers disappear.
 - **`terrain`** — Surface normals (Sobel SoA, NEON 4-wide and 8-wide on aarch64, AVX2 8-wide on x86_64). DDA shadow sweep with arbitrary azimuth and penumbra (scalar / NEON / AVX2 variants, rayon-parallel). True-hemisphere AO (`compute_ao_true_hemi` — 16-azimuth DDA averaged).
 - **`render_gpu`** — wgpu compute-shader raymarcher. `GpuScene` owns all GPU resources persistently; mutable per-frame work is the camera uniform write and an optional shadow/AO/heightmap buffer/texture refresh. Three tiers are blended in WGSL with a 500 m blend margin. Bicubic Catmull-Rom interpolation is enabled within `smooth_radius_m` of the camera (default 2000 m, `B` key cycles 0/500/1000/2000/5000 m). Public helpers `hm_to_f16_bytes`, `gen_hm_mip_bytes`, `pack_normals_u32_bytes`, `pack_normals_rg16_bytes`, `pack_ao_u8` let workers pre-pack bytes off the main thread. Tier reloads follow a drop-first cycle: swap to 1×1 placeholders → `rebuild_bind_group` → `device.poll(PollType::Wait)` to drain wgpu's destroy queue → allocate new → second `rebuild_bind_group`. `vram.rs` tracks every allocation through an `AtomicU64`; `context.rs::on_uncaptured_error` sets an `OOM_OBSERVED` flag that the viewer polls each frame to disable the fine tier (then the close tier) instead of crashing.
 - **`profiling`** — `cntvct_el0` (AArch64) / `rdtsc` (x86) cycle counters, CSV timing emitter.
@@ -302,7 +302,7 @@ Displaying a full absolute path in a row or label will overflow into adjacent te
 - True Hemisphere AO = sun shadow DDA generalised: 16 azimuths, averaged — baked once, free at render time
 - HBAO radial 600m sweep exposes smaller GPU caches (GTX 1650); SSAO fixed-offset samples stay cache-local
 - C1 discontinuity (slope jumps at DEM grid lines) is a data floor; bicubic Catmull-Rom inside `smooth_radius_m` softens fine-tier surfaces without destroying ridgelines; Gaussian smoothing destroys ridgelines
-- At 47°N: SRTM tiles are 111 km N-S × 76 km E-W; fog 60 km always overshoots E/W edges → 3×3 (or 2×2) tile grid required
+- At 47°N: SRTM tiles are 111 km N-S × 76 km E-W; sea-level fog 60 km overshoots E/W edges → 3×3 (or 2×2) tile grid required. Fog far-distance now scales with camera altitude as `exp(alt / 8000)` capped at 6× (≈360 km at ≥14 km), so high-altitude views need a base radius the streamer can actually load — the 6× cap deliberately matches the largest base-tier radius (90 km High preset) so fog never pushes past the loaded grid
 - The fine and close tiers carry an explicit per-tier rotation (`cos_rot`/`sin_rot` in `CameraUniforms`) so meridian convergence between projected CRSes (e.g. 1 m EPSG:3035 over a 30 m geographic base) does not produce a visible seam
 
 ### Main-thread responsiveness (fix-freeze)
@@ -372,6 +372,8 @@ Use `#[inline(never)]` during profiling so functions appear as distinct symbols.
 | Swap-chain viewer | Eliminates 85 MB readback floor; PCIe was the fps bottleneck, not shader compute |
 | Multi-resolution tiers | 30 m / 5 m / 1 m blended in shader with a 500 m feathered margin; bicubic Catmull-Rom near camera |
 | Per-tier `cos_rot`/`sin_rot` | Compensates meridian convergence between projected CRSes at tier boundaries |
+| Altitude-aware sky + fog | `sky_color(dir.z, cam.origin.z)` in `shader_texture.wgsl` runs a horizon→zenith gradient whose zenith colour is interpolated through two stages (sea level → ~3 km alpine → ~10 km near-space). Fog far-distance is multiplied by `exp(alt / 8000)` capped at 6×, matching atmospheric scale-height physics. Same `sky_color` call drives both the open-sky branch and the distance-fog tint so haze in the distance matches the overhead tone |
+| N×M demo grid + crop | `assemble_grid` and `load_grid_from_paths` derive grid shape from the supplied tile set's bounding box (was hardcoded 3×3); `prepare_demo_scene_with_ctx` applies `cap_to_gpu_limit` immediately after assembly so any tile pool exceeding `GPU_SAFE_PX` (e.g. a 5×5 GLO-30 = 18000²) is cropped around the camera before normals/shadow/AO/upload. 3×3 demos are unaffected (cap is a no-op) |
 
 ---
 
