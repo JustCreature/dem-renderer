@@ -25,6 +25,37 @@
 
 ---
 
+## Himalaya / Everest
+
+### The best freely available high-resolution DEM for the area
+
+**HMA 8m DEM Mosaic — NSIDC (NASA Earthdata)**
+- Dataset: `HMA_DEM8m_MOS` (DOI 10.5067/KXOVQ9L172S2), Polar Geospatial Center, derived from WorldView / GeoEye optical stereo
+- Resolution: 8 m
+- Coverage: All of High Mountain Asia — Hindu Kush, Karakoram, Himalaya, Tibetan Plateau
+- Format: GeoTIFF, 12500×12500 px per mosaic tile (~250–370 MB)
+- CRS: Albers Equal Area centred on 36°N, 85°E — encoded **inline** via GeoKey `3072=32767` (user-defined sentinel) + `ProjCoordTransGeoKey` + `GeoDoubleParams`. No WKT, no single EPSG code; the renderer's three-path CRS discovery handles this since PR #55
+- Access: Free with NASA Earthdata Login (free registration)
+- Portal: https://nsidc.org/data/data-access-tool/HMA_DEM8m_MOS/versions/1/ — draw a bounding box on the map to filter
+- For Everest (27.99°N, 86.92°E): a 1°×1° box (W 86.5 / S 27.5 / E 87.5 / N 28.5) returns 4 tiles in a 2×2 grid; **tile-677** (SE quadrant) alone covers Everest, Lhotse, Makalu, Cho Oyu, Khumbu Glacier, Namche, and Lukla
+- User guide: https://nsidc.org/sites/default/files/hma_dem8m_mos-v001-userguide_1.pdf
+- Sibling products (same DOI family): `HMA_DEM8m_AT` (along-track stereo strips), `HMA_DEM8m_CT` (cross-track strips). Use the **Mosaic** product for a single seamless raster; the strip products are gappy in space but useful for time-series work
+- License: NASA DAAC public-domain use, citation required (DOI + producer credit); keep gitignored in `tiles/big_size/`
+
+### What does not exist freely for the Himalaya at sub-8m
+
+| What you'd want | Reality |
+|---|---|
+| 1 m wall-to-wall Everest | Does not exist publicly |
+| NatGeo / Rolex 2019 Khumbu LiDAR | Open via Dryad (https://datadryad.org/dataset/doi:10.5061/dryad.73n5tb2vx) but **point cloud only** — LAS 1.2/1.4, 23 GB, South Col → Dugla strip. Needs gridding via PDAL / LAStools before the renderer can use it. Mandatory NatGeo + Rolex credit |
+| EarthDEM 2 m (PGC, WorldView stereo) | Covers HMA wall-to-wall but **access-controlled** via NASA CSDA Satellite Data Explorer — research / education eligibility only |
+| Pléiades tri-stereo Khumbu DTM (Lamsal et al. 2015) | ~2–4 m, published research product; CNES Pléiades licensing typically forbids redistribution — contact authors directly |
+| 2020 Chinese summit remeasurement DEM | Only the new summit elevation (8848.86 m) was released — no raster product |
+| OpenTopography Khumbu high-res | No dedicated collection as of 2026-05; SRTM and ASTER GDEM (30 m) are the only consistently-listed Himalaya products |
+| ICIMOD RDS (regional Hindu Kush–Himalaya repo) | Mostly ≥30 m — good for catchment masks, not finer than HMA |
+
+---
+
 ## Global 1m Mountain DEM Sources
 
 ### Tier 1 — Open, free, immediate download, excellent mountain terrain
@@ -98,6 +129,7 @@
 | Canada | 1m–2m | Valleys, partial Rockies | GeoTIFF | Free, AWS |
 | France | 1m | French Alps, Pyrenees | GeoTIFF | Free since 2021 |
 | Chile (Las Bayas) | ~1m | La Parva ridge only, ~few km² | CSV point cloud | Free, Zenodo |
+| HMA (PGC) | 8m | Everest, Karakoram, all High Mountain Asia | GeoTIFF | Free, NASA Earthdata login |
 
 ---
 
