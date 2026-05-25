@@ -155,11 +155,24 @@ pub(crate) fn prepare_scene_with_ctx(
             // loading any pixel data.  For a 10 GB source this avoids reading the full tile
             // only to crop it; the small cache makes the initial load fast and consistent
             // with worker reloads.  Progress maps 0.05–0.48 so the bar stays monotonic.
+            // Silently swallowing the cache build error (`.unwrap_or(None)`) made
+            // issue #40 impossible to triage from a user report — the only sign
+            // anything had gone wrong was a panic four fallbacks deep.  Surface
+            // the error on both stderr and the loading screen.
             let cache_path: Option<std::path::PathBuf> =
-                dem_io::ensure_overview_cache(tile_path, |f, msg| {
+                match dem_io::ensure_overview_cache(tile_path, |f, msg| {
                     report(0.05 + f * 0.43, msg);
-                })
-                .unwrap_or(None);
+                }) {
+                    Ok(p) => p,
+                    Err(e) => {
+                        eprintln!("[cache] build failed for {}: {e}", tile_path.display());
+                        report(
+                            0.48,
+                            &format!("Cache build failed: {e}; falling back to slow path"),
+                        );
+                        None
+                    }
+                };
 
             // Use the cache when available; otherwise fall back to the original tile.
             let tier_path: &Path = cache_path.as_deref().unwrap_or(tile_path);
@@ -173,13 +186,26 @@ pub(crate) fn prepare_scene_with_ctx(
             let init_radii = tier_radii(vram_budget.to_class());
             let base_radius = init_radii.base_radius_m;
             let base_ifd = select_ifd(&scales, 30.0, base_radius, GPU_SAFE_PX as u32);
-            let loaded = match extract_window(tier_path, centre_crs, base_radius, base_ifd)
-                .or_else(|_| extract_window(tier_path, centre_crs, base_radius, 1))
-                .or_else(|_| {
+            // The original code discarded each `Err` via `or_else(|_| ...)` and
+            // then called `.expect("parse_geotiff_auto failed — check tile path")`
+            // four levels deep.  Issue #40 surfaced as that generic panic with
+            // no clue about the actual LZW decode failure.  Keep the first real
+            // error so it can be reported alongside the final fallback's error.
+            let mut first_err: Option<String> = None;
+            let attempt = extract_window(tier_path, centre_crs, base_radius, base_ifd)
+                .or_else(|e| {
+                    first_err = Some(format!("extract_window(ifd={base_ifd}): {e}"));
+                    extract_window(tier_path, centre_crs, base_radius, 1)
+                })
+                .or_else(|e| {
+                    if first_err.is_none() {
+                        first_err = Some(format!("extract_window(ifd=1): {e}"));
+                    }
                     // Camera outside tile — retry from tile geographic centre
                     dem_io::tile_centre_crs(tier_path)
                         .and_then(|tc| extract_window(tier_path, tc, base_radius, base_ifd))
-                }) {
+                });
+            let loaded = match attempt {
                 Ok(hm) => {
                     println!(
                         "window: {}×{} at {:.1}m/px, elev {:.0}–{:.0}m  ({:.2?})",
@@ -192,20 +218,31 @@ pub(crate) fn prepare_scene_with_ctx(
                     );
                     hm
                 }
-                Err(_) => {
-                    let hm = dem_io::parse_geotiff_auto(tile_path)
-                        .expect("parse_geotiff_auto failed — check tile path");
-                    println!(
-                        "full tile: {}×{} at {:.1}m/px, elev {:.0}–{:.0}m  ({:.2?})",
-                        hm.cols,
-                        hm.rows,
-                        hm.dx_meters,
-                        hm.data.iter().cloned().fold(f32::INFINITY, f32::min),
-                        hm.data.iter().cloned().fold(f32::NEG_INFINITY, f32::max),
-                        t0.elapsed(),
-                    );
-                    hm
-                }
+                Err(last_err) => match dem_io::parse_geotiff_auto(tile_path) {
+                    Ok(hm) => {
+                        println!(
+                            "full tile: {}×{} at {:.1}m/px, elev {:.0}–{:.0}m  ({:.2?})",
+                            hm.cols,
+                            hm.rows,
+                            hm.dx_meters,
+                            hm.data.iter().cloned().fold(f32::INFINITY, f32::min),
+                            hm.data.iter().cloned().fold(f32::NEG_INFINITY, f32::max),
+                            t0.elapsed(),
+                        );
+                        hm
+                    }
+                    Err(parse_err) => {
+                        let first =
+                            first_err.unwrap_or_else(|| format!("extract_window: {last_err}"));
+                        let full = format!(
+                            "Could not load tile {}.\n  First failure: {first}\n  Final fallback (parse_geotiff_auto): {parse_err}",
+                            tile_path.display()
+                        );
+                        eprintln!("{full}");
+                        report(1.0, &full);
+                        panic!("{full}");
+                    }
+                },
             };
             // Crop to GPU-safe size when tile or clipped window still exceeds the limit.
             // This happens for high-res tiles with no overviews (e.g. 1m NZ LiDAR, 24000 px wide).

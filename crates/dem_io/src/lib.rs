@@ -2,6 +2,7 @@ pub mod crs;
 mod geotiff;
 mod grid;
 mod heightmap;
+mod lzw_lenient;
 mod overview;
 
 pub use crs::get_tile_epsg;

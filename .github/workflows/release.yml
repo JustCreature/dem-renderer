@@ -82,7 +82,7 @@ jobs:
       
     # Run tests natively (we omit the --target flag here so the Intel cross-compile job just tests the code on the native ARM runner, avoiding Rosetta 2 emulator quirks)
     - name: Run tests
-      run: cargo test --verbose
+      run: cargo test  --workspace --verbose
       
     # 4. Package everything securely
     - name: Package Executables

@@ -7,6 +7,7 @@ use tiff::encoder::{TiffEncoder, colortype};
 use tiff::tags::Tag;
 
 use crate::crs;
+use crate::lzw_lenient;
 use crate::{DemError, Heightmap};
 
 const NODATA: f32 = -9999.0;
@@ -74,23 +75,61 @@ pub(crate) fn build_downsampled(
     let tiles_down = (full_rows + th - 1) / th;
     let total = (tiles_across * tiles_down) as f32;
 
+    // Detect LZW once.  LZW chunks go through the lenient reader (issue #40 —
+    // the tiff crate's strict EOI requirement crashes on certain LZW tiles on
+    // Windows).  Other compressions stay on the existing fast path.
+    let (compression, predictor) = lzw_lenient::compression_and_predictor(&mut decoder)?;
+    let (chunk_offsets, chunk_byte_counts, mut lzw_file, lzw_byte_order, lzw_is_tiled) =
+        if compression == lzw_lenient::COMPRESSION_LZW {
+            let (offs, counts, is_tiled) = lzw_lenient::chunk_layout(&mut decoder)?;
+            let mut f = File::open(src_path)?;
+            let order = lzw_lenient::read_byte_order(&mut f)?;
+            (offs, counts, Some(f), order, is_tiled)
+        } else {
+            (
+                Vec::new(),
+                Vec::new(),
+                None,
+                lzw_lenient::SampleByteOrder::LittleEndian,
+                false,
+            )
+        };
+
     for tr in 0..tiles_down {
         report(tr as f32 * tiles_across as f32 / total);
         for tc in 0..tiles_across {
             let index = (tr * tiles_across + tc) as u32;
-            let chunk = decoder.read_chunk(index)?;
-            let tile_data: Vec<f32> = match chunk {
-                DecodingResult::F32(v) => v,
-                _ => return Err("expected F32 tile in source GeoTIFF".into()),
-            };
-
             let tile_col0 = tc * tw;
             let tile_row0 = tr * th;
             let tile_col1 = (tile_col0 + tw).min(full_cols);
             let tile_row1 = (tile_row0 + th).min(full_rows);
-            // The tiff crate returns trimmed data for edge tiles (actual_tw × actual_th),
-            // matching the convention used by extract_window.
+            // Edge tiles produce actual_tw × actual_th data; matches both the
+            // tiff crate's read_chunk convention and the lenient reader's trim.
             let actual_tw = tile_col1 - tile_col0;
+            let actual_th = tile_row1 - tile_row0;
+
+            let tile_data: Vec<f32> = if let Some(file) = lzw_file.as_mut() {
+                let i = index as usize;
+                // Tiled TIFFs encode the full padded TileLength even for edge
+                // tiles; stripped TIFFs encode only the rows that actually fit.
+                let encoded_rows = if lzw_is_tiled { th } else { actual_th };
+                lzw_lenient::read_lzw_chunk_f32(
+                    file,
+                    chunk_offsets[i],
+                    chunk_byte_counts[i] as usize,
+                    tw,
+                    encoded_rows,
+                    actual_tw,
+                    actual_th,
+                    predictor,
+                    lzw_byte_order,
+                )?
+            } else {
+                match decoder.read_chunk(index)? {
+                    DecodingResult::F32(v) => v,
+                    _ => return Err("expected F32 tile in source GeoTIFF".into()),
+                }
+            };
 
             for local_r in 0..(tile_row1 - tile_row0) {
                 let gr = tile_row0 + local_r;
