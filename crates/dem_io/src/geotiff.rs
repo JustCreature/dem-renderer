@@ -5,6 +5,7 @@ use tiff::tags::Tag;
 
 use crate::crs;
 use crate::heightmap::fill_nodata;
+use crate::lzw_lenient;
 use crate::{DemError, Heightmap};
 
 /// Returns ModelPixelScaleTag[0] from a GeoTIFF, or 0.0 on failure.
@@ -265,7 +266,7 @@ pub fn extract_window(
     const NODATA: f32 = -9999.0;
     let mut data = vec![NODATA; out_w * out_h];
 
-    let (tw, th) = decoder.chunk_dimensions(); // returns (u32, u32)                                                                                              
+    let (tw, th) = decoder.chunk_dimensions(); // returns (u32, u32)
     let tiles_across = (cols as usize + tw as usize - 1) / tw as usize;
 
     let tc0 = px0 / tw as usize;
@@ -273,21 +274,56 @@ pub fn extract_window(
     let tr0 = py0 / th as usize;
     let tr1 = (py1 + th as usize - 1) / th as usize;
 
+    // Same LZW bypass as build_downsampled (see issue #40 — tiff crate's strict
+    // EOI requirement crashes on the last chunk of some LZW tiles on Windows).
+    let (compression, predictor) = lzw_lenient::compression_and_predictor(&mut decoder)?;
+    let (chunk_offsets, chunk_byte_counts, mut lzw_file, lzw_byte_order, lzw_is_tiled) =
+        if compression == lzw_lenient::COMPRESSION_LZW {
+            let (offs, counts, is_tiled) = lzw_lenient::chunk_layout(&mut decoder)?;
+            let mut f = File::open(path)?;
+            let order = lzw_lenient::read_byte_order(&mut f)?;
+            (offs, counts, Some(f), order, is_tiled)
+        } else {
+            (
+                Vec::new(),
+                Vec::new(),
+                None,
+                lzw_lenient::SampleByteOrder::LittleEndian,
+                false,
+            )
+        };
+
     for tr in tr0..tr1 {
         for tc in tc0..tc1 {
             let index = (tr * tiles_across + tc) as u32;
-            let chunk = decoder.read_chunk(index)?;
-            let tile_data: Vec<f32> = match chunk {
-                DecodingResult::F32(v) => v,
-                _ => return Err("expected F32 tile".into()),
-            };
-            // overlap copy goes here
             let tile_col0 = tc * tw as usize;
             let tile_row0 = tr * th as usize;
             let tile_col1 = (tile_col0 + tw as usize).min(cols as usize);
             let tile_row1 = (tile_row0 + th as usize).min(rows as usize);
             // actual dims for edge tiles (last col/row may be narrower than tw/th)
             let actual_tw = tile_col1 - tile_col0;
+            let actual_th = tile_row1 - tile_row0;
+
+            let tile_data: Vec<f32> = if let Some(file) = lzw_file.as_mut() {
+                let i = index as usize;
+                let encoded_rows = if lzw_is_tiled { th as usize } else { actual_th };
+                lzw_lenient::read_lzw_chunk_f32(
+                    file,
+                    chunk_offsets[i],
+                    chunk_byte_counts[i] as usize,
+                    tw as usize,
+                    encoded_rows,
+                    actual_tw,
+                    actual_th,
+                    predictor,
+                    lzw_byte_order,
+                )?
+            } else {
+                match decoder.read_chunk(index)? {
+                    DecodingResult::F32(v) => v,
+                    _ => return Err("expected F32 tile".into()),
+                }
+            };
 
             let col_start = tile_col0.max(px0);
             let col_end = tile_col1.min(px1);
