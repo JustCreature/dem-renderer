@@ -111,3 +111,173 @@ pub fn pack_normals_u32_bytes(nx: &[f32], ny: &[f32]) -> Vec<u8> {
 pub fn pack_ao_u8(ao: &[f32]) -> Vec<u8> {
     ao.iter().map(|&v| (v * 255.0) as u8).collect()
 }
+
+#[cfg(test)]
+mod tests {
+    //! Pure-CPU unit tests for the byte-packing / mip helpers. These need no GPU
+    //! device and are the cheapest guard against this crate's recurring bug class:
+    //! dimension / stride / mip-count assumptions that "always worked" for the
+    //! data the author tested with (see the Diamond-Head `mip_level_count: 8`
+    //! regression that `hm_mip_count` now fixes).
+
+    use super::*;
+
+    // ── hm_mip_count ─────────────────────────────────────────────────────────
+
+    #[test]
+    fn mip_count_diamond_head_regression() {
+        // A 115×105 base-tier overview walked off the end of the old hardcoded
+        // `mip_level_count: 8`: floor(log2(115)) + 1 = 7, and wgpu rejects a
+        // count greater than what the texture supports.
+        assert_eq!(hm_mip_count(115, 105), 7);
+    }
+
+    #[test]
+    fn mip_count_caps_at_eight() {
+        // floor(log2(8192)) + 1 = 14, but the engine convention caps the base
+        // tier at 8 mips.
+        assert_eq!(hm_mip_count(8192, 8192), 8);
+    }
+
+    #[test]
+    fn mip_count_uses_longest_axis_and_min_one() {
+        assert_eq!(hm_mip_count(1, 1), 1); // degenerate 1×1 → single level
+        assert_eq!(hm_mip_count(128, 1), 8); // long axis drives it: log2(128)+1 = 8
+        assert_eq!(hm_mip_count(1, 128), 8); // axis order doesn't matter
+        assert_eq!(hm_mip_count(0, 0), 1); // .max(1) guards the all-zero case
+    }
+
+    // ── gen_hm_mip_bytes ─────────────────────────────────────────────────────
+
+    fn decode_f16_le(bytes: &[u8], idx: usize) -> f32 {
+        half::f16::from_ne_bytes([bytes[idx * 2], bytes[idx * 2 + 1]]).to_f32()
+    }
+
+    #[test]
+    fn mip_pyramid_shapes_and_lengths() {
+        // 4×4 base → hm_mip_count(4,4) = 3 → 2 generated levels: 2×2 then 1×1.
+        let base: Vec<f32> = (0..16).map(|i| i as f32).collect();
+        let base_bytes = hm_to_f16_bytes(&base);
+        let mips = gen_hm_mip_bytes(&base_bytes, 4, 4);
+
+        assert_eq!(mips.len(), hm_mip_count(4, 4) as usize - 1);
+        assert_eq!((mips[0].0, mips[0].1), (2, 2));
+        assert_eq!(mips[0].2.len(), 2 * 2 * 2, "f16 = 2 bytes/texel");
+        assert_eq!((mips[1].0, mips[1].1), (1, 1));
+        assert_eq!(mips[1].2.len(), 1 * 1 * 2);
+    }
+
+    #[test]
+    fn mip_reduction_is_box_max() {
+        // Row-major 4×4, integer values exactly representable in f16:
+        //   0  1  2  3
+        //   4  5  6  7
+        //   8  9 10 11
+        //  12 13 14 15
+        // mip0 cell (0,0) covers base (0,0),(0,1),(1,0),(1,1) = {0,1,4,5} → max 5.
+        // mip0 cell (1,1) covers {10,11,14,15} → max 15.
+        let base: Vec<f32> = (0..16).map(|i| i as f32).collect();
+        let base_bytes = hm_to_f16_bytes(&base);
+        let mips = gen_hm_mip_bytes(&base_bytes, 4, 4);
+
+        let m0 = &mips[0].2;
+        assert_eq!(decode_f16_le(m0, 0), 5.0); // (0,0)
+        assert_eq!(decode_f16_le(m0, 3), 15.0); // (1,1)
+
+        // mip1 is the max of the whole image = 15.
+        assert_eq!(decode_f16_le(&mips[1].2, 0), 15.0);
+    }
+
+    #[test]
+    fn mip_dimensions_floor_with_min_one() {
+        // 5×3 base: 5/2 = 2, 3/2 = 1 for the first generated level. The .max(1)
+        // floors keep every dimension ≥ 1 as the pyramid shrinks.
+        let base: Vec<f32> = vec![1.0; 15];
+        let base_bytes = hm_to_f16_bytes(&base);
+        let mips = gen_hm_mip_bytes(&base_bytes, 5, 3);
+        assert_eq!((mips[0].0, mips[0].1), (2, 1));
+        for (w, h, bytes) in &mips {
+            assert!(*w >= 1 && *h >= 1);
+            assert_eq!(bytes.len(), (*w * *h * 2) as usize);
+        }
+    }
+
+    // ── normal packing ───────────────────────────────────────────────────────
+
+    fn decode_rg16(bytes: &[u8], idx: usize) -> (f32, f32) {
+        let o = idx * 4;
+        let xi = i16::from_ne_bytes([bytes[o], bytes[o + 1]]);
+        let yi = i16::from_ne_bytes([bytes[o + 2], bytes[o + 3]]);
+        (xi as f32 / 32767.0, yi as f32 / 32767.0)
+    }
+
+    #[test]
+    fn rg16_round_trips_within_snorm_quantum() {
+        let nx = [0.5, -0.25, 0.0, 1.0];
+        let ny = [0.0, 1.0, -1.0, -0.5];
+        let bytes = pack_normals_rg16_bytes(&nx, &ny);
+        assert_eq!(bytes.len(), nx.len() * 4, "Rg16Snorm = 4 bytes/texel");
+
+        let quantum = 1.0 / 32767.0;
+        for i in 0..nx.len() {
+            let (x, y) = decode_rg16(&bytes, i);
+            assert!((x - nx[i]).abs() <= quantum, "x[{i}]: {x} vs {}", nx[i]);
+            assert!((y - ny[i]).abs() <= quantum, "y[{i}]: {y} vs {}", ny[i]);
+        }
+    }
+
+    #[test]
+    fn rg16_clamps_out_of_range_to_full_scale() {
+        let bytes = pack_normals_rg16_bytes(&[1.2, -1.2], &[-5.0, 5.0]);
+        let xi0 = i16::from_ne_bytes([bytes[0], bytes[1]]);
+        let yi0 = i16::from_ne_bytes([bytes[2], bytes[3]]);
+        let xi1 = i16::from_ne_bytes([bytes[4], bytes[5]]);
+        let yi1 = i16::from_ne_bytes([bytes[6], bytes[7]]);
+        assert_eq!(xi0, 32767);
+        assert_eq!(yi0, -32767);
+        assert_eq!(xi1, -32767);
+        assert_eq!(yi1, 32767);
+    }
+
+    #[test]
+    fn u32_packing_layout_is_hi_x_lo_y() {
+        // Same quantisation as rg16, packed as (xi << 16) | (yi as u16).
+        let nx = [0.5, -0.25];
+        let ny = [-0.5, 1.0];
+        let bytes = pack_normals_u32_bytes(&nx, &ny);
+        assert_eq!(bytes.len(), nx.len() * 4);
+
+        for i in 0..nx.len() {
+            let o = i * 4;
+            let packed = u32::from_ne_bytes([bytes[o], bytes[o + 1], bytes[o + 2], bytes[o + 3]]);
+            let hi = (packed >> 16) as i16; // x
+            let lo = (packed & 0xffff) as i16; // y
+            let expect_x = (nx[i].clamp(-1.0, 1.0) * 32767.0).round() as i16;
+            let expect_y = (ny[i].clamp(-1.0, 1.0) * 32767.0).round() as i16;
+            assert_eq!(hi, expect_x);
+            assert_eq!(lo, expect_y);
+        }
+    }
+
+    // ── AO + heightmap byte packing ──────────────────────────────────────────
+
+    #[test]
+    fn ao_u8_scales_and_saturates() {
+        // In-range values scale by 255 with truncation; out-of-range inputs
+        // saturate because Rust's float→int `as` cast is saturating.
+        let out = pack_ao_u8(&[1.0, 0.0, 0.5, 2.0, -1.0]);
+        assert_eq!(out, vec![255, 0, 127, 255, 0]);
+    }
+
+    #[test]
+    fn hm_to_f16_bytes_length_and_round_trip() {
+        let data = [0.0, 1.0, 100.5, -50.25];
+        let bytes = hm_to_f16_bytes(&data);
+        assert_eq!(bytes.len(), data.len() * 2);
+        for (i, &v) in data.iter().enumerate() {
+            let back = decode_f16_le(&bytes, i);
+            // f16 has ~3 significant decimal digits; compare via the f16 round-trip.
+            assert_eq!(back, half::f16::from_f32(v).to_f32());
+        }
+    }
+}

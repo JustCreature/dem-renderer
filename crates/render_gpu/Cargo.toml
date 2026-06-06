@@ -10,3 +10,6 @@ half = { version = "2", features = ["bytemuck"] }
 bytemuck = { version = "1", features = ["derive"] }
 dem_io = { path = "../dem_io" }
 terrain = { path = "../terrain" }
+
+[dev-dependencies]
+serial_test = "3"

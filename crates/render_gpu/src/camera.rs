@@ -132,3 +132,136 @@ impl CameraUniforms {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Minimal heightmap fixture. `CameraUniforms::new` only reads `cols`, `rows`,
+    /// `dx_meters`, `dy_meters` and `data` (for `max_terrain_h`); the geo/CRS
+    /// fields are neutral placeholders.
+    fn hm(rows: usize, cols: usize, data: Vec<f32>) -> Heightmap {
+        Heightmap {
+            data,
+            rows,
+            cols,
+            nodata: -9999.0,
+            origin_lat: 0.0,
+            origin_lon: 0.0,
+            dx_deg: 0.0,
+            dy_deg: 0.0,
+            dx_meters: 5.0,
+            dy_meters: 5.0,
+            crs_origin_x: 0.0,
+            crs_origin_y: 0.0,
+            crs_epsg: 0,
+            crs_proj4: String::new(),
+        }
+    }
+
+    fn dot(a: [f32; 3], b: [f32; 3]) -> f32 {
+        a[0] * b[0] + a[1] * b[1] + a[2] * b[2]
+    }
+    fn len(a: [f32; 3]) -> f32 {
+        dot(a, a).sqrt()
+    }
+
+    /// Layout guard: the struct is mirrored byte-for-byte in WGSL (std140). Any
+    /// field added/removed without updating the shader must trip this. 14 vec4-
+    /// sized rows × 16 bytes = 224.
+    #[test]
+    fn camera_uniforms_layout_is_std140() {
+        assert_eq!(std::mem::size_of::<CameraUniforms>(), 224);
+        assert_eq!(std::mem::size_of::<CameraUniforms>() % 16, 0);
+    }
+
+    #[test]
+    fn basis_is_orthonormal() {
+        let h = hm(4, 4, vec![0.0; 16]);
+        let cam = CameraUniforms::new(
+            [0.0, 0.0, 1000.0], // origin
+            [100.0, 50.0, 0.0], // look_at (not parallel to world up)
+            60.0,               // fov
+            16.0 / 9.0,         // aspect
+            &h,
+            [0.0, 0.0, 1.0], // sun_dir
+            1920,
+            1080,
+            10.0,
+            5000.0,
+            0,
+            1,
+            1,
+            0,
+            0,
+        );
+
+        let eps = 1e-5;
+        assert!((len(cam.forward) - 1.0).abs() < eps, "forward not unit");
+        assert!((len(cam.right) - 1.0).abs() < eps, "right not unit");
+        assert!((len(cam.up) - 1.0).abs() < eps, "up not unit");
+        assert!(dot(cam.forward, cam.right).abs() < eps, "forward·right ≠ 0");
+        assert!(dot(cam.forward, cam.up).abs() < eps, "forward·up ≠ 0");
+        assert!(dot(cam.right, cam.up).abs() < eps, "right·up ≠ 0");
+    }
+
+    #[test]
+    fn projection_and_dims_propagate() {
+        let h = hm(8, 6, vec![0.0; 48]);
+        let aspect = 2.0;
+        let cam = CameraUniforms::new(
+            [0.0, 0.0, 500.0],
+            [1.0, 0.0, 0.0],
+            90.0,
+            aspect,
+            &h,
+            [0.0, 0.0, 1.0],
+            800,
+            400,
+            10.0,
+            5000.0,
+            2,
+            1,
+            0,
+            0,
+            1,
+        );
+
+        assert!((cam.half_h - cam.half_w / aspect).abs() < 1e-6);
+        assert_eq!((cam.hm_cols, cam.hm_rows), (6, 8));
+        assert_eq!(cam.dx_meters, 5.0);
+        assert_eq!((cam.img_width, cam.img_height), (800, 400));
+        assert_eq!((cam.ao_mode, cam.lod_mode), (2, 1));
+    }
+
+    #[test]
+    fn tiers_default_inactive_and_max_height_from_data() {
+        let h = hm(3, 3, vec![1.0, 7.0, 2.0, 3.0, 4.0, 5.0, 6.0, 0.0, 1.0]);
+        let cam = CameraUniforms::new(
+            [0.0, 0.0, 100.0],
+            [1.0, 0.0, 0.0],
+            60.0,
+            1.0,
+            &h,
+            [0.0, 0.0, 1.0],
+            100,
+            100,
+            10.0,
+            5000.0,
+            0,
+            0,
+            0,
+            0,
+            0,
+        );
+
+        // Detail tiers start inactive (extent_x == 0.0) with identity rotation.
+        assert_eq!(cam.hm5m_extent_x, 0.0);
+        assert_eq!(cam.hm1m_extent_x, 0.0);
+        assert_eq!((cam.hm5m_cos_rot, cam.hm5m_sin_rot), (1.0, 0.0));
+        assert_eq!((cam.hm1m_cos_rot, cam.hm1m_sin_rot), (1.0, 0.0));
+        // max over the data.
+        assert_eq!(cam.max_terrain_h, 7.0);
+        assert_eq!(cam.smooth_radius_m, 2000.0);
+    }
+}

@@ -116,3 +116,74 @@ pub fn track_buffer_drop(b: &wgpu::Buffer, log_label: &str) {
     GPU_BUFFER_BYTES.fetch_sub(bytes, Ordering::Relaxed);
     log_event("drop buf", log_label, '-', bytes);
 }
+
+#[cfg(test)]
+mod tests {
+    //! Byte-accounting math is pure; the `create_*_tracked` wrappers (which need a
+    //! device) are exercised in the integration suite (`tests/vram_accounting.rs`).
+
+    use super::*;
+
+    fn desc(
+        width: u32,
+        height: u32,
+        depth: u32,
+        mips: u32,
+        format: wgpu::TextureFormat,
+    ) -> wgpu::TextureDescriptor<'static> {
+        wgpu::TextureDescriptor {
+            label: None,
+            size: wgpu::Extent3d {
+                width,
+                height,
+                depth_or_array_layers: depth,
+            },
+            mip_level_count: mips,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format,
+            usage: wgpu::TextureUsages::TEXTURE_BINDING,
+            view_formats: &[],
+        }
+    }
+
+    #[test]
+    fn format_bpp_known_and_fallback() {
+        assert_eq!(format_bpp(wgpu::TextureFormat::R8Unorm), 1);
+        assert_eq!(format_bpp(wgpu::TextureFormat::R16Float), 2);
+        assert_eq!(format_bpp(wgpu::TextureFormat::R32Float), 4);
+        assert_eq!(format_bpp(wgpu::TextureFormat::Rg16Snorm), 4);
+        assert_eq!(format_bpp(wgpu::TextureFormat::Rgba32Float), 16);
+        // Anything not in the table falls back to 4 bytes/texel.
+        assert_eq!(format_bpp(wgpu::TextureFormat::Depth32Float), 4);
+    }
+
+    #[test]
+    fn single_mip_is_w_h_bpp() {
+        // 256×128 R32Float, one mip: 256*128*4 = 131072.
+        let d = desc(256, 128, 1, 1, wgpu::TextureFormat::R32Float);
+        assert_eq!(texture_bytes_from_desc(&d), 256 * 128 * 4);
+    }
+
+    #[test]
+    fn mip_pyramid_sums_each_level() {
+        // 8×8 R16Float (2 bpp), 4 mips: (64 + 16 + 4 + 1) texels * 2 = 170.
+        let d = desc(8, 8, 1, 4, wgpu::TextureFormat::R16Float);
+        assert_eq!(texture_bytes_from_desc(&d), (64 + 16 + 4 + 1) * 2);
+    }
+
+    #[test]
+    fn non_square_mips_floor_to_one() {
+        // 4×1 R8Unorm (1 bpp), 3 mips. Widths halve (4,2,1); height clamps at 1.
+        // texels = 4 + 2 + 1 = 7.
+        let d = desc(4, 1, 1, 3, wgpu::TextureFormat::R8Unorm);
+        assert_eq!(texture_bytes_from_desc(&d), 7);
+    }
+
+    #[test]
+    fn array_layers_multiply() {
+        // depth_or_array_layers scales the whole pyramid.
+        let d = desc(16, 16, 6, 1, wgpu::TextureFormat::R8Unorm);
+        assert_eq!(texture_bytes_from_desc(&d), 16 * 16 * 6);
+    }
+}
