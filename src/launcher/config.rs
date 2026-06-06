@@ -197,6 +197,78 @@ fn default_tile_5m_path() -> PathBuf {
     LauncherSettings::default().tile_5m_path
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn vram_budget_maps_one_to_one() {
+        assert_eq!(VramBudget::Low.to_class(), render_gpu::VramClass::Low);
+        assert_eq!(VramBudget::Mid.to_class(), render_gpu::VramClass::Mid);
+        assert_eq!(VramBudget::High.to_class(), render_gpu::VramClass::High);
+    }
+
+    #[test]
+    fn vram_budget_default_is_mid() {
+        // Mid is the deliberate safe default — see the field doc on `vram_budget`.
+        assert_eq!(VramBudget::default(), VramBudget::Mid);
+    }
+
+    #[test]
+    fn settings_toml_round_trips() {
+        // LauncherSettings has no PartialEq; compare the re-serialised form instead.
+        let original = LauncherSettings::default();
+        let text = toml::to_string_pretty(&original).expect("serialise");
+        let parsed: LauncherSettings = toml::from_str(&text).expect("deserialise");
+        let reserialised = toml::to_string_pretty(&parsed).expect("re-serialise");
+        assert_eq!(text, reserialised);
+    }
+
+    #[test]
+    fn empty_config_yields_full_defaults() {
+        // This is exactly the path `LauncherSettings::load()` relies on when the
+        // file is missing or empty — every field must fall back to its default.
+        let s: LauncherSettings = toml::from_str("").expect("empty parses to defaults");
+        let d = LauncherSettings::default();
+        assert_eq!(s.vram_budget, d.vram_budget);
+        assert_eq!(s.ao_mode, d.ao_mode);
+        assert_eq!(s.vat_mode, d.vat_mode);
+        assert_eq!(s.lod_mode, d.lod_mode);
+        assert_eq!(s.shadows_enabled, d.shadows_enabled);
+        assert_eq!(s.fog_enabled, d.fog_enabled);
+        assert_eq!(s.vsync, d.vsync);
+        assert_eq!(s.selected_view, d.selected_view);
+        assert_eq!(s.skip_launcher, d.skip_launcher);
+    }
+
+    #[test]
+    fn partial_config_fills_missing_with_serde_defaults() {
+        // A user (or older app version) writes only one key; every other field
+        // must be populated by its `#[serde(default)]` rather than failing to parse.
+        let s: LauncherSettings =
+            toml::from_str("skip_launcher = true").expect("partial config parses");
+        assert!(s.skip_launcher);
+        assert_eq!(s.vram_budget, VramBudget::Mid);
+        assert_eq!(s.ao_mode, 3); // HBAO×4
+        assert_eq!(s.vat_mode, 1); // High
+        assert_eq!(s.lod_mode, 0); // Ultra
+        assert!(s.shadows_enabled);
+        assert!(s.fog_enabled);
+    }
+
+    #[test]
+    fn demo_view_defaults_wire_to_consts() {
+        let d = DemoViewConfig::default();
+        assert_eq!(d.camera_lat, crate::consts::DEFAULT_CAM_LAT);
+        assert_eq!(d.camera_lon, crate::consts::DEFAULT_CAM_LON);
+        assert_eq!(d.camera_elev, crate::consts::DEFAULT_CAM_ELEV);
+        // The default tile pools are non-empty so the demo view has something to load.
+        assert!(!d.base_tile_paths.is_empty());
+        assert!(!d.close_tile_paths.is_empty());
+        assert!(!d.fine_tile_paths.is_empty());
+    }
+}
+
 impl LauncherSettings {
     pub fn config_path() -> Option<PathBuf> {
         dirs::config_dir().map(|d| d.join("dem_renderer").join("config.toml"))

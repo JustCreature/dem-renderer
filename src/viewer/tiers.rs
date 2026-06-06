@@ -685,3 +685,167 @@ pub(super) fn cross_crs_world_origin(hm: &Heightmap, base_hm: &Heightmap) -> (f3
         )
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // ── tier_radii ─────────────────────────────────────────────────────────
+
+    #[test]
+    fn tier_radii_are_internally_ordered() {
+        for class in [VramClass::Low, VramClass::Mid, VramClass::High] {
+            let r = tier_radii(class);
+            assert!(
+                r.base_radius_m > r.close_radius_m && r.close_radius_m > r.fine_radius_m,
+                "{class:?}: radii must shrink base→close→fine"
+            );
+            // A drift threshold ≥ its radius would let the camera leave the
+            // window before a reload ever fires.
+            assert!(r.base_drift_m < r.base_radius_m, "{class:?} base drift");
+            assert!(r.close_drift_m < r.close_radius_m, "{class:?} close drift");
+            assert!(r.fine_drift_m < r.fine_radius_m, "{class:?} fine drift");
+        }
+    }
+
+    #[test]
+    fn higher_budget_never_shrinks_a_radius() {
+        let lo = tier_radii(VramClass::Low);
+        let mid = tier_radii(VramClass::Mid);
+        let hi = tier_radii(VramClass::High);
+        assert!(hi.base_radius_m >= mid.base_radius_m && mid.base_radius_m >= lo.base_radius_m);
+        assert!(hi.close_radius_m >= mid.close_radius_m && mid.close_radius_m >= lo.close_radius_m);
+        assert!(hi.fine_radius_m >= mid.fine_radius_m && mid.fine_radius_m >= lo.fine_radius_m);
+    }
+
+    // ── select_ifd ───────────────────────────────────────────────────────────
+
+    #[test]
+    fn select_ifd_picks_finest_level_meeting_scale_and_size() {
+        let scales = [5.0, 25.0, 125.0];
+        // base tier: want ≥ 30 m/px, 70 km radius, 8192 px cap.
+        // 5 m and 25 m fail the scale floor; 125 m passes and its window
+        // (70000·2/125 = 1120 px) fits the cap → level 2.
+        assert_eq!(select_ifd(&scales, 30.0, 70_000.0, 8192), 2);
+        // close tier: ≥ 4 m/px, 5 km radius → finest level 0 (5 m) qualifies.
+        assert_eq!(select_ifd(&scales, 4.0, 5_000.0, 8192), 0);
+    }
+
+    #[test]
+    fn select_ifd_falls_through_to_coarsest_when_nothing_fits() {
+        // Single 5 m level, huge radius → 100000·2/5 = 40000 px blows the cap;
+        // no level satisfies it, so the function returns the coarsest (len-1 = 0).
+        assert_eq!(select_ifd(&[5.0], 4.0, 100_000.0, 8192), 0);
+        let scales = [5.0, 25.0];
+        assert_eq!(select_ifd(&scales, 4.0, 1_000_000.0, 8192), 1);
+    }
+
+    // ── cap_to_gpu_limit ─────────────────────────────────────────────────────
+
+    fn proj_hm(rows: usize, cols: usize) -> Heightmap {
+        Heightmap {
+            data: vec![0.0; rows * cols],
+            rows,
+            cols,
+            nodata: -9999.0,
+            origin_lat: 0.0,
+            origin_lon: 0.0,
+            dx_deg: 0.0, // projected → cap uses dx_meters
+            dy_deg: 0.0,
+            dx_meters: 1.0,
+            dy_meters: 1.0,
+            crs_origin_x: 0.0,
+            crs_origin_y: 0.0,
+            crs_epsg: 32633,
+            crs_proj4: String::new(),
+        }
+    }
+
+    #[test]
+    fn cap_is_noop_when_within_limit() {
+        let hm = proj_hm(100, 100);
+        let out = cap_to_gpu_limit(hm, 50.0, -50.0);
+        assert_eq!((out.rows, out.cols), (100, 100));
+    }
+
+    #[test]
+    fn cap_crops_oversized_axis_around_camera() {
+        // 8200 px wide (over the 8192 limit), 4 px tall (under it).
+        let hm = proj_hm(4, 8200);
+        // Camera at easting 4100 → centred crop. col_start clamps to
+        // min(4100-4096, 8200-8192) = min(4, 8) = 4 → origin shifts east by 4 m.
+        let out = cap_to_gpu_limit(hm, 4100.0, 0.0);
+        assert_eq!(out.cols, GPU_SAFE_PX);
+        assert_eq!(out.rows, 4); // short axis untouched
+        assert_eq!(out.crs_origin_x, 4.0);
+    }
+
+    // ── StreamingTier drift bookkeeping ──────────────────────────────────────
+
+    fn streaming_tier(init_cx: f64, init_cy: f64, drift_m: f64) -> StreamingTier {
+        // Worker-side endpoints are dropped immediately; these tests never send.
+        let (tx, _worker_rx) = mpsc::sync_channel::<(f64, f64)>(1);
+        let (_worker_tx, rx) = mpsc::channel::<TierData>();
+        StreamingTier::new(tx, rx, init_cx, init_cy, drift_m)
+    }
+
+    #[test]
+    fn needs_reload_fires_past_threshold_on_either_axis() {
+        let t = streaming_tier(1000.0, 1000.0, 100.0);
+        assert!(!t.needs_reload(1050.0, 1050.0), "within threshold on both axes");
+        assert!(t.needs_reload(1150.0, 1000.0), "x drift exceeds threshold");
+        assert!(t.needs_reload(1000.0, 1150.0), "y drift exceeds threshold");
+    }
+
+    #[test]
+    fn invalidate_forces_next_reload() {
+        let mut t = streaming_tier(1000.0, 1000.0, 100.0);
+        assert!(!t.needs_reload(1000.0, 1000.0));
+        t.invalidate();
+        // last_cx/cy are now 0, so any realistic CRS coordinate trips the check.
+        assert!(t.needs_reload(1000.0, 1000.0));
+    }
+
+    #[test]
+    fn update_threshold_changes_drift_sensitivity() {
+        let mut t = streaming_tier(1000.0, 1000.0, 100.0);
+        assert!(t.needs_reload(1150.0, 1000.0));
+        t.update_threshold(2_000.0);
+        assert!(!t.needs_reload(1150.0, 1000.0), "150 m drift is now within 2 km");
+    }
+
+    #[test]
+    fn try_recv_updates_centre_and_clears_computing() {
+        let (tx, _worker_rx) = mpsc::sync_channel::<(f64, f64)>(1);
+        let (worker_tx, rx) = mpsc::channel::<TierData>();
+        let mut t = StreamingTier::new(tx, rx, 0.0, 0.0, 100.0);
+        t.computing = true;
+
+        let hm = Arc::new(proj_hm(2, 2));
+        worker_tx
+            .send(TierData {
+                hm,
+                shadow: ShadowMask { data: vec![1.0; 4], rows: 2, cols: 2 },
+                centre_lat: 47.5,
+                centre_lon: 11.5,
+                gpu_normals_rg16: Vec::new(),
+                gpu_normals_u32: Vec::new(),
+                gpu_hm_f16: Vec::new(),
+                gpu_hm_mips: Vec::new(),
+                gpu_ao_u8: Vec::new(),
+            })
+            .expect("send");
+
+        let got = t.try_recv().expect("a bundle is queued");
+        assert_eq!((got.centre_lat, got.centre_lon), (47.5, 11.5));
+        assert!(!t.computing, "computing cleared once a bundle arrives");
+        // Centre is now (47.5, 11.5); a nearby point no longer needs a reload.
+        assert!(!t.needs_reload(47.51, 11.51));
+    }
+
+    #[test]
+    fn try_recv_returns_none_when_idle() {
+        let mut t = streaming_tier(0.0, 0.0, 100.0);
+        assert!(t.try_recv().is_none());
+    }
+}
