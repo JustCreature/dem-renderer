@@ -300,3 +300,299 @@ pub fn crop(
         crs_proj4: hm.crs_proj4.clone(),
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn mk(rows: usize, cols: usize, data: Vec<f32>) -> Heightmap {
+        assert_eq!(data.len(), rows * cols);
+        Heightmap {
+            data,
+            rows,
+            cols,
+            nodata: -9999.0,
+            origin_lat: 0.0,
+            origin_lon: 0.0,
+            dx_deg: 0.0,
+            dy_deg: 0.0,
+            dx_meters: 1.0,
+            dy_meters: 1.0,
+            crs_origin_x: 0.0,
+            crs_origin_y: 0.0,
+            crs_epsg: 0,
+            crs_proj4: String::new(),
+        }
+    }
+
+    // ----- assemble_grid ---------------------------------------------------
+
+    #[test]
+    fn assemble_grid_interleaves_tile_rows_correctly() {
+        // 2×2 grid of 2×2 tiles → 4×4 output. The crucial property is that within a
+        // strip of tile-rows, pixel rows from adjacent tile-columns are interleaved.
+        let nw = mk(2, 2, vec![1.0, 2.0, 3.0, 4.0]);
+        let ne = mk(2, 2, vec![5.0, 6.0, 7.0, 8.0]);
+        let sw = mk(2, 2, vec![9.0, 10.0, 11.0, 12.0]);
+        let se = mk(2, 2, vec![13.0, 14.0, 15.0, 16.0]);
+        let grid = vec![
+            vec![Some(&nw), Some(&ne)],
+            vec![Some(&sw), Some(&se)],
+        ];
+        let out = assemble_grid(&grid);
+        assert_eq!(out.rows, 4);
+        assert_eq!(out.cols, 4);
+        #[rustfmt::skip]
+        let expected = vec![
+            1.0, 2.0, 5.0, 6.0,
+            3.0, 4.0, 7.0, 8.0,
+            9.0, 10.0, 13.0, 14.0,
+            11.0, 12.0, 15.0, 16.0,
+        ];
+        assert_eq!(out.data, expected);
+        // Metadata inherited from the NW tile.
+        assert_eq!(out.nodata, nw.nodata);
+        assert_eq!(out.crs_epsg, nw.crs_epsg);
+    }
+
+    #[test]
+    fn assemble_grid_fills_none_cells_with_zeros() {
+        let nw = mk(2, 2, vec![1.0, 2.0, 3.0, 4.0]);
+        let grid = vec![vec![Some(&nw), None]];
+        let out = assemble_grid(&grid);
+        assert_eq!((out.rows, out.cols), (2, 4));
+        #[rustfmt::skip]
+        let expected = vec![
+            1.0, 2.0, 0.0, 0.0,
+            3.0, 4.0, 0.0, 0.0,
+        ];
+        assert_eq!(out.data, expected);
+    }
+
+    #[test]
+    #[should_panic(expected = "empty grid")]
+    fn assemble_grid_empty_grid_panics() {
+        let grid: Vec<Vec<Option<&Heightmap>>> = vec![];
+        assemble_grid(&grid);
+    }
+
+    #[test]
+    #[should_panic(expected = "empty row")]
+    fn assemble_grid_empty_row_panics() {
+        let grid: Vec<Vec<Option<&Heightmap>>> = vec![vec![]];
+        assemble_grid(&grid);
+    }
+
+    #[test]
+    #[should_panic(expected = "NW tile")]
+    fn assemble_grid_missing_nw_panics() {
+        let grid: Vec<Vec<Option<&Heightmap>>> = vec![vec![None]];
+        assemble_grid(&grid);
+    }
+
+    #[test]
+    #[should_panic(expected = "ragged grid")]
+    fn assemble_grid_ragged_panics() {
+        let a = mk(1, 1, vec![1.0]);
+        let grid = vec![vec![Some(&a)], vec![Some(&a), Some(&a)]];
+        assemble_grid(&grid);
+    }
+
+    #[test]
+    #[should_panic] // debug_assert fires under `cargo test` (debug build)
+    fn assemble_grid_mismatched_sibling_dims_panics() {
+        let nw = mk(2, 2, vec![1.0; 4]);
+        let odd = mk(1, 1, vec![9.0]);
+        let grid = vec![vec![Some(&nw), Some(&odd)]];
+        assemble_grid(&grid);
+    }
+
+    // ----- crop ------------------------------------------------------------
+
+    #[test]
+    fn crop_full_extent_is_identity_data() {
+        let hm = mk(4, 4, (0..16).map(|i| i as f32).collect());
+        let out = crop(&hm, 0, 0, 4, 4);
+        assert_eq!(out.data, hm.data);
+    }
+
+    #[test]
+    fn crop_subwindow_extracts_correct_block() {
+        let hm = mk(4, 4, (0..16).map(|i| i as f32).collect());
+        let out = crop(&hm, 1, 1, 2, 2);
+        assert_eq!(out.data, vec![5.0, 6.0, 9.0, 10.0]);
+    }
+
+    #[test]
+    fn crop_projected_advances_crs_origin_by_meters() {
+        // dx_deg == 0 → projected branch: crs_origin advances by dx_meters/dy_meters.
+        let mut hm = mk(4, 4, vec![0.0; 16]);
+        hm.dx_meters = 5.0;
+        hm.dy_meters = 5.0;
+        hm.crs_origin_x = 1000.0;
+        hm.crs_origin_y = 2000.0;
+        let out = crop(&hm, 1, 1, 2, 2);
+        assert_eq!(out.crs_origin_x, 1005.0);
+        assert_eq!(out.crs_origin_y, 1995.0);
+    }
+
+    #[test]
+    fn crop_geographic_advances_crs_origin_by_degrees() {
+        // dx_deg != 0 → geographic branch: crs_origin advances by dx_deg/dy_deg.
+        let mut hm = mk(4, 4, vec![0.0; 16]);
+        hm.dx_deg = 0.1;
+        hm.dy_deg = 0.1;
+        hm.crs_origin_x = 10.0;
+        hm.crs_origin_y = 47.0;
+        hm.origin_lon = 10.0;
+        hm.origin_lat = 47.0;
+        let out = crop(&hm, 2, 3, 1, 1);
+        assert!((out.crs_origin_x - 10.3).abs() < 1e-9);
+        assert!((out.crs_origin_y - 46.8).abs() < 1e-9);
+        assert!((out.origin_lon - 10.3).abs() < 1e-9);
+        assert!((out.origin_lat - 46.8).abs() < 1e-9);
+    }
+
+    #[test]
+    fn crop_zero_rows_yields_empty() {
+        let hm = mk(4, 4, vec![1.0; 16]);
+        let out = crop(&hm, 0, 0, 0, 4);
+        assert!(out.data.is_empty());
+        assert_eq!(out.rows, 0);
+    }
+
+    // ----- stitch_windows --------------------------------------------------
+
+    fn placed(centre_e: f64, centre_n: f64, radius: f64, data: Vec<f32>) -> Heightmap {
+        // 2×2 window placed exactly at the output's NW corner.
+        let mut w = mk(2, 2, data);
+        w.crs_origin_x = centre_e - radius;
+        w.crs_origin_y = centre_n + radius;
+        w
+    }
+
+    #[test]
+    fn stitch_windows_single_window_fills_output() {
+        let w = placed(10.0, 20.0, 1.0, vec![1.0, 2.0, 3.0, 4.0]);
+        let out = stitch_windows(vec![w], 10.0, 20.0, 1.0);
+        assert_eq!((out.rows, out.cols), (2, 2));
+        assert_eq!(out.data, vec![1.0, 2.0, 3.0, 4.0]);
+    }
+
+    #[test]
+    fn stitch_windows_skips_nodata_so_windows_merge() {
+        // Two complementary windows; each carries valid data only on one diagonal,
+        // NODATA on the other. Stitched result is order-independent and hole-free.
+        let n = -9999.0;
+        let a = placed(10.0, 20.0, 1.0, vec![7.0, n, n, 7.0]);
+        let b = placed(10.0, 20.0, 1.0, vec![n, 9.0, 9.0, n]);
+        let out = stitch_windows(vec![a, b], 10.0, 20.0, 1.0);
+        assert_eq!(out.data, vec![7.0, 9.0, 9.0, 7.0]);
+    }
+
+    #[test]
+    fn stitch_windows_skips_nan() {
+        let a = placed(10.0, 20.0, 1.0, vec![f32::NAN, 2.0, 3.0, 4.0]);
+        let out = stitch_windows(vec![a], 10.0, 20.0, 1.0);
+        // NaN source pixel is skipped → that output cell keeps the NODATA fill.
+        assert_eq!(out.data[0], -9999.0);
+        assert_eq!(out.data[1], 2.0);
+    }
+
+    #[test]
+    fn stitch_windows_clips_window_partly_out_of_bounds() {
+        // Shift the window one column left so its col 0 maps to output col -1
+        // (skipped) and its col 1 maps to output col 0. Must not panic.
+        let mut w = placed(10.0, 20.0, 1.0, vec![1.0, 2.0, 3.0, 4.0]);
+        w.crs_origin_x -= 1.0; // col_offset becomes -1
+        let out = stitch_windows(vec![w], 10.0, 20.0, 1.0);
+        assert_eq!(out.data[0], 2.0, "window col 1 lands in output col 0");
+    }
+
+    // ----- stitch_windows_geographic --------------------------------------
+
+    #[test]
+    fn stitch_geographic_fixes_dx_meters_with_cos_lat() {
+        let deg_per_px = 0.001;
+        let mut w = mk(20, 20, vec![5.0; 400]);
+        // For geographic windows dx_meters/dy_meters store deg/px.
+        w.dx_meters = deg_per_px;
+        w.dy_meters = deg_per_px;
+        w.crs_origin_x = 11.0 - 0.01; // out_lon0
+        w.crs_origin_y = 47.0 + 0.01; // out_lat1
+        w.crs_proj4 = "+proj=longlat +datum=WGS84 +no_defs".to_string();
+        let out = stitch_windows_geographic(vec![w], 11.0, 47.0, 0.01, 0.01);
+        assert_eq!((out.rows, out.cols), (20, 20));
+        let out_lat1 = 47.01_f64;
+        let expect_dx = deg_per_px * 111_320.0 * out_lat1.to_radians().cos();
+        assert!(
+            (out.dx_meters - expect_dx).abs() < 1e-6,
+            "dx_meters {} vs expected {}",
+            out.dx_meters,
+            expect_dx
+        );
+        assert!((out.dy_meters - deg_per_px * 111_320.0).abs() < 1e-6);
+    }
+
+    // ----- load_grid_from_paths -------------------------------------------
+
+    /// Loader that derives a 1×1 tile from a "lat_lon" filename, value = lon.
+    /// Returns None for the sentinel "skip".
+    fn fake_loader(p: &Path) -> Option<Heightmap> {
+        let name = p.file_name()?.to_string_lossy().to_string();
+        if name == "skip" {
+            return None;
+        }
+        let (lat, lon) = name.split_once('_')?;
+        let lat: f64 = lat.parse().ok()?;
+        let lon: f64 = lon.parse().ok()?;
+        let mut hm = mk(1, 1, vec![lon as f32]);
+        hm.origin_lat = lat;
+        hm.origin_lon = lon;
+        Some(hm)
+    }
+
+    #[test]
+    fn load_grid_assembles_adjacent_tiles_left_to_right() {
+        let paths = vec![PathBuf::from("47.0_11.0"), PathBuf::from("47.0_12.0")];
+        let out = load_grid_from_paths(&paths, fake_loader);
+        assert_eq!((out.rows, out.cols), (1, 2));
+        assert_eq!(out.data, vec![11.0, 12.0]);
+    }
+
+    #[test]
+    fn load_grid_keys_tiles_by_floor_of_origin() {
+        // origin just inside the north/east boundary still keys to the integer degree.
+        let paths = vec![PathBuf::from("47.9996_11.9996")];
+        let out = load_grid_from_paths(&paths, fake_loader);
+        assert_eq!((out.rows, out.cols), (1, 1));
+        assert_eq!(out.data, vec![11.9996_f32]);
+    }
+
+    #[test]
+    fn load_grid_fills_interior_gap_with_zeros() {
+        // lon 11 and 13 present, 12 missing → 1×3 grid with a zero column in the gap.
+        let paths = vec![PathBuf::from("47.0_11.0"), PathBuf::from("47.0_13.0")];
+        let out = load_grid_from_paths(&paths, fake_loader);
+        assert_eq!((out.rows, out.cols), (1, 3));
+        assert_eq!(out.data, vec![11.0, 0.0, 13.0]);
+    }
+
+    #[test]
+    fn load_grid_filters_paths_the_loader_rejects() {
+        let paths = vec![
+            PathBuf::from("47.0_11.0"),
+            PathBuf::from("skip"),
+            PathBuf::from("47.0_12.0"),
+        ];
+        let out = load_grid_from_paths(&paths, fake_loader);
+        assert_eq!(out.data, vec![11.0, 12.0]);
+    }
+
+    #[test]
+    #[should_panic(expected = "no tiles loaded")]
+    fn load_grid_all_rejected_panics() {
+        let paths = vec![PathBuf::from("skip"), PathBuf::from("skip")];
+        load_grid_from_paths(&paths, fake_loader);
+    }
+}

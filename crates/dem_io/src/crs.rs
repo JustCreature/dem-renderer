@@ -541,4 +541,149 @@ mod tests {
         assert!(data.projected_epsg.is_none());
         assert_eq!(data.geographic_epsg, Some(4326));
     }
+
+    fn empty_keys() -> GeoKeyData {
+        GeoKeyData {
+            projected_epsg: None,
+            geographic_epsg: None,
+            wkt_candidate: None,
+            inline: BTreeMap::new(),
+            doubles: vec![],
+            double_refs: BTreeMap::new(),
+        }
+    }
+
+    // ----- is_geographic ---------------------------------------------------
+
+    #[test]
+    fn is_geographic_matches_longlat_and_latlong() {
+        assert!(is_geographic("+proj=longlat +datum=WGS84 +no_defs"));
+        assert!(is_geographic("+proj=latlong"));
+        assert!(!is_geographic("+proj=utm +zone=33 +ellps=GRS80"));
+        assert!(!is_geographic(""));
+        // Substring match (documented quirk): any string containing "longlat" is true.
+        assert!(is_geographic("longlatfoo"));
+    }
+
+    // ----- to_wgs84 / from_wgs84 ------------------------------------------
+
+    #[test]
+    fn wgs84_round_trip_through_projected_crs() {
+        let laea = epsg_to_proj4(3035).unwrap();
+        let (lat, lon) = (47.0, 11.0);
+        let (e, n) = from_wgs84(lat, lon, &laea).unwrap();
+        let (lat2, lon2) = to_wgs84(e, n, &laea).unwrap();
+        assert!((lat - lat2).abs() < 1e-6, "lat {lat} vs {lat2}");
+        assert!((lon - lon2).abs() < 1e-6, "lon {lon} vs {lon2}");
+    }
+
+    #[test]
+    fn to_wgs84_geographic_is_identity_in_degrees() {
+        let p4 = "+proj=longlat +datum=WGS84 +no_defs";
+        // Input is (x=lon, y=lat) in degrees; output is (lat, lon) in degrees.
+        let (lat, lon) = to_wgs84(11.0, 47.0, p4).unwrap();
+        assert!((lat - 47.0).abs() < 1e-9);
+        assert!((lon - 11.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn to_wgs84_invalid_proj4_errors() {
+        assert!(to_wgs84(0.0, 0.0, "this is not a proj string").is_err());
+    }
+
+    // ----- epsg_to_proj4 ---------------------------------------------------
+
+    #[test]
+    fn epsg_to_proj4_known_code() {
+        assert!(epsg_to_proj4(3035).unwrap().contains("+proj=laea"));
+    }
+
+    #[test]
+    fn epsg_to_proj4_above_u16_range_errors() {
+        // The try_from::<u16> guard must reject codes that don't fit in u16.
+        let err = epsg_to_proj4(70000).unwrap_err().to_string();
+        assert!(err.contains("u16"), "expected u16-range error, got: {err}");
+    }
+
+    #[test]
+    fn epsg_to_proj4_unknown_code_errors() {
+        // In-range for u16 but absent from crs-definitions.
+        assert!(epsg_to_proj4(65000).is_err());
+    }
+
+    // ----- epsg_towgs84 (private, datum-shift ranges) ----------------------
+
+    #[test]
+    fn epsg_towgs84_known_datums() {
+        assert!(epsg_towgs84(4312).unwrap().starts_with("577.326")); // MGI
+        assert!(epsg_towgs84(4314).is_some()); // DHDN
+        assert!(epsg_towgs84(4277).is_some()); // OSGB36
+        assert!(epsg_towgs84(4149).is_some()); // CH1903
+        assert!(epsg_towgs84(4272).is_some()); // NZGD49
+    }
+
+    #[test]
+    fn epsg_towgs84_range_boundaries() {
+        // MGI ranges are 31254..=31259 and 31281..=31290.
+        assert!(epsg_towgs84(31259).is_some(), "31259 inside first range");
+        assert!(epsg_towgs84(31260).is_none(), "31260 just outside both ranges");
+        assert!(epsg_towgs84(31280).is_none(), "31280 just below second range");
+        assert!(epsg_towgs84(31281).is_some(), "31281 start of second range");
+        assert!(epsg_towgs84(31290).is_some(), "31290 end of second range");
+        assert!(epsg_towgs84(31291).is_none(), "31291 just above second range");
+    }
+
+    #[test]
+    fn epsg_towgs84_wgs84_and_unknown_have_no_shift() {
+        assert!(epsg_towgs84(4326).is_none(), "WGS84 needs no datum shift");
+        assert!(epsg_towgs84(99999).is_none());
+    }
+
+    // ----- proj4_from_keys discovery paths --------------------------------
+
+    #[test]
+    fn proj4_from_keys_epsg_path() {
+        let mut data = empty_keys();
+        data.projected_epsg = Some(3035);
+        let p4 = proj4_from_keys(&data).unwrap();
+        assert!(p4.contains("+proj=laea"));
+    }
+
+    #[test]
+    fn proj4_from_keys_injects_towgs84_for_mgi_when_absent() {
+        // EPSG path for an MGI-datum projected CRS: crs-definitions provides no (or
+        // zero) +towgs84, so the built-in Helmert shift must be injected. This is the
+        // fix that stops the Austrian grid sitting ~600 m off the Copernicus base.
+        let mut data = empty_keys();
+        data.projected_epsg = Some(31287); // MGI / Austria Lambert (in 31281..=31290)
+        let p4 = proj4_from_keys(&data).unwrap();
+        assert!(
+            p4.contains("+towgs84=577.326,90.129,463.919"),
+            "MGI Helmert shift not injected: {p4}"
+        );
+    }
+
+    #[test]
+    fn proj4_from_keys_no_metadata_errors() {
+        assert!(proj4_from_keys(&empty_keys()).is_err());
+    }
+
+    #[test]
+    fn proj4_from_keys_wkt_path() {
+        // A minimal WGS84 geographic WKT → proj4wkt should yield a longlat string.
+        let wkt = r#"GEOGCS["WGS 84",DATUM["WGS_1984",SPHEROID["WGS 84",6378137,298.257223563]],PRIMEM["Greenwich",0],UNIT["degree",0.0174532925199433]]"#;
+        let mut data = empty_keys();
+        data.wkt_candidate = Some(wkt.to_string());
+        let p4 = proj4_from_keys(&data).unwrap();
+        assert!(is_geographic(&p4), "WKT path should resolve to longlat: {p4}");
+    }
+
+    #[test]
+    fn proj4_from_keys_inline_unsupported_transform_errors() {
+        // inline path (3075 present) with an unsupported projection method code.
+        let mut data = empty_keys();
+        data.geographic_epsg = Some(4326);
+        data.inline.insert(3075, 9999); // not a known ProjCoordTransGeoKey method
+        assert!(proj4_from_keys(&data).is_err());
+    }
 }
