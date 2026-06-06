@@ -481,3 +481,43 @@ pub unsafe fn compute_shadow_neon_parallel_with_azimuth(
         cols: hm.cols,
     }
 }
+
+// ── unit tests for the crate-private DDA geometry ────────────────────────────
+//
+// `dda_setup` is `pub(crate)` and unreachable from `tests/`, so its geometry
+// (dominant-axis ±1 normalisation, per-quadrant entry-edge seeding, ground
+// distance per step) is pinned here. Azimuth 0 is exact in f32 (sin 0 = 0,
+// cos 0 = 1) so the cross component is genuinely zero — cardinal azimuths like
+// π/2 leak a tiny f32 rounding component and would seed a spurious second edge.
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn south_going_ray_seeds_top_edge() {
+        // az = 0: dc = -sin 0 = 0, dr = cos 0 = 1 → pure +r (south) stepping.
+        // dr dominates → dr_step = +1, dc_step = 0; rays seed the top edge.
+        let s = dda_setup(5, 7, 0.0, 10.0, 12.0);
+        assert!(s.dc_step.abs() < 1e-6, "dc_step = {}", s.dc_step);
+        assert!((s.dr_step - 1.0).abs() < 1e-6, "dr_step = {}", s.dr_step);
+        // ground distance per step = |dr_step|·dy = 12.
+        assert!((s.dist_per_step - 12.0).abs() < 1e-4, "dist = {}", s.dist_per_step);
+        assert_eq!(s.starting_pixels.len(), 7, "one ray per column");
+        assert!(s.starting_pixels.iter().all(|&(r, _)| r == 0.0));
+    }
+
+    #[test]
+    fn diagonal_normalises_dominant_axis_and_seeds_two_edges() {
+        // az = π/4: |dc| == |dr| → first branch, dominant axis steps ±1, the other
+        // follows fractionally; both entry edges (right + top) seed rays.
+        let s = dda_setup(4, 4, std::f32::consts::FRAC_PI_4, 10.0, 10.0);
+        assert!((s.dc_step.abs() - 1.0).abs() < 1e-6, "dc_step = {}", s.dc_step);
+        assert!(s.dr_step.abs() <= 1.0 + 1e-6, "dr_step = {}", s.dr_step);
+        assert!(
+            s.starting_pixels.len() > 4,
+            "diagonal sun seeds two edges: {}",
+            s.starting_pixels.len()
+        );
+    }
+}

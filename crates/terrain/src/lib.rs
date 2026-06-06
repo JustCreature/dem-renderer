@@ -10,7 +10,7 @@ use std::usize;
 use dem_io::Heightmap;
 pub use row_major::compute_normals_scalar;
 #[cfg(target_arch = "aarch64")]
-pub use row_major::{compute_normals_neon, compute_normals_neon_8, compute_normals_neon_parallel};
+pub use row_major::{compute_normals_neon, compute_normals_neon_parallel};
 pub use shadow::{
     ShadowMask, compute_shadow_scalar, compute_shadow_scalar_branchless,
     compute_shadow_scalar_with_azimuth,
