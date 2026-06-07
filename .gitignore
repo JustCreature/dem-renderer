@@ -18,3 +18,7 @@ target
 .forge.toml
 
 tiles/
+
+# Coverage artifacts (cargo-llvm-cov); target/ already covers llvm-cov-target/
+lcov.info
+coverage-html/
