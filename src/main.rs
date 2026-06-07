@@ -84,7 +84,7 @@ impl ApplicationHandler for App {
 }
 
 impl App {
-    /// Called after every launcher window_event.  If the launcher has set an outcome,
+    /// Called after every launcher window_event. If the launcher has set an outcome,
     /// handle it: exit the loop (Exit) or switch to Viewer phase without restarting
     /// the loop (Start) — the window stays on-screen the whole time.
     fn try_transition(&mut self, el: &ActiveEventLoop) {

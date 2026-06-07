@@ -1,4 +1,4 @@
-# ── Build ─────────────────────────────────────────────────────────────────────
+# Build
 
 build_arm:
 	RUSTFLAGS="-C target-cpu=native" cargo build --release
@@ -6,7 +6,7 @@ build_arm:
 build_x86:
 	RUSTFLAGS="-C target-cpu=x86-64-v3" cargo build --release --target x86_64-apple-darwin
 
-# ── Run ───────────────────────────────────────────────────────────────────────
+# Run
 
 run: view
 
@@ -19,7 +19,7 @@ view-vsync:
 view-1m:
 	RUSTFLAGS="-C target-cpu=native" cargo run --release
 
-# ── Config ────────────────────────────────────────────────────────────────────
+# Config
 
 CONFIG_FILE := $(HOME)/Library/Application\ Support/dem_renderer/config.toml
 
@@ -28,7 +28,7 @@ config:
 	@touch "$(HOME)/Library/Application Support/dem_renderer/config.toml"
 	vim "$(HOME)/Library/Application Support/dem_renderer/config.toml"
 
-# ── Data ──────────────────────────────────────────────────────────────────────
+# Data
 
 download-tiles:
 	bash download_copernicus_tiles_30m.sh
@@ -60,8 +60,7 @@ generate_windows_icon:
 	# brew install imagemagick
 	magick assets/icon_source.png -define icon:auto-resize=256,128,64,48,32,16 assets/icon.ico
 
-# ── Coverage ──────────────────────────────────────────────────────────────────
-
+# Coverage
 # One-time local setup: the LLVM instrumentation tools, the coverage driver,
 # and jq (used to derive the workspace package list below). cargo-llvm-cov is
 # compiled from crates.io; rustup ships llvm-tools as a component.
@@ -96,8 +95,7 @@ test-generate-report:
 open-report:
 	open coverage-html/html/index.html
 
-# ── Release ───────────────────────────────────────────────────────────────────
-
+# Release
 release:
 	git tag $(VERSION)
 	git push origin $(VERSION)
