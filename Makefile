@@ -60,6 +60,42 @@ generate_windows_icon:
 	# brew install imagemagick
 	magick assets/icon_source.png -define icon:auto-resize=256,128,64,48,32,16 assets/icon.ico
 
+# ── Coverage ──────────────────────────────────────────────────────────────────
+
+# One-time local setup: the LLVM instrumentation tools, the coverage driver,
+# and jq (used to derive the workspace package list below). cargo-llvm-cov is
+# compiled from crates.io; rustup ships llvm-tools as a component.
+setup-local:
+	rustup component add llvm-tools-preview
+	cargo install cargo-llvm-cov
+	@command -v jq >/dev/null 2>&1 || brew install jq
+
+# Mirrors the `coverage` job in .github/workflows/main.yml. The `report`
+# subcommand rejects --workspace and defaults to the root package only, which
+# would drop dem_io / terrain / render_gpu — so derive the member list from
+# cargo metadata and pass it as -p flags. Tests run once (--no-report keeps the
+# raw profile data); lcov + HTML + summary all read that one dataset.
+# Paths excluded from the coverage report — intentionally untested code (the
+# egui/winit launcher glue). Matched against the source path by llvm-cov.
+COV_IGNORE := 'src/launcher/'
+
+test-generate-report:
+	cargo llvm-cov --workspace --no-report
+	@PKGS=$$(cargo metadata --no-deps --format-version 1 | jq -r '.packages[].name' | sed 's/^/-p /' | tr '\n' ' '); \
+	cargo llvm-cov report $$PKGS --ignore-filename-regex $(COV_IGNORE) --lcov --output-path lcov.info; \
+	cargo llvm-cov report $$PKGS --ignore-filename-regex $(COV_IGNORE) --html --output-dir coverage-html; \
+	SUMMARY=$$(cargo llvm-cov report $$PKGS --ignore-filename-regex $(COV_IGNORE) --summary-only); \
+	echo "$$SUMMARY"; \
+	if [ -n "$$GITHUB_STEP_SUMMARY" ]; then \
+		{ echo '## Coverage'; echo '```'; echo "$$SUMMARY"; echo '```'; } >> "$$GITHUB_STEP_SUMMARY"; \
+	fi
+	@echo ""
+	@echo "lcov:  lcov.info"
+	@echo "HTML:  coverage-html/html/index.html  (run 'make open-report')"
+
+open-report:
+	open coverage-html/html/index.html
+
 # ── Release ───────────────────────────────────────────────────────────────────
 
 release:
@@ -72,4 +108,4 @@ release_force:
 	git tag $(VERSION)
 	git push origin $(VERSION)
 
-.PHONY: build_arm build_x86 run view view-vsync view-1m config download-tiles release release_force
+.PHONY: build_arm build_x86 run view view-vsync view-1m config download-tiles setup-local test-generate-report open-report release release_force

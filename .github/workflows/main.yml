@@ -79,3 +79,44 @@ jobs:
       with:
         name: ${{ matrix.artifact }}
         path: target/${{ matrix.target }}/release/${{ matrix.binary }}
+
+  # Source-based coverage runs on a single Linux x86 leg — the pure-logic tests
+  # (viewer::geo / tiers / tile_index / config, plus the dem_io / terrain unit
+  # tests) are platform-agnostic, so one leg is enough. Caveat: the NEON
+  # `#[cfg(target_arch = "aarch64")]` paths report as uncovered here because this
+  # leg compiles the AVX2 / scalar variants instead — the % understates aarch64.
+  coverage:
+    name: coverage
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Install llvm-tools-preview
+      run: rustup component add llvm-tools-preview
+
+    - name: Install cargo-llvm-cov
+      uses: taiki-e/install-action@cargo-llvm-cov
+
+    - name: Setup Rust cache
+      uses: Swatinem/rust-cache@v2
+
+    # Single-sourced with the Makefile so the (fragile) package-list derivation
+    # and report commands never drift between local and CI. The target runs the
+    # suite once under instrumentation, writes lcov.info + coverage-html/, and —
+    # because GITHUB_STEP_SUMMARY is set here — appends the summary table to the
+    # job summary (locally that env var is empty, so it just prints to stdout).
+    - name: Generate coverage reports
+      run: make test-generate-report
+
+    - name: Upload HTML coverage report
+      uses: actions/upload-artifact@v4
+      with:
+        name: coverage-html
+        path: coverage-html
+
+    - name: Upload coverage to Codecov
+      uses: codecov/codecov-action@v5
+      with:
+        files: lcov.info
+        token: ${{ secrets.CODECOV_TOKEN }}
+        fail_ci_if_error: false
