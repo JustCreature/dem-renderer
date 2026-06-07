@@ -525,7 +525,7 @@ impl ApplicationHandler for LauncherApp {
                                             "Digital Elevation Model · Renderer",
                                             "DEM Renderer",
                                             ".",
-                                            "v 0.2.2 · build 2026.05",
+                                            env!("APP_VERSION_LINE"),
                                         ),
                                         Screen::Settings => brand_block(
                                             ui,

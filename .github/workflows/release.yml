@@ -12,11 +12,33 @@ permissions:
   contents: write
 
 jobs:
+  # Gate the release on the Cargo.toml version matching the tag. The launcher UI version
+  # is derived from the tag at build time (DEM_RENDERER_RELEASE_VERSION below → build.rs →
+  # APP_VERSION_LINE), so this single check keeps Cargo.toml, the tag, and the UI in lockstep.
+  # Assumes bare-semver tags (e.g. 0.2.2), matching the `*.*.*` trigger above.
+  verify-version:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+    - name: Cargo.toml version must equal the release tag
+      shell: bash
+      run: |
+        tag="${{ github.ref_name }}"
+        tag="${tag#v}"
+        cargo_ver=$(grep -m1 -E '^version[[:space:]]*=' Cargo.toml | sed -E 's/.*"([^"]+)".*/\1/')
+        echo "tag=$tag  Cargo.toml=$cargo_ver"
+        if [ "$tag" != "$cargo_ver" ]; then
+          echo "::error::Release tag '$tag' does not match Cargo.toml version '$cargo_ver'. Bump the version in Cargo.toml to match the tag before releasing."
+          exit 1
+        fi
+
   build-and-release:
+    needs: verify-version
     runs-on: ${{ matrix.os }}
-    
+
     env:
       RUSTFLAGS: ${{ matrix.rustflags }}
+      DEM_RENDERER_RELEASE_VERSION: ${{ github.ref_name }}
 
     strategy:
       matrix:
