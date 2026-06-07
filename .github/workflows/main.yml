@@ -100,12 +100,29 @@ jobs:
     - name: Setup Rust cache
       uses: Swatinem/rust-cache@v2
 
+    # GitHub-hosted runners have no physical GPU, so the render_gpu device tests
+    # take the `gpu_or_skip!` branch and execute nothing — leaving scene/lifecycle
+    # paths uncovered on CI even though they pass locally on Metal. Mesa's lavapipe
+    # is a CPU-backed Vulkan adapter that wgpu picks up like any GPU, so the tests
+    # run for real. kisak-mesa PPA gives a lavapipe recent enough for wgpu 0.29.
+    - name: Install software Vulkan (lavapipe)
+      run: |
+        sudo add-apt-repository ppa:kisak/kisak-mesa -y
+        sudo apt-get update
+        sudo apt-get install -y mesa-vulkan-drivers vulkan-tools
+        echo "=== adapter visible to Vulkan ==="
+        vulkaninfo --summary 2>/dev/null | grep -iE "deviceName|driverName" || true
+
     # Single-sourced with the Makefile so the (fragile) package-list derivation
     # and report commands never drift between local and CI. The target runs the
     # suite once under instrumentation, writes lcov.info + coverage-html/, and —
     # because GITHUB_STEP_SUMMARY is set here — appends the summary table to the
     # job summary (locally that env var is empty, so it just prints to stdout).
+    # WGPU_BACKEND=vulkan pins the lavapipe adapter so the device tests can't fall
+    # back to a GL software path with different format support.
     - name: Generate coverage reports
+      env:
+        WGPU_BACKEND: vulkan
       run: make test-generate-report
 
     - name: Upload HTML coverage report
