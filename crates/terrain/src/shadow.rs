@@ -10,7 +10,7 @@ use rayon::{
 
 use dem_io::Heightmap;
 
-// ── shared DDA helpers ───────────────────────────────────────────────────────
+// shared DDA helpers
 
 pub(crate) struct DdaSetup {
     pub(crate) dc_step: f32,
@@ -68,7 +68,7 @@ pub(crate) fn dda_setup(
     }
 }
 
-// ── public output type ───────────────────────────────────────────────────────
+// public output type
 
 pub struct ShadowMask {
     pub data: Vec<f32>,
@@ -76,7 +76,7 @@ pub struct ShadowMask {
     pub cols: usize,
 }
 
-// ── scalar west-only (phase 3 baseline) ─────────────────────────────────────
+// scalar west-only (phase 3 baseline)
 
 pub fn compute_shadow_scalar(hm: &Heightmap, sun_elevation_rad: f32) -> ShadowMask {
     let mut data: Vec<f32> = vec![1.0f32; hm.rows * hm.cols];
@@ -105,7 +105,7 @@ pub fn compute_shadow_scalar(hm: &Heightmap, sun_elevation_rad: f32) -> ShadowMa
     }
 }
 
-// ── scalar branchless west-only ──────────────────────────────────────────────
+// scalar branchless west-only
 
 pub fn compute_shadow_scalar_branchless(hm: &Heightmap, sun_elevation_rad: f32) -> ShadowMask {
     let mut data: Vec<f32> = vec![1.0f32; hm.rows * hm.cols];
@@ -133,7 +133,7 @@ pub fn compute_shadow_scalar_branchless(hm: &Heightmap, sun_elevation_rad: f32) 
     }
 }
 
-// ── scalar arbitrary azimuth (DDA) ───────────────────────────────────────────
+// scalar arbitrary azimuth (DDA)
 
 pub fn compute_shadow_scalar_with_azimuth(
     hm: &Heightmap,
@@ -182,8 +182,13 @@ pub fn compute_shadow_scalar_with_azimuth(
     }
 }
 
-// ── NEON 4-wide west-only ────────────────────────────────────────────────────
+// NEON 4-wide west-only
 
+/// # Safety
+/// Uses `core::arch::aarch64` NEON intrinsics, so it must run on an aarch64 target.
+/// NEON is part of the aarch64 baseline (always present), and the
+/// `#[cfg(target_arch = "aarch64")]` gate plus the `lib.rs` dispatcher guarantee that —
+/// no additional runtime feature check is required of the caller.
 #[cfg(target_arch = "aarch64")]
 pub unsafe fn compute_shadow_neon(hm: &Heightmap, sun_elevation_rad: f32) -> ShadowMask {
     use std::arch::aarch64::{
@@ -249,8 +254,13 @@ pub unsafe fn compute_shadow_neon(hm: &Heightmap, sun_elevation_rad: f32) -> Sha
     }
 }
 
-// ── NEON parallel west-only ───────────────────────────────────────────────────
+// NEON parallel west-only
 
+/// # Safety
+/// Uses `core::arch::aarch64` NEON intrinsics, so it must run on an aarch64 target.
+/// NEON is part of the aarch64 baseline (always present), and the
+/// `#[cfg(target_arch = "aarch64")]` gate plus the `lib.rs` dispatcher guarantee that —
+/// no additional runtime feature check is required of the caller.
 #[cfg(target_arch = "aarch64")]
 pub unsafe fn compute_shadow_neon_parallel(hm: &Heightmap, sun_elevation_rad: f32) -> ShadowMask {
     use std::arch::aarch64::{
@@ -299,6 +309,10 @@ pub unsafe fn compute_shadow_neon_parallel(hm: &Heightmap, sun_elevation_rad: f3
                     hm.data[base[2] + c],
                     hm.data[base[3] + c],
                 ];
+                // NEON lane N (`vgetq_lane_f32::<N>`) maps to output row N; the
+                // `0 *` / `1 *` keep that lane→row mapping explicit and parallel with
+                // the `2 *` / `3 *` stores below (lanes are const-generic, not a loop).
+                #[allow(clippy::erasing_op, clippy::identity_op)]
                 unsafe {
                     let h_vec = vld1q_f32(heights.as_ptr());
                     let h_eff = vaddq_f32(h_vec, vdupq_n_f32(c as f32 * step));
@@ -322,7 +336,7 @@ pub unsafe fn compute_shadow_neon_parallel(hm: &Heightmap, sun_elevation_rad: f3
     }
 }
 
-// ── NEON parallel arbitrary azimuth (DDA) ────────────────────────────────────
+// NEON parallel arbitrary azimuth (DDA)
 //
 // Parallelises over groups of 4 starting pixels (rayon).
 // Within each group, 4 rays run simultaneously in NEON lanes.
@@ -337,6 +351,12 @@ pub unsafe fn compute_shadow_neon_parallel(hm: &Heightmap, sun_elevation_rad: f3
 // AArch64 a 32-bit store is a single instruction — no torn writes.
 // The two threads write either 0.0 or 1.0; both are valid f32 values.
 
+/// # Safety
+/// Uses `core::arch::aarch64` NEON intrinsics, so it must run on an aarch64 target.
+/// NEON is part of the aarch64 baseline (always present), and the
+/// `#[cfg(target_arch = "aarch64")]` gate plus the `lib.rs` dispatcher guarantee that —
+/// no additional runtime feature check is required of the caller. (See the note above
+/// on benign overlapping corner writes for diagonal azimuths.)
 #[cfg(target_arch = "aarch64")]
 pub unsafe fn compute_shadow_neon_parallel_with_azimuth(
     hm: &Heightmap,
@@ -366,7 +386,7 @@ pub unsafe fn compute_shadow_neon_parallel_with_azimuth(
     starting_pixels.par_chunks_mut(4).for_each(|rays| {
         let ptr = data_ptr.get();
 
-        // ── scalar fallback for the last chunk (< 4 rays) ────────────────
+        // scalar fallback for the last chunk (< 4 rays)
         if rays.len() < 4 {
             for (sr, sc) in rays.iter().copied() {
                 let mut rm = f32::NEG_INFINITY;
@@ -391,7 +411,7 @@ pub unsafe fn compute_shadow_neon_parallel_with_azimuth(
             return;
         }
 
-        // ── NEON: 4 rays in parallel ──────────────────────────────────────
+        // NEON: 4 rays in parallel
         let mut rf = [rays[0].0, rays[1].0, rays[2].0, rays[3].0];
         let mut cf = [rays[0].1, rays[1].1, rays[2].1, rays[3].1];
         let mut dist = 0.0f32;
@@ -479,5 +499,53 @@ pub unsafe fn compute_shadow_neon_parallel_with_azimuth(
         data,
         rows: hm.rows,
         cols: hm.cols,
+    }
+}
+
+// unit tests for the crate-private DDA geometry
+//
+// `dda_setup` is `pub(crate)` and unreachable from `tests/`, so its geometry
+// (dominant-axis ±1 normalisation, per-quadrant entry-edge seeding, ground
+// distance per step) is pinned here. Azimuth 0 is exact in f32 (sin 0 = 0,
+// cos 0 = 1) so the cross component is genuinely zero — cardinal azimuths like
+// π/2 leak a tiny f32 rounding component and would seed a spurious second edge.
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn south_going_ray_seeds_top_edge() {
+        // az = 0: dc = -sin 0 = 0, dr = cos 0 = 1 → pure +r (south) stepping.
+        // dr dominates → dr_step = +1, dc_step = 0; rays seed the top edge.
+        let s = dda_setup(5, 7, 0.0, 10.0, 12.0);
+        assert!(s.dc_step.abs() < 1e-6, "dc_step = {}", s.dc_step);
+        assert!((s.dr_step - 1.0).abs() < 1e-6, "dr_step = {}", s.dr_step);
+        // ground distance per step = |dr_step|·dy = 12.
+        assert!(
+            (s.dist_per_step - 12.0).abs() < 1e-4,
+            "dist = {}",
+            s.dist_per_step
+        );
+        assert_eq!(s.starting_pixels.len(), 7, "one ray per column");
+        assert!(s.starting_pixels.iter().all(|&(r, _)| r == 0.0));
+    }
+
+    #[test]
+    fn diagonal_normalises_dominant_axis_and_seeds_two_edges() {
+        // az = π/4: |dc| == |dr| → first branch, dominant axis steps ±1, the other
+        // follows fractionally; both entry edges (right + top) seed rays.
+        let s = dda_setup(4, 4, std::f32::consts::FRAC_PI_4, 10.0, 10.0);
+        assert!(
+            (s.dc_step.abs() - 1.0).abs() < 1e-6,
+            "dc_step = {}",
+            s.dc_step
+        );
+        assert!(s.dr_step.abs() <= 1.0 + 1e-6, "dr_step = {}", s.dr_step);
+        assert!(
+            s.starting_pixels.len() > 4,
+            "diagonal sun seeds two edges: {}",
+            s.starting_pixels.len()
+        );
     }
 }

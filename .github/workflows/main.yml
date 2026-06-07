@@ -6,25 +6,76 @@ on:
   pull_request:
     branches: [ "main" ]
 
+permissions:
+  contents: read
+  actions: read
+
 env:
   CARGO_TERM_COLOR: always
 
 jobs:
   build_and_test:
+    name: ${{ matrix.target }}
+    runs-on: ${{ matrix.os }}
 
-    runs-on: ubuntu-latest
+    env:
+      RUSTFLAGS: ${{ matrix.rustflags }}
+
+    # One leg per platform/arch we ship. Clippy only lints the cfg paths active for
+    # the leg's OS/arch, so running the whole job on each catches lints in
+    # `#[cfg(target_os = "windows")]` / `"macos"` / `"linux"` blocks and the NEON vs
+    # AVX2 (`target_arch`) split that a single ubuntu runner would never compile.
+    # fail-fast off so one leg failing doesn't cancel the others.
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            artifact: dem_renderer_linux_x86_64
+            binary: dem_renderer
+            rustflags: "-C target-cpu=x86-64-v3"
+
+          - os: macos-latest
+            target: aarch64-apple-darwin
+            artifact: dem_renderer_apple_arm
+            binary: dem_renderer
+            rustflags: ""
+
+          # Cross-compiled from the aarch64 runner; tests run natively (no --target)
+          # to avoid Rosetta 2 quirks, same as release.yml.
+          - os: macos-latest
+            target: x86_64-apple-darwin
+            artifact: dem_renderer_apple_x86_64
+            binary: dem_renderer
+            rustflags: ""
+
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            artifact: dem_renderer_win_x86_64
+            binary: dem_renderer.exe
+            rustflags: "-C target-cpu=x86-64-v3"
 
     steps:
     - uses: actions/checkout@v4
+
+    - name: Install Rust toolchain target
+      run: rustup target add ${{ matrix.target }}
+
     - name: Setup Rust cache
       uses: Swatinem/rust-cache@v2
+
+    - name: Clippy (deny warnings)
+      run: cargo clippy --workspace --all-targets --target ${{ matrix.target }} -- -D warnings
+
     - name: Build
-      run: cargo build --release --verbose
+      run: cargo build --release --target ${{ matrix.target }} --verbose
+
     - name: Run tests
-      run: cargo test  --workspace --verbose
+      run: cargo test --workspace --verbose
 
     - name: Upload executable artifact
       uses: actions/upload-artifact@v4
       with:
-        name: dem_renderer-ubuntu
-        path: target/release/dem_renderer
+        name: ${{ matrix.artifact }}
+        path: target/${{ matrix.target }}/release/${{ matrix.binary }}

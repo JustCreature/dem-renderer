@@ -420,10 +420,8 @@ impl ApplicationHandler for LauncherApp {
 
             WindowEvent::KeyboardInput {
                 event: key_event, ..
-            } => {
-                if key_event.state == winit::event::ElementState::Pressed {
-                    self.handle_key(el, key_event.physical_key);
-                }
+            } if key_event.state == winit::event::ElementState::Pressed => {
+                self.handle_key(el, key_event.physical_key);
             }
 
             WindowEvent::RedrawRequested => {
@@ -453,7 +451,7 @@ impl ApplicationHandler for LauncherApp {
                 // For the SelectDem screen: show the chosen filename and a reset button
                 // only when the user has picked something other than the bundled default.
                 let tile_5m_is_custom =
-                    settings.tile_5m_path != std::path::PathBuf::from(DEFAULT_TILE_5M_PATH);
+                    settings.tile_5m_path.as_path() != std::path::Path::new(DEFAULT_TILE_5M_PATH);
                 let tile_5m_display = settings
                     .tile_5m_path
                     .file_name()
@@ -527,7 +525,7 @@ impl ApplicationHandler for LauncherApp {
                                             "Digital Elevation Model · Renderer",
                                             "DEM Renderer",
                                             ".",
-                                            "v 0.2.2 · build 2026.05",
+                                            env!("APP_VERSION_LINE"),
                                         ),
                                         Screen::Settings => brand_block(
                                             ui,
@@ -555,7 +553,7 @@ impl ApplicationHandler for LauncherApp {
                                     hairline_rule(ui);
                                     ui.add_space(8.0);
 
-                                    // ── Content — screen-specific rows only ────────────────
+                                    // Content — screen-specific rows only
                                     match screen {
                                         Screen::Main => {
                                             main_evt = screens::main_menu::show(ui, main_anim);
@@ -579,7 +577,7 @@ impl ApplicationHandler for LauncherApp {
                                         }
                                     }
 
-                                    // ── Footer — always bottom-pinned via bottom_up ────────
+                                    // Footer — always bottom-pinned via bottom_up
                                     // Compute strings after show() so SelectDem's free-space
                                     // cache is already populated.
                                     let (fstatus, fright) = screen_footer(screen, ui.ctx());

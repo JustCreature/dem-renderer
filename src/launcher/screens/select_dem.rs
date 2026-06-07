@@ -95,10 +95,8 @@ pub fn show(
         Stroke::new(1.0, HAIRLINE),
     );
 
-    if *modal_open {
-        if let Some(e) = show_download_modal(ui, modal_open, tiles_dir, cache_key) {
-            event = Some(e);
-        }
+    if *modal_open && let Some(e) = show_download_modal(ui, modal_open, tiles_dir, cache_key) {
+        event = Some(e);
     }
 
     event

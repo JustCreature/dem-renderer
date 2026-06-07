@@ -61,8 +61,8 @@ pub(crate) fn build_downsampled(
     let mut cnts: Vec<Vec<u32>> = Vec::with_capacity(factors.len());
     let mut out_dims: Vec<(usize, usize)> = Vec::with_capacity(factors.len());
     for &f in factors {
-        let out_r = (full_rows + f - 1) / f;
-        let out_c = (full_cols + f - 1) / f;
+        let out_r = full_rows.div_ceil(f);
+        let out_c = full_cols.div_ceil(f);
         sums.push(vec![0.0f64; out_r * out_c]);
         cnts.push(vec![0u32; out_r * out_c]);
         out_dims.push((out_r, out_c));
@@ -72,8 +72,8 @@ pub(crate) fn build_downsampled(
     let (tw_u32, th_u32) = decoder.chunk_dimensions();
     let tw = tw_u32 as usize;
     let th = th_u32 as usize;
-    let tiles_across = (full_cols + tw - 1) / tw;
-    let tiles_down = (full_rows + th - 1) / th;
+    let tiles_across = full_cols.div_ceil(tw);
+    let tiles_down = full_rows.div_ceil(th);
     let total = (tiles_across * tiles_down) as f32;
 
     // Detect LZW once.  LZW chunks go through the lenient reader (issue #40 —
@@ -231,10 +231,10 @@ fn write_overview_tiff(
 
             if idx == 0 {
                 img.encoder()
-                    .write_tag(Tag::Unknown(33550), &[hm.dx_meters, hm.dy_meters, 0.0_f64])?;
+                    .write_tag(Tag::Unknown(33550), [hm.dx_meters, hm.dy_meters, 0.0_f64])?;
                 img.encoder().write_tag(
                     Tag::Unknown(33922),
-                    &[0.0_f64, 0.0, 0.0, hm.crs_origin_x, hm.crs_origin_y, 0.0],
+                    [0.0_f64, 0.0, 0.0, hm.crs_origin_x, hm.crs_origin_y, 0.0],
                 )?;
                 img.encoder()
                     .write_tag(Tag::Unknown(34735), geo_key_dir_u16.as_slice())?;
@@ -296,13 +296,11 @@ pub fn ensure_overview_cache(
     // Cache hit: exists and at least as recent as the source file.
     if let (Ok(cache_meta), Ok(src_meta)) =
         (std::fs::metadata(&cache_path), std::fs::metadata(tile_path))
+        && let (Ok(cache_mtime), Ok(src_mtime)) = (cache_meta.modified(), src_meta.modified())
+        && cache_mtime >= src_mtime
     {
-        if let (Ok(cache_mtime), Ok(src_mtime)) = (cache_meta.modified(), src_meta.modified()) {
-            if cache_mtime >= src_mtime {
-                println!("overview cache hit: {cache_name}");
-                return Ok(Some(cache_path));
-            }
-        }
+        println!("overview cache hit: {cache_name}");
+        return Ok(Some(cache_path));
     }
 
     // Determine downsample factors:

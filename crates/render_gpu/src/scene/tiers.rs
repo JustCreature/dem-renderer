@@ -6,6 +6,8 @@ impl GpuScene {
     /// Grow-only GPU resources: texture and buffers are recreated only when the incoming
     /// window is larger than what is currently allocated; otherwise data is written in-place
     /// via write_texture / write_buffer, avoiding GPU memory allocation on steady-state reloads.
+    // Args are the worker-packed byte slices + dims for one tier upload; kept flat by design.
+    #[allow(clippy::too_many_arguments)]
     pub fn upload_hm5m(
         &mut self,
         origin_x: f32,
@@ -222,6 +224,8 @@ impl GpuScene {
 
     /// Upload 1m fine-tier data.
     /// Same grow-only strategy as upload_hm5m.
+    // Args are the worker-packed byte slices + dims for one tier upload; kept flat by design.
+    #[allow(clippy::too_many_arguments)]
     pub fn upload_hm1m(
         &mut self,
         origin_x: f32,

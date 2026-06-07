@@ -31,6 +31,10 @@ unsafe fn load_f32_avx2(ptr: *const f32) -> core::arch::x86_64::__m256 {
     }
 }
 
+/// # Safety
+/// The caller must ensure the target CPU supports AVX2 (`is_x86_feature_detected!("avx2")`);
+/// calling this on a CPU without AVX2 is undefined behaviour. The dispatcher in `lib.rs`
+/// performs this check before dispatching here.
 #[cfg(target_arch = "x86_64")]
 #[target_feature(enable = "avx2")]
 pub unsafe fn compute_normals_avx2(hm: &dem_io::Heightmap) -> NormalMap {
@@ -80,10 +84,10 @@ pub unsafe fn compute_normals_avx2(hm: &dem_io::Heightmap) -> NormalMap {
             }
             // scalar tail
             while c < hm.cols - 1 {
-                let upper = hm.data[(r - 1) * hm.cols + c] as f32;
-                let lower = hm.data[(r + 1) * hm.cols + c] as f32;
-                let left = hm.data[r * hm.cols + (c - 1)] as f32;
-                let right = hm.data[r * hm.cols + (c + 1)] as f32;
+                let upper = hm.data[(r - 1) * hm.cols + c];
+                let lower = hm.data[(r + 1) * hm.cols + c];
+                let left = hm.data[r * hm.cols + (c - 1)];
+                let right = hm.data[r * hm.cols + (c + 1)];
 
                 let single_nx = (left - right) / (2.0 * hm.dx_meters as f32);
                 let single_ny = (upper - lower) / (2.0 * hm.dy_meters as f32);
@@ -109,6 +113,10 @@ pub unsafe fn compute_normals_avx2(hm: &dem_io::Heightmap) -> NormalMap {
     }
 }
 
+/// # Safety
+/// The caller must ensure the target CPU supports AVX2 (`is_x86_feature_detected!("avx2")`);
+/// calling this on a CPU without AVX2 is undefined behaviour. The dispatcher in `lib.rs`
+/// performs this check before dispatching here.
 #[cfg(target_arch = "x86_64")]
 #[target_feature(enable = "avx2")]
 pub unsafe fn compute_normals_avx2_parallel(hm: &dem_io::Heightmap) -> NormalMap {
@@ -160,10 +168,10 @@ pub unsafe fn compute_normals_avx2_parallel(hm: &dem_io::Heightmap) -> NormalMap
             }
             // scalar tail
             while c < hm.cols - 1 {
-                let upper = hm.data[(r - 1) * hm.cols + c] as f32;
-                let lower = hm.data[(r + 1) * hm.cols + c] as f32;
-                let left = hm.data[r * hm.cols + (c - 1)] as f32;
-                let right = hm.data[r * hm.cols + (c + 1)] as f32;
+                let upper = hm.data[(r - 1) * hm.cols + c];
+                let lower = hm.data[(r + 1) * hm.cols + c];
+                let left = hm.data[r * hm.cols + (c - 1)];
+                let right = hm.data[r * hm.cols + (c + 1)];
 
                 let single_nx = (left - right) * inv_2dx_f32;
                 let single_ny = (upper - lower) * inv_2dy_f32;

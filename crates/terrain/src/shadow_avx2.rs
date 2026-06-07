@@ -6,11 +6,15 @@ use dem_io::Heightmap;
 use rayon::iter::{IndexedParallelIterator, ParallelIterator};
 use rayon::slice::ParallelSliceMut;
 
-// ── AVX2 8-wide west-only ─────────────────────────────────────────────────────
+// AVX2 8-wide west-only
 //
 // Processes 8 rows at a time in SIMD lanes (same idea as NEON 4-wide, but wider).
 // Running-max and shadow state are tracked across 8 rows simultaneously.
 
+/// # Safety
+/// The caller must ensure the target CPU supports AVX2 (`is_x86_feature_detected!("avx2")`);
+/// calling this on a CPU without AVX2 is undefined behaviour. The dispatcher in `lib.rs`
+/// performs this check before dispatching here.
 #[cfg(target_arch = "x86_64")]
 #[target_feature(enable = "avx2")]
 pub unsafe fn compute_shadow_avx2(hm: &Heightmap, sun_elevation_rad: f32) -> ShadowMask {
@@ -86,8 +90,12 @@ pub unsafe fn compute_shadow_avx2(hm: &Heightmap, sun_elevation_rad: f32) -> Sha
     }
 }
 
-// ── AVX2 parallel 8-wide west-only ───────────────────────────────────────────
+// AVX2 parallel 8-wide west-only
 
+/// # Safety
+/// The caller must ensure the target CPU supports AVX2 (`is_x86_feature_detected!("avx2")`);
+/// calling this on a CPU without AVX2 is undefined behaviour. The dispatcher in `lib.rs`
+/// performs this check before dispatching here.
 #[cfg(target_arch = "x86_64")]
 #[target_feature(enable = "avx2")]
 pub unsafe fn compute_shadow_avx2_parallel(hm: &Heightmap, sun_elevation_rad: f32) -> ShadowMask {
@@ -151,8 +159,8 @@ pub unsafe fn compute_shadow_avx2_parallel(hm: &Heightmap, sun_elevation_rad: f3
 
                     let mut result_arr = [0.0f32; 8];
                     _mm256_storeu_ps(result_arr.as_mut_ptr(), result);
-                    for i in 0..8 {
-                        *chunk.get_unchecked_mut(i * hm.cols + c) = result_arr[i];
+                    for (i, &val) in result_arr.iter().enumerate() {
+                        *chunk.get_unchecked_mut(i * hm.cols + c) = val;
                     }
 
                     running_max = _mm256_max_ps(running_max, h_eff);
@@ -167,12 +175,16 @@ pub unsafe fn compute_shadow_avx2_parallel(hm: &Heightmap, sun_elevation_rad: f3
     }
 }
 
-// ── AVX2 parallel arbitrary azimuth (DDA) ────────────────────────────────────
+// AVX2 parallel arbitrary azimuth (DDA)
 //
 // Extends the NEON 4-ray DDA approach to 8 rays per SIMD group.
 // Parallelises over groups of 8 starting pixels via rayon.
 // Within each group, 8 rays run simultaneously in AVX2 lanes.
 
+/// # Safety
+/// The caller must ensure the target CPU supports AVX2 (`is_x86_feature_detected!("avx2")`);
+/// calling this on a CPU without AVX2 is undefined behaviour. The dispatcher in `lib.rs`
+/// performs this check before dispatching here.
 #[cfg(target_arch = "x86_64")]
 #[target_feature(enable = "avx2")]
 pub unsafe fn compute_shadow_avx2_parallel_with_azimuth(
@@ -225,7 +237,7 @@ pub unsafe fn compute_shadow_avx2_parallel_with_azimuth(
                 return;
             }
 
-            // ── AVX2: 8 rays in parallel ──────────────────────────────────────
+            // AVX2: 8 rays in parallel
             let mut rf = [
                 rays[0].0, rays[1].0, rays[2].0, rays[3].0, rays[4].0, rays[5].0, rays[6].0,
                 rays[7].0,

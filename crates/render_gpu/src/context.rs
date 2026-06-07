@@ -115,6 +115,12 @@ pub struct GpuContext {
     pub vram_class: VramClass,
 }
 
+impl Default for GpuContext {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl GpuContext {
     pub fn new() -> Self {
         pollster::block_on(async {
@@ -188,5 +194,96 @@ impl GpuContext {
                 vram_class,
             }
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Build a neutral `AdapterInfo` with only the two fields `detect` reads.
+    fn info(name: &str, device_type: wgpu::DeviceType) -> wgpu::AdapterInfo {
+        wgpu::AdapterInfo {
+            name: name.to_string(),
+            vendor: 0,
+            device: 0,
+            device_type,
+            device_pci_bus_id: String::new(),
+            driver: String::new(),
+            driver_info: String::new(),
+            backend: wgpu::Backend::Noop,
+            subgroup_min_size: 0,
+            subgroup_max_size: 0,
+            transient_saves_memory: false,
+        }
+    }
+
+    #[test]
+    fn apple_silicon_is_high() {
+        // Matched before the integrated-GPU fallback, and case-insensitively.
+        assert_eq!(
+            VramClass::detect(&info("Apple M4 Max", wgpu::DeviceType::IntegratedGpu)),
+            VramClass::High
+        );
+        assert_eq!(
+            VramClass::detect(&info("apple m1", wgpu::DeviceType::IntegratedGpu)),
+            VramClass::High
+        );
+    }
+
+    #[test]
+    fn known_tiny_cards_are_low() {
+        for name in [
+            "NVIDIA GeForce MX150",
+            "AMD Radeon RX 550",
+            "Intel Arc A380 Graphics",
+            "Intel UHD Graphics 620",
+        ] {
+            assert_eq!(
+                VramClass::detect(&info(name, wgpu::DeviceType::DiscreteGpu)),
+                VramClass::Low,
+                "{name} should be Low"
+            );
+        }
+    }
+
+    #[test]
+    fn cpu_and_other_device_types_are_low() {
+        assert_eq!(
+            VramClass::detect(&info("llvmpipe", wgpu::DeviceType::Cpu)),
+            VramClass::Low
+        );
+        assert_eq!(
+            VramClass::detect(&info("software", wgpu::DeviceType::Other)),
+            VramClass::Low
+        );
+    }
+
+    #[test]
+    fn unknown_gpus_default_to_mid() {
+        // Healthy discrete / integrated parts not on the tiny-card list.
+        assert_eq!(
+            VramClass::detect(&info(
+                "NVIDIA GeForce RTX 4090",
+                wgpu::DeviceType::DiscreteGpu
+            )),
+            VramClass::Mid
+        );
+        assert_eq!(
+            VramClass::detect(&info(
+                "Intel Iris Plus Graphics",
+                wgpu::DeviceType::IntegratedGpu
+            )),
+            VramClass::Mid
+        );
+        // GTX 1650 has 4 GB — explicitly NOT downgraded (OOM handler catches the
+        // rare reload spike instead).
+        assert_eq!(
+            VramClass::detect(&info(
+                "NVIDIA GeForce GTX 1650",
+                wgpu::DeviceType::DiscreteGpu
+            )),
+            VramClass::Mid
+        );
     }
 }

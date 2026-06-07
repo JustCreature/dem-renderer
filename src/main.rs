@@ -25,12 +25,17 @@ use winit::event::WindowEvent;
 use winit::event_loop::ActiveEventLoop;
 use winit::window::WindowId;
 
-// ── Phase state machine ──────────────────────────────────────────────────────
+// Phase state machine
 // A single ApplicationHandler delegates to the active phase.  Switching from
 // Launcher to Viewer never calls el.exit(), so winit never hides the window and
 // the surface is transferred in-place — the platform layer (CAMetalLayer, etc.)
 // stays alive continuously, eliminating the visible flash.
 
+// Exactly one `Phase` exists for the whole process and it is swapped in place at the
+// single Launcher→Viewer transition — it is never held in a collection, so the
+// per-element size penalty the lint guards against does not apply. Boxing `Viewer`
+// would add a pointer chase to every `window_event` dispatch for no benefit.
+#[allow(clippy::large_enum_variant)]
 enum Phase {
     Launcher(launcher::LauncherApp),
     Viewer(viewer::Viewer),

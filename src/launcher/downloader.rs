@@ -104,7 +104,7 @@ pub fn begin_download(tiles_dir: PathBuf) -> (mpsc::Receiver<DownloadProgress>, 
             return;
         }
 
-        // ── Phase 1: check which files need downloading ────────────────────
+        // Phase 1: check which files need downloading
         let mut tasks: Vec<FileTask> = Vec::new();
 
         for (i, entry) in entries.iter().enumerate() {
@@ -155,7 +155,7 @@ pub fn begin_download(tiles_dir: PathBuf) -> (mpsc::Receiver<DownloadProgress>, 
             return;
         }
 
-        // ── Phase 2: download only what's missing ─────────────────────────
+        // Phase 2: download only what's missing
         // bytes_done / bytes_total tracks only the actual download work in this
         // session — pre-existing bytes are excluded so the ring goes 0 → 100 %
         // cleanly without the 100 → 65 % regression caused by skipped files.
@@ -170,26 +170,25 @@ pub fn begin_download(tiles_dir: PathBuf) -> (mpsc::Receiver<DownloadProgress>, 
                 break;
             }
 
-            if let Some(parent) = task.dest_path.parent() {
-                if let Err(e) = std::fs::create_dir_all(parent) {
-                    let _ = tx.send(DownloadProgress {
-                        file_index: task.global_idx,
-                        total_files,
-                        display_name: task.display_name.clone(),
-                        bytes_done,
-                        bytes_total,
-                        current_file_bytes: task.resume_from,
-                        current_file_size: task.remote_size,
-                        is_complete: false,
-                        error: Some(format!("mkdir failed: {e}")),
-                    });
-                    return;
-                }
+            if let Some(parent) = task.dest_path.parent()
+                && let Err(e) = std::fs::create_dir_all(parent)
+            {
+                let _ = tx.send(DownloadProgress {
+                    file_index: task.global_idx,
+                    total_files,
+                    display_name: task.display_name.clone(),
+                    bytes_done,
+                    bytes_total,
+                    current_file_bytes: task.resume_from,
+                    current_file_size: task.remote_size,
+                    is_complete: false,
+                    error: Some(format!("mkdir failed: {e}")),
+                });
+                return;
             }
 
             let file = if task.resume_from > 0 {
                 std::fs::OpenOptions::new()
-                    .write(true)
                     .append(true)
                     .open(&task.dest_path)
             } else {

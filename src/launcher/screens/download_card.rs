@@ -36,7 +36,7 @@ pub fn show(ctx: &egui::Context, progress: &DownloadProgress) -> Option<Download
                     ui.horizontal(|ui| {
                         ui.spacing_mut().item_spacing = Vec2::new(16.0, 0.0);
 
-                        // ── Ring ──────────────────────────────────────
+                        // Ring
                         let (ring_resp, ring_painter) =
                             ui.allocate_painter(Vec2::new(72.0, 72.0), Sense::hover());
                         let center = ring_resp.rect.center();
@@ -103,7 +103,7 @@ pub fn show(ctx: &egui::Context, progress: &DownloadProgress) -> Option<Download
                             center_color,
                         );
 
-                        // ── Body ──────────────────────────────────────
+                        // Body
                         ui.vertical(|ui| {
                             ui.set_width(285.0);
                             ui.spacing_mut().item_spacing = Vec2::new(0.0, 5.0);

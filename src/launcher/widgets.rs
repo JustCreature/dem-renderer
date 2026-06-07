@@ -5,6 +5,8 @@ use super::style::*;
 /// Horizontal menu row with number, label, meta text, and animated hover arrow.
 /// `anim` is a persistent [0,1] float owned by the caller; mutated each frame.
 /// Returns true if clicked.
+// Layout/label/state inputs for one animated row; flat arg list mirrors the call sites.
+#[allow(clippy::too_many_arguments)]
 pub fn menu_row(
     ui: &mut Ui,
     num: &str,

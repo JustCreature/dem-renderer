@@ -542,3 +542,212 @@ pub fn parse_bil(bil_path: &Path) -> Result<Heightmap, DemError> {
 
     Ok(heightmap)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Minimal projected heightmap (1 m/px, sentinel −9999). dx_deg = 0 marks it
+    /// projected for the code paths that branch on that.
+    fn mk_hm(rows: usize, cols: usize, data: Vec<f32>) -> Heightmap {
+        assert_eq!(data.len(), rows * cols, "mk_hm: data length mismatch");
+        Heightmap {
+            data,
+            rows,
+            cols,
+            nodata: -9999.0,
+            origin_lat: 0.0,
+            origin_lon: 0.0,
+            dx_deg: 0.0,
+            dy_deg: 0.0,
+            dx_meters: 1.0,
+            dy_meters: 1.0,
+            crs_origin_x: 0.0,
+            crs_origin_y: 0.0,
+            crs_epsg: 0,
+            crs_proj4: String::new(),
+        }
+    }
+
+    /// Geographic heightmap with a top-left (lon, lat) origin and 1°/px spacing.
+    /// `proj4` carries "longlat" so `is_geographic` is true and `fill_nodata_from_base`
+    /// stays in its arithmetic-only branch (no proj4rs transform → deterministic).
+    fn mk_geo(rows: usize, cols: usize, lon0: f64, lat0: f64, data: Vec<f32>) -> Heightmap {
+        let mut hm = mk_hm(rows, cols, data);
+        hm.dx_deg = 1.0;
+        hm.dy_deg = 1.0;
+        hm.crs_origin_x = lon0;
+        hm.crs_origin_y = lat0;
+        hm.origin_lon = lon0;
+        hm.origin_lat = lat0;
+        hm.crs_proj4 = "+proj=longlat +datum=WGS84 +no_defs".to_string();
+        hm
+    }
+
+    // fill_nodata
+
+    #[test]
+    fn fill_nodata_fills_with_mean_of_nearest_valid_along_rays() {
+        // Center is nodata; its four cardinal neighbours are 10/20/30/40.
+        // get_value_from_neighbours averages the nearest valid cell in each ray.
+        let n = -9999.0;
+        #[rustfmt::skip]
+        let mut data = vec![
+            0.0, 20.0, 0.0,
+            10.0,  n,  40.0,
+            0.0, 30.0, 0.0,
+        ];
+        // The corner zeros are valid data (0.0 is not the sentinel here).
+        fill_nodata(&mut data, 3, 3, n);
+        assert_eq!(data[4], (20.0 + 30.0 + 10.0 + 40.0) / 4.0);
+    }
+
+    #[test]
+    fn fill_nodata_scans_past_intervening_nodata_to_next_valid() {
+        // Row 0: [nodata, nodata, 7]. The cell at (0,0) finds 7 by scanning right
+        // past the intervening nodata, and finds nothing up/left/down → mean = 7.
+        let n = -9999.0;
+        let mut data = vec![n, n, 7.0];
+        fill_nodata(&mut data, 1, 3, n);
+        assert_eq!(data[0], 7.0);
+    }
+
+    #[test]
+    fn fill_nodata_isolated_yields_nan_documents_open_bug() {
+        // KNOWN BUG (see CLAUDE.md "Open Items": fill_nodata division-by-zero if all
+        // 4 directions hit a boundary without finding valid data). A 1×1 all-nodata
+        // map has zero valid neighbours → 0.0/0.0 → NaN. This test PINS the current
+        // (buggy) behavior; a fix that returns a sentinel/leaves the value should
+        // update this assertion.
+        let n = -9999.0;
+        let mut data = vec![n];
+        fill_nodata(&mut data, 1, 1, n);
+        assert!(data[0].is_nan(), "expected NaN tripwire, got {}", data[0]);
+    }
+
+    #[test]
+    fn fill_nodata_fully_nodata_region_propagates_nan() {
+        // A 3×3 with no valid cell anywhere: the first cell averages an empty set
+        // → NaN, and because `NaN != sentinel`, the NaN then counts as a "valid"
+        // neighbour for later cells, so the whole grid turns to NaN. (Same root
+        // div-by-zero bug; demonstrates it spreads, not just a single cell.)
+        let n = -9999.0;
+        let mut data = vec![n; 9];
+        fill_nodata(&mut data, 3, 3, n);
+        assert!(
+            data.iter().all(|v| v.is_nan()),
+            "all cells should be NaN: {data:?}"
+        );
+    }
+
+    #[test]
+    fn fill_nodata_all_valid_is_noop() {
+        let n = -9999.0;
+        let mut data = vec![1.0, 2.0, 3.0, 4.0];
+        let before = data.clone();
+        fill_nodata(&mut data, 2, 2, n);
+        assert_eq!(data, before);
+    }
+
+    // clamp_nodata_to_sea
+
+    #[test]
+    fn clamp_nodata_to_sea_uses_strict_less_than() {
+        let mut hm = mk_hm(1, 4, vec![-1000.1, -1000.0, -5000.0, 42.0]);
+        clamp_nodata_to_sea(&mut hm);
+        assert_eq!(hm.data[0], 0.0, "below −1000 → sea");
+        assert_eq!(
+            hm.data[1], -1000.0,
+            "exactly −1000 is NOT clamped (strict <)"
+        );
+        assert_eq!(hm.data[2], 0.0);
+        assert_eq!(hm.data[3], 42.0, "valid terrain untouched");
+    }
+
+    #[test]
+    fn clamp_nodata_to_sea_leaves_nan_unchanged() {
+        // Surprising: NaN < -1000.0 is false, so NaN is never clamped to sea.
+        let mut hm = mk_hm(1, 1, vec![f32::NAN]);
+        clamp_nodata_to_sea(&mut hm);
+        assert!(hm.data[0].is_nan(), "NaN must survive clamp");
+    }
+
+    #[test]
+    fn clamp_nodata_to_sea_empty_is_noop() {
+        let mut hm = mk_hm(0, 0, vec![]);
+        clamp_nodata_to_sea(&mut hm);
+        assert!(hm.data.is_empty());
+    }
+
+    // fill_nodata_from_base
+
+    #[test]
+    fn fill_from_base_fills_fully_nodata_window() {
+        // Base is a constant 100 m plateau; hm is entirely nodata over the same
+        // geographic extent → every cell is filled to ~100.
+        let base = mk_geo(4, 4, 0.0, 4.0, vec![100.0; 16]);
+        let mut hm = mk_geo(4, 4, 0.0, 4.0, vec![-9999.0; 16]);
+        fill_nodata_from_base(&mut hm, &base);
+        for (i, &v) in hm.data.iter().enumerate() {
+            assert!((v - 100.0).abs() < 1e-3, "cell {i} = {v}, expected ~100");
+        }
+    }
+
+    #[test]
+    fn fill_from_base_leaves_valid_data_untouched_when_no_nodata() {
+        let base = mk_geo(4, 4, 0.0, 4.0, vec![100.0; 16]);
+        let mut hm = mk_geo(4, 4, 0.0, 4.0, (0..16).map(|i| i as f32 + 200.0).collect());
+        let before = hm.data.clone();
+        fill_nodata_from_base(&mut hm, &base);
+        assert_eq!(hm.data, before, "no nodata → no modification at all");
+    }
+
+    #[test]
+    fn fill_from_base_treats_exactly_minus_1000_as_nodata() {
+        // was_nodata uses `<= -1000.0` (note: clamp_nodata_to_sea uses strict `<`).
+        // One row of 40 cells: col 0 is the only nodata (−1000.0, exactly on the
+        // boundary). A valid −999.0 sits at col 39, far beyond the 30-px outward
+        // blend reach, so it stays untouched — proving −1000.0 was treated as
+        // nodata (filled from base) while −999.0 was treated as valid (kept).
+        let base = mk_geo(1, 40, 0.0, 1.0, vec![55.0; 40]);
+        let mut row = vec![50.0f32; 40];
+        row[0] = -1000.0;
+        row[39] = -999.0;
+        let mut hm = mk_geo(1, 40, 0.0, 1.0, row);
+        fill_nodata_from_base(&mut hm, &base);
+        assert!(
+            (hm.data[0] - 55.0).abs() < 1e-2,
+            "−1000 cell filled from base, got {}",
+            hm.data[0]
+        );
+        assert_eq!(hm.data[39], -999.0, "−999 (valid, far from seam) is kept");
+    }
+
+    #[test]
+    fn fill_from_base_keeps_sentinel_where_base_does_not_cover() {
+        // Base sits far to the east (lon 1000..) so every hm cell maps outside the
+        // base raster → get_base returns −9999, wt stays 0, the cell is left as the
+        // nodata sentinel rather than corrupted.
+        let base = mk_geo(2, 2, 1000.0, 2.0, vec![55.0; 4]);
+        let mut hm = mk_geo(2, 2, 0.0, 2.0, vec![-9999.0; 4]);
+        fill_nodata_from_base(&mut hm, &base);
+        for &v in &hm.data {
+            assert!(v <= -1000.0, "uncovered cell kept as sentinel, got {v}");
+        }
+    }
+
+    #[test]
+    fn fill_from_base_empty_inputs_early_return() {
+        let base = mk_geo(2, 2, 0.0, 2.0, vec![1.0; 4]);
+        let mut empty = mk_geo(0, 0, 0.0, 0.0, vec![]);
+        fill_nodata_from_base(&mut empty, &base); // must not panic
+        assert!(empty.data.is_empty());
+
+        let mut hm = mk_geo(2, 2, 0.0, 2.0, vec![-9999.0; 4]);
+        let empty_base = mk_geo(0, 0, 0.0, 0.0, vec![]);
+        fill_nodata_from_base(&mut hm, &empty_base); // empty base → early return
+        for &v in &hm.data {
+            assert!(v <= -1000.0, "empty base must not fill anything");
+        }
+    }
+}

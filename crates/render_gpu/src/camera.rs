@@ -1,5 +1,3 @@
-use dem_io::Heightmap;
-
 use crate::vector_utils::*;
 
 // GPU-ready camera data. Must match the WGSL struct byte-for-byte.
@@ -57,78 +55,76 @@ pub struct CameraUniforms {
     pub _pad7: f32,
 }
 
-impl CameraUniforms {
-    pub fn new(
-        origin: [f32; 3],
-        look_at: [f32; 3],
-        fov_deg: f32,
-        aspect: f32,
-        hm: &Heightmap,
-        sun_dir: [f32; 3],
-        img_width: u32,
-        img_height: u32,
-        step_m: f32,
-        t_max: f32,
-        ao_mode: u32,
-        shadows_enabled: u32,
-        fog_enabled: u32,
-        vat_mode: u32,
-        lod_mode: u32,
-    ) -> CameraUniforms {
-        let forward: [f32; 3] = normalize(sub(look_at, origin));
-        let right: [f32; 3] = normalize(cross(forward, [0.0, 0.0, 1.0]));
-        // let right = normalize(cross([0.0, 0.0, 1.0], forward)); // reversed cross
-        let up: [f32; 3] = cross(right, forward);
-        let half_w: f32 = (fov_deg / 2.0).to_radians().tan();
-        let half_h: f32 = half_w / aspect;
+/// World-space camera basis `(forward, right, up)` for a +Z-up look-at camera.
+/// Shared by every `CameraUniforms` build site so the basis math lives in one place.
+pub(crate) fn camera_basis(origin: [f32; 3], look_at: [f32; 3]) -> ([f32; 3], [f32; 3], [f32; 3]) {
+    let forward = normalize(sub(look_at, origin));
+    let right = normalize(cross(forward, [0.0, 0.0, 1.0]));
+    let up = cross(right, forward);
+    (forward, right, up)
+}
 
-        CameraUniforms {
-            origin,
-            _pad0: 0.0,
-            forward,
-            _pad1: 0.0,
-            right,
-            _pad2: 0.0,
-            up,
-            _pad3: 0.0,
-            sun_dir,
-            _pad4: 0.0,
-            half_w,
-            half_h,
-            img_width,
-            img_height,
-            hm_cols: hm.cols as u32,
-            hm_rows: hm.rows as u32,
-            dx_meters: hm.dx_meters as f32,
-            dy_meters: hm.dy_meters as f32,
-            step_m,
-            t_max,
-            ao_mode,
-            _pad5: 0.0,
-            shadows_enabled,
-            fog_enabled,
-            vat_mode,
-            lod_mode,
-            hm5m_origin_x: 0.0,
-            hm5m_origin_y: 0.0,
-            hm5m_extent_x: 0.0,
-            hm5m_extent_y: 0.0,
-            hm5m_cols: 0,
-            hm5m_rows: 0,
-            hm5m_cos_rot: 1.0,
-            hm5m_sin_rot: 0.0,
-            hm1m_origin_x: 0.0,
-            hm1m_origin_y: 0.0,
-            hm1m_extent_x: 0.0,
-            hm1m_extent_y: 0.0,
-            hm1m_cols: 0,
-            hm1m_rows: 0,
-            hm1m_cos_rot: 1.0,
-            hm1m_sin_rot: 0.0,
-            max_terrain_h: hm.data.iter().cloned().fold(f32::NEG_INFINITY, f32::max),
-            smooth_radius_m: 2000.0,
-            align_mode: 0,
-            _pad7: 0.0,
-        }
+/// Near-plane half-extents `(half_w, half_h)` from horizontal fov and aspect ratio.
+pub(crate) fn projection_half_extents(fov_deg: f32, aspect: f32) -> (f32, f32) {
+    let half_w = (fov_deg / 2.0).to_radians().tan();
+    (half_w, half_w / aspect)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn dot(a: [f32; 3], b: [f32; 3]) -> f32 {
+        a[0] * b[0] + a[1] * b[1] + a[2] * b[2]
+    }
+    fn len(a: [f32; 3]) -> f32 {
+        dot(a, a).sqrt()
+    }
+
+    /// Layout guard: the struct is mirrored byte-for-byte in WGSL (std140). Any
+    /// field added/removed/reordered without updating the shader must trip this.
+    /// Total: 14 vec4-sized rows × 16 bytes = 224.
+    ///
+    /// The size check alone would pass a same-size field swap, so we also pin the
+    /// offsets of the std140-sensitive `vec3` members — each must sit on a 16-byte
+    /// boundary, which is exactly what the trailing `_padN` fields exist to enforce.
+    /// A missing pad shifts one of these and fails here instead of silently making
+    /// the shader read the wrong bytes.
+    #[test]
+    fn camera_uniforms_layout_is_std140() {
+        assert_eq!(std::mem::size_of::<CameraUniforms>(), 224);
+        assert_eq!(std::mem::offset_of!(CameraUniforms, origin), 0);
+        assert_eq!(std::mem::offset_of!(CameraUniforms, forward), 16);
+        assert_eq!(std::mem::offset_of!(CameraUniforms, right), 32);
+        assert_eq!(std::mem::offset_of!(CameraUniforms, up), 48);
+        assert_eq!(std::mem::offset_of!(CameraUniforms, sun_dir), 64);
+    }
+
+    #[test]
+    fn camera_basis_is_orthonormal() {
+        let (forward, right, up) = camera_basis(
+            [0.0, 0.0, 1000.0], // origin
+            [100.0, 50.0, 0.0], // look_at (not parallel to world up)
+        );
+
+        let eps = 1e-5;
+        assert!((len(forward) - 1.0).abs() < eps, "forward not unit");
+        assert!((len(right) - 1.0).abs() < eps, "right not unit");
+        assert!((len(up) - 1.0).abs() < eps, "up not unit");
+        assert!(dot(forward, right).abs() < eps, "forward·right ≠ 0");
+        assert!(dot(forward, up).abs() < eps, "forward·up ≠ 0");
+        assert!(dot(right, up).abs() < eps, "right·up ≠ 0");
+    }
+
+    #[test]
+    fn projection_half_extents_scale_with_aspect() {
+        let aspect = 2.0;
+        let (half_w, half_h) = projection_half_extents(90.0, aspect);
+        // 90° horizontal fov → half_w = tan(45°) = 1.
+        assert!((half_w - 1.0).abs() < 1e-6, "half_w");
+        assert!(
+            (half_h - half_w / aspect).abs() < 1e-6,
+            "half_h tracks aspect"
+        );
     }
 }

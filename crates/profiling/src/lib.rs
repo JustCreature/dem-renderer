@@ -35,8 +35,8 @@ mod test {
     fn now_is_monotonically_increasing() {
         let mut samples = [0u64; 5];
 
-        for i in 0..5 {
-            samples[i] = now();
+        for s in samples.iter_mut() {
+            *s = now();
             std::thread::sleep(std::time::Duration::from_millis(1));
         }
 

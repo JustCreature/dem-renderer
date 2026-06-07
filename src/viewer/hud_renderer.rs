@@ -204,7 +204,7 @@ fn build_vertices(width: u32, height: u32) -> [f32; 36] {
     ]
 }
 
-// ── Sun / season indicator ────────────────────────────────────────────────────
+// Sun / season indicator
 
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
@@ -619,6 +619,8 @@ impl HudRenderer {
         );
     }
 
+    // Per-frame HUD state (camera/sun/settings/fps) forwarded to the overlay; kept flat.
+    #[allow(clippy::too_many_arguments)]
     pub fn draw(
         &mut self,
         queue: &wgpu::Queue,
@@ -813,7 +815,7 @@ impl HudRenderer {
                         default_color: glyphon::Color::rgb(255, 90, 90),
                         custom_glyphs: &[],
                     },
-                    // ── Season circle labels — shadows ───────────────────────
+                    // Season circle labels — shadows
                     build_label_text_area(
                         &self.lbl_summer,
                         cx - lw / 2.0 + 1.0,
@@ -847,7 +849,7 @@ impl HudRenderer {
                         h,
                         shd,
                     ),
-                    // ── Season circle labels — real ──────────────────────────
+                    // Season circle labels — real
                     build_label_text_area(
                         &self.lbl_summer,
                         cx - lw / 2.0,
@@ -881,7 +883,7 @@ impl HudRenderer {
                         h,
                         dim,
                     ),
-                    // ── Time circle labels — shadows ─────────────────────────
+                    // Time circle labels — shadows
                     build_label_text_area(
                         &self.lbl_12,
                         cx - lw / 2.0 + 1.0,
@@ -908,7 +910,7 @@ impl HudRenderer {
                         h,
                         shd,
                     ),
-                    // ── Time circle labels — real ────────────────────────────
+                    // Time circle labels — real
                     build_label_text_area(&self.lbl_12, cx - lw / 2.0, cy2 - r - 20.0, w, h, dim),
                     build_label_text_area(&self.lbl_18, cx - lw / 2.0, cy2 + r + 4.0, w, h, dim),
                     build_label_text_area(&self.lbl_15, cx + r + 4.0, cy2 - 8.0, w, h, dim),
@@ -929,7 +931,7 @@ impl HudRenderer {
         let mut rpass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
             label: Some("hud"),
             color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                view: &surface_view,
+                view: surface_view,
                 resolve_target: None,
                 ops: wgpu::Operations {
                     load: wgpu::LoadOp::Load,

@@ -123,6 +123,8 @@ pub(crate) fn prepare_demo_scene_with_ctx(
 /// `vram_budget` drives the initial base-tier extract radius so a Low preset doesn't read
 /// a 90 km window only to crop it. The adapter-derived `gpu_ctx.vram_class` is logged for
 /// context but the user's choice always wins.
+// Args are the distinct scene-preparation inputs (paths, camera, settings, gpu ctx).
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn prepare_scene_with_ctx(
     gpu_ctx: GpuContext,
     tile_path: &Path,
@@ -160,7 +162,7 @@ pub(crate) fn prepare_scene_with_ctx(
         } else {
             let centre_crs = dem_io::crs::from_wgs84(cam_lat, cam_lon, &proj4)
                 .or_else(|_| dem_io::tile_centre_crs(tile_path))
-                .unwrap_or_else(|_| (0.0, 0.0));
+                .unwrap_or((0.0, 0.0));
 
             // For projected high-res single-IFD tiles: build the overview cache NOW, before
             // loading any pixel data.  For a 10 GB source this avoids reading the full tile

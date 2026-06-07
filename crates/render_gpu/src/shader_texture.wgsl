@@ -355,11 +355,11 @@ fn binary_search_hit(t_lo_in: f32, t_hi_in: f32, dir: vec3<f32>, iterations: i32
 fn sky_color(dz: f32, alt_m: f32) -> vec3<f32> {
     let t = clamp(dz, 0.0, 1.0);
     let curve = pow(t, 0.65);
-    let horizon     = vec3<f32>(110.0, 170.0, 215.0);
-    let zenith_low  = vec3<f32>(95.0,  145.0, 200.0);  // sea level overhead
-    let zenith_mid  = vec3<f32>(8.0,    14.0,  42.0);  // ~3 km overhead
-    let zenith_high = vec3<f32>(2.0,     4.0,  18.0);  // ~10 km+ overhead
-    let stage1 = smoothstep(0.0,    3000.0,  alt_m);
+    let horizon = vec3<f32>(110.0, 170.0, 215.0);
+    let zenith_low = vec3<f32>(95.0, 145.0, 200.0);  // sea level overhead
+    let zenith_mid = vec3<f32>(8.0, 14.0, 42.0);  // ~3 km overhead
+    let zenith_high = vec3<f32>(2.0, 4.0, 18.0);  // ~10 km+ overhead
+    let stage1 = smoothstep(0.0, 3000.0, alt_m);
     let stage2 = smoothstep(3000.0, 10000.0, alt_m);
     let zenith = mix(mix(zenith_low, zenith_mid, stage1), zenith_high, stage2);
     return mix(horizon, zenith, curve);
@@ -383,7 +383,7 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
     let ndc_y = 1.0 - 2.0 * v;    // flip vertical
     let dir = normalize(cam.forward + cam.right * ndc_x * cam.half_w + cam.up * ndc_y * cam.half_h);
 
-    // ── Alignment visualisation mode ────────────────────────────────────────────
+    // Alignment visualisation mode
     // Each tier's height field is marched independently.  Hits are composited with
     // equal additive weighting: green = 30m base, blue = 5m close, red = 1m fine.
     if cam.align_mode == 1u {
@@ -516,7 +516,7 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
         }
         return;
     }
-    // ── End alignment viz — normal rendering follows ─────────────────────────
+    // End alignment viz — normal rendering follows
 
     var pos = cam.origin;
     var t = 0.0;
@@ -599,7 +599,7 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
             in_close_hit
         );
 
-        // ── base tier normals and shadow (always computed) ──
+        // base tier normals and shadow (always computed)
         let col_f = pos.x / cam.dx_meters;
         let row_f = pos.y / cam.dy_meters;
         let col0 = i32(col_f);
@@ -622,7 +622,7 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
         var hit_uv: vec2<f32>;
 
         if t5 > 0.0 {
-            // ── close tier normals (texture sample) and shadow (buffer bilinear) ──
+            // close tier normals (texture sample) and shadow (buffer bilinear)
             let ah5 = apply_convergence_5m(lx_hit, ly_hit);
             let close_uv = vec2<f32>(ah5.x / cam.hm5m_extent_x, ah5.y / cam.hm5m_extent_y);
             // Zero out blend weight if height is NODATA so garbage normals don't bleed in.
@@ -654,14 +654,14 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
             hit_uv = base_uv;
         }
 
-        // ── 1m fine tier normals and shadow (nested inside 5m zone) ──
+        // 1m fine tier normals and shadow (nested inside 5m zone)
         if cam.hm1m_extent_x > 0.0 {
             let lx1 = pos.x - cam.hm1m_origin_x;
             let ly1 = pos.y - cam.hm1m_origin_y;
             let in_1m = lx1 >= 0.0 && lx1 < cam.hm1m_extent_x && ly1 >= 0.0 && ly1 < cam.hm1m_extent_y;
             let t1 = select(0.0, smoothstep(0.0, BLEND_MARGIN, fine_tier_edge_dist(lx1, ly1)), in_1m);
             if t1 > 0.0 {
-                // ── fine tier normals (texture sample) and shadow (buffer bilinear) ──
+                // fine tier normals (texture sample) and shadow (buffer bilinear)
                 let a1h = apply_convergence_1m(lx1, ly1);
                 let fine_uv = vec2<f32>(a1h.x / cam.hm1m_extent_x, a1h.y / cam.hm1m_extent_y);
 
@@ -815,7 +815,7 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
         let sky = sky_color(dir.z, cam.origin.z);
         let alt_visibility_mul = min(exp(max(cam.origin.z, 0.0) / 8000.0), 6.0);
         let fog_near = 15000.0 * alt_visibility_mul;   // 15 km at sea level
-        let fog_far  = 60000.0 * alt_visibility_mul;   // 60 km at sea level
+        let fog_far = 60000.0 * alt_visibility_mul;   // 60 km at sea level
         let fog_t = select(0.0, smoothstep(fog_near, fog_far, t), cam.fog_enabled == 1u);
 
         let fr = mix(f32(r), sky.x, fog_t);
