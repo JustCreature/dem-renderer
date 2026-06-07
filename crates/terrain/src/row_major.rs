@@ -39,6 +39,11 @@ pub fn compute_normals_scalar(hm: &dem_io::Heightmap) -> NormalMap {
     }
 }
 
+/// # Safety
+/// Uses `core::arch::aarch64` NEON intrinsics, so it must run on an aarch64 target.
+/// NEON is part of the aarch64 baseline (always present), and the
+/// `#[cfg(target_arch = "aarch64")]` gate plus the `lib.rs` dispatcher guarantee that —
+/// no additional runtime feature check is required of the caller.
 #[cfg(target_arch = "aarch64")]
 pub unsafe fn compute_normals_neon(hm: &dem_io::Heightmap) -> NormalMap {
     use core::arch::aarch64::*;
@@ -128,6 +133,11 @@ pub unsafe fn compute_normals_neon(hm: &dem_io::Heightmap) -> NormalMap {
     }
 }
 
+/// # Safety
+/// Uses `core::arch::aarch64` NEON intrinsics, so it must run on an aarch64 target.
+/// NEON is part of the aarch64 baseline (always present), and the
+/// `#[cfg(target_arch = "aarch64")]` gate plus the `lib.rs` dispatcher guarantee that —
+/// no additional runtime feature check is required of the caller.
 #[cfg(target_arch = "aarch64")]
 pub unsafe fn compute_normals_neon_parallel(hm: &dem_io::Heightmap) -> NormalMap {
     use core::arch::aarch64::*;

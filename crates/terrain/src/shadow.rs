@@ -184,6 +184,11 @@ pub fn compute_shadow_scalar_with_azimuth(
 
 // ── NEON 4-wide west-only ────────────────────────────────────────────────────
 
+/// # Safety
+/// Uses `core::arch::aarch64` NEON intrinsics, so it must run on an aarch64 target.
+/// NEON is part of the aarch64 baseline (always present), and the
+/// `#[cfg(target_arch = "aarch64")]` gate plus the `lib.rs` dispatcher guarantee that —
+/// no additional runtime feature check is required of the caller.
 #[cfg(target_arch = "aarch64")]
 pub unsafe fn compute_shadow_neon(hm: &Heightmap, sun_elevation_rad: f32) -> ShadowMask {
     use std::arch::aarch64::{
@@ -251,6 +256,11 @@ pub unsafe fn compute_shadow_neon(hm: &Heightmap, sun_elevation_rad: f32) -> Sha
 
 // ── NEON parallel west-only ───────────────────────────────────────────────────
 
+/// # Safety
+/// Uses `core::arch::aarch64` NEON intrinsics, so it must run on an aarch64 target.
+/// NEON is part of the aarch64 baseline (always present), and the
+/// `#[cfg(target_arch = "aarch64")]` gate plus the `lib.rs` dispatcher guarantee that —
+/// no additional runtime feature check is required of the caller.
 #[cfg(target_arch = "aarch64")]
 pub unsafe fn compute_shadow_neon_parallel(hm: &Heightmap, sun_elevation_rad: f32) -> ShadowMask {
     use std::arch::aarch64::{
@@ -299,6 +309,10 @@ pub unsafe fn compute_shadow_neon_parallel(hm: &Heightmap, sun_elevation_rad: f3
                     hm.data[base[2] + c],
                     hm.data[base[3] + c],
                 ];
+                // NEON lane N (`vgetq_lane_f32::<N>`) maps to output row N; the
+                // `0 *` / `1 *` keep that lane→row mapping explicit and parallel with
+                // the `2 *` / `3 *` stores below (lanes are const-generic, not a loop).
+                #[allow(clippy::erasing_op, clippy::identity_op)]
                 unsafe {
                     let h_vec = vld1q_f32(heights.as_ptr());
                     let h_eff = vaddq_f32(h_vec, vdupq_n_f32(c as f32 * step));
@@ -337,6 +351,12 @@ pub unsafe fn compute_shadow_neon_parallel(hm: &Heightmap, sun_elevation_rad: f3
 // AArch64 a 32-bit store is a single instruction — no torn writes.
 // The two threads write either 0.0 or 1.0; both are valid f32 values.
 
+/// # Safety
+/// Uses `core::arch::aarch64` NEON intrinsics, so it must run on an aarch64 target.
+/// NEON is part of the aarch64 baseline (always present), and the
+/// `#[cfg(target_arch = "aarch64")]` gate plus the `lib.rs` dispatcher guarantee that —
+/// no additional runtime feature check is required of the caller. (See the note above
+/// on benign overlapping corner writes for diagonal azimuths.)
 #[cfg(target_arch = "aarch64")]
 pub unsafe fn compute_shadow_neon_parallel_with_azimuth(
     hm: &Heightmap,
