@@ -216,11 +216,11 @@ fn numa_nodes() -> Option<String> {
             .filter_map(|e| e.ok())
             .filter(|e| e.file_name().to_string_lossy().starts_with("node"))
             .count();
-        return if count > 0 {
+        if count > 0 {
             Some(count.to_string())
         } else {
             None
-        };
+        }
     }
     #[cfg(target_os = "macos")]
     {
@@ -250,7 +250,7 @@ fn numa_nodes() -> Option<String> {
                 return Some(v.trim().to_string());
             }
         }
-        return None;
+        None
     }
     #[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "windows")))]
     None
@@ -372,7 +372,7 @@ fn linux_gpu() -> Option<String> {
         let lower = l.to_lowercase();
         lower.contains("vga") || lower.contains("3d controller") || lower.contains("display")
     })?;
-    Some(line.split(':').last()?.trim().to_string())
+    Some(line.split(':').next_back()?.trim().to_string())
 }
 
 #[allow(dead_code)]
