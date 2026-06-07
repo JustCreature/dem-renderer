@@ -409,45 +409,43 @@ impl BevBaseState {
             tiles_overlapping_wgs84(&close_index, cam_lat, cam_lon, close_radius_m);
         if let Some(&ci) = overlapping_close.first() {
             let entry = &close_index[ci];
-            if let Ok((cx, cy)) = dem_io::crs::from_wgs84(cam_lat, cam_lon, &entry.crs_proj4) {
-                if let Ok(hm5m_init) =
+            if let Ok((cx, cy)) = dem_io::crs::from_wgs84(cam_lat, cam_lon, &entry.crs_proj4)
+                && let Ok(hm5m_init) =
                     extract_window(&entry.path, (cx, cy), close_radius_m, entry.ifd)
-                {
-                    let mut hm5m_init = cap_to_gpu_limit(hm5m_init, cx, cy);
-                    dem_io::fill_nodata_from_base(&mut hm5m_init, hm);
-                    dem_io::clamp_nodata_to_sea(&mut hm5m_init);
-                    // When the GPU cap shrinks the window below close_radius_m (e.g. 1m tiles with no
-                    // overviews), keep the threshold at ≤ half the actual window half-extent so the
-                    // camera never exits the loaded window before a reload fires.
-                    let close_half_m = (hm5m_init.cols as f64 * hm5m_init.dx_meters)
-                        .min(hm5m_init.rows as f64 * hm5m_init.dy_meters)
-                        * 0.5;
-                    effective_close_threshold = radii.close_drift_m.min(close_half_m * 0.5);
-                    let (origin_x, origin_y, extent_x, extent_y, rot_rad) =
-                        cross_crs_world_origin_and_extent(&hm5m_init, hm);
-                    let hm5m_init = Arc::new(hm5m_init);
-                    if let Ok(mut g) = recent_5m.lock() {
-                        *g = Some(Arc::clone(&hm5m_init));
-                    }
-                    let normals5 = terrain::compute_normals_vector_par(&hm5m_init);
-                    let (az, el) = sun_position(lat_rad, INIT_SIM_DAY, INIT_SIM_HOUR);
-                    let shadow5 =
-                        terrain::compute_shadow_vector_par_with_azimuth(&hm5m_init, az, el, 200.0);
-                    let normals5_rg16 =
-                        render_gpu::pack_normals_rg16_bytes(&normals5.nx, &normals5.ny);
-                    last_5m_lat = cam_lat;
-                    last_5m_lon = cam_lon;
-                    scene.upload_hm5m(
-                        origin_x,
-                        origin_y,
-                        rot_rad,
-                        extent_x,
-                        extent_y,
-                        &hm5m_init,
-                        &normals5_rg16,
-                        &shadow5,
-                    );
+            {
+                let mut hm5m_init = cap_to_gpu_limit(hm5m_init, cx, cy);
+                dem_io::fill_nodata_from_base(&mut hm5m_init, hm);
+                dem_io::clamp_nodata_to_sea(&mut hm5m_init);
+                // When the GPU cap shrinks the window below close_radius_m (e.g. 1m tiles with no
+                // overviews), keep the threshold at ≤ half the actual window half-extent so the
+                // camera never exits the loaded window before a reload fires.
+                let close_half_m = (hm5m_init.cols as f64 * hm5m_init.dx_meters)
+                    .min(hm5m_init.rows as f64 * hm5m_init.dy_meters)
+                    * 0.5;
+                effective_close_threshold = radii.close_drift_m.min(close_half_m * 0.5);
+                let (origin_x, origin_y, extent_x, extent_y, rot_rad) =
+                    cross_crs_world_origin_and_extent(&hm5m_init, hm);
+                let hm5m_init = Arc::new(hm5m_init);
+                if let Ok(mut g) = recent_5m.lock() {
+                    *g = Some(Arc::clone(&hm5m_init));
                 }
+                let normals5 = terrain::compute_normals_vector_par(&hm5m_init);
+                let (az, el) = sun_position(lat_rad, INIT_SIM_DAY, INIT_SIM_HOUR);
+                let shadow5 =
+                    terrain::compute_shadow_vector_par_with_azimuth(&hm5m_init, az, el, 200.0);
+                let normals5_rg16 = render_gpu::pack_normals_rg16_bytes(&normals5.nx, &normals5.ny);
+                last_5m_lat = cam_lat;
+                last_5m_lon = cam_lon;
+                scene.upload_hm5m(
+                    origin_x,
+                    origin_y,
+                    rot_rad,
+                    extent_x,
+                    extent_y,
+                    &hm5m_init,
+                    &normals5_rg16,
+                    &shadow5,
+                );
             }
         }
 
@@ -498,10 +496,10 @@ impl BevBaseState {
                         stitch_windows(windows, e_tile, n_tile, fine_radius_m)
                     };
                     let mut raw1m = cap_to_gpu_limit(raw1m, e_tile, n_tile);
-                    if let Ok(g) = recent_5m_w.lock() {
-                        if let Some(ref close_hm) = *g {
-                            dem_io::fill_nodata_from_base(&mut raw1m, close_hm);
-                        }
+                    if let Ok(g) = recent_5m_w.lock()
+                        && let Some(ref close_hm) = *g
+                    {
+                        dem_io::fill_nodata_from_base(&mut raw1m, close_hm);
                     }
                     dem_io::clamp_nodata_to_sea(&mut raw1m);
                     let hm1m = Arc::new(raw1m);
@@ -792,7 +790,10 @@ mod tests {
     #[test]
     fn needs_reload_fires_past_threshold_on_either_axis() {
         let t = streaming_tier(1000.0, 1000.0, 100.0);
-        assert!(!t.needs_reload(1050.0, 1050.0), "within threshold on both axes");
+        assert!(
+            !t.needs_reload(1050.0, 1050.0),
+            "within threshold on both axes"
+        );
         assert!(t.needs_reload(1150.0, 1000.0), "x drift exceeds threshold");
         assert!(t.needs_reload(1000.0, 1150.0), "y drift exceeds threshold");
     }
@@ -811,7 +812,10 @@ mod tests {
         let mut t = streaming_tier(1000.0, 1000.0, 100.0);
         assert!(t.needs_reload(1150.0, 1000.0));
         t.update_threshold(2_000.0);
-        assert!(!t.needs_reload(1150.0, 1000.0), "150 m drift is now within 2 km");
+        assert!(
+            !t.needs_reload(1150.0, 1000.0),
+            "150 m drift is now within 2 km"
+        );
     }
 
     #[test]
@@ -825,7 +829,11 @@ mod tests {
         worker_tx
             .send(TierData {
                 hm,
-                shadow: ShadowMask { data: vec![1.0; 4], rows: 2, cols: 2 },
+                shadow: ShadowMask {
+                    data: vec![1.0; 4],
+                    rows: 2,
+                    cols: 2,
+                },
                 centre_lat: 47.5,
                 centre_lon: 11.5,
                 gpu_normals_rg16: Vec::new(),

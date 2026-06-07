@@ -197,6 +197,50 @@ fn default_tile_5m_path() -> PathBuf {
     LauncherSettings::default().tile_5m_path
 }
 
+impl LauncherSettings {
+    pub fn config_path() -> Option<PathBuf> {
+        dirs::config_dir().map(|d| d.join("dem_renderer").join("config.toml"))
+    }
+
+    pub fn load() -> Self {
+        let Some(path) = Self::config_path() else {
+            return Self::default();
+        };
+        let Ok(text) = std::fs::read_to_string(&path) else {
+            return Self::default();
+        };
+        toml::from_str(&text).unwrap_or_default()
+    }
+
+    pub fn save(&self) {
+        let Some(path) = Self::config_path() else {
+            return;
+        };
+        if let Some(parent) = path.parent() {
+            let _ = std::fs::create_dir_all(parent);
+        }
+        if let Ok(text) = toml::to_string_pretty(self) {
+            let _ = std::fs::write(&path, text);
+        }
+    }
+}
+
+// One live value at a time, handed straight from launcher to viewer and consumed —
+// never stored in a collection, so the per-element size penalty the lint guards
+// against does not apply; boxing `Start` would only add an allocation on the path.
+#[allow(clippy::large_enum_variant)]
+pub enum LauncherOutcome {
+    Exit,
+    Start {
+        window: Arc<Window>,
+        settings: LauncherSettings,
+        prepared: crate::viewer::PreparedScene,
+        /// Launcher's surface, handed to the viewer so it can be reconfigured in-place
+        /// (no drop+recreate = no visible flash during the transition).
+        surface: wgpu::Surface<'static>,
+    },
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -267,44 +311,4 @@ mod tests {
         assert!(!d.close_tile_paths.is_empty());
         assert!(!d.fine_tile_paths.is_empty());
     }
-}
-
-impl LauncherSettings {
-    pub fn config_path() -> Option<PathBuf> {
-        dirs::config_dir().map(|d| d.join("dem_renderer").join("config.toml"))
-    }
-
-    pub fn load() -> Self {
-        let Some(path) = Self::config_path() else {
-            return Self::default();
-        };
-        let Ok(text) = std::fs::read_to_string(&path) else {
-            return Self::default();
-        };
-        toml::from_str(&text).unwrap_or_default()
-    }
-
-    pub fn save(&self) {
-        let Some(path) = Self::config_path() else {
-            return;
-        };
-        if let Some(parent) = path.parent() {
-            let _ = std::fs::create_dir_all(parent);
-        }
-        if let Ok(text) = toml::to_string_pretty(self) {
-            let _ = std::fs::write(&path, text);
-        }
-    }
-}
-
-pub enum LauncherOutcome {
-    Exit,
-    Start {
-        window: Arc<Window>,
-        settings: LauncherSettings,
-        prepared: crate::viewer::PreparedScene,
-        /// Launcher's surface, handed to the viewer so it can be reconfigured in-place
-        /// (no drop+recreate = no visible flash during the transition).
-        surface: wgpu::Surface<'static>,
-    },
 }

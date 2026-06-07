@@ -67,13 +67,12 @@ pub fn show(ui: &mut Ui, settings: &mut LauncherSettings) {
 
     opt_row(ui, "07", "Tiles directory", |ui| {
         // RTL: first added = rightmost
-        if small_button(ui, "Browse…", ButtonVariant::Primary) {
-            if let Some(dir) = rfd::FileDialog::new()
+        if small_button(ui, "Browse…", ButtonVariant::Primary)
+            && let Some(dir) = rfd::FileDialog::new()
                 .set_directory(&settings.tiles_dir)
                 .pick_folder()
-            {
-                settings.tiles_dir = dir;
-            }
+        {
+            settings.tiles_dir = dir;
         }
         ui.add_space(4.0);
         if copy_icon_button(ui) {

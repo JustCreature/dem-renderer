@@ -5,8 +5,6 @@ mod shadow;
 #[cfg(target_arch = "x86_64")]
 mod shadow_avx2;
 
-use std::usize;
-
 use dem_io::Heightmap;
 pub use row_major::compute_normals_scalar;
 #[cfg(target_arch = "aarch64")]
@@ -85,7 +83,7 @@ pub fn compute_normals_vector(hm: &dem_io::Heightmap) -> NormalMap {
         eprintln!("[SCALAR FALLBACK] compute_normals_vector: AVX2 not detected");
         #[cfg(not(target_arch = "x86_64"))]
         eprintln!("[SCALAR FALLBACK] compute_normals_vector: no SIMD for this architecture");
-        return row_major::compute_normals_scalar(hm);
+        row_major::compute_normals_scalar(hm)
     }
 }
 
@@ -111,7 +109,7 @@ pub fn compute_normals_vector_par(hm: &dem_io::Heightmap) -> NormalMap {
         eprintln!("[SCALAR FALLBACK] compute_normals_vector_par: AVX2 not detected");
         #[cfg(not(target_arch = "x86_64"))]
         eprintln!("[SCALAR FALLBACK] compute_normals_vector_par: no SIMD for this architecture");
-        return row_major::compute_normals_scalar(hm);
+        row_major::compute_normals_scalar(hm)
     }
 }
 
@@ -137,7 +135,7 @@ pub fn compute_shadow_vector(hm: &dem_io::Heightmap, sun_elevation_rad: f32) -> 
         eprintln!("[SCALAR FALLBACK] compute_shadow_vector: AVX2 not detected");
         #[cfg(not(target_arch = "x86_64"))]
         eprintln!("[SCALAR FALLBACK] compute_shadow_vector: no SIMD for this architecture");
-        return shadow::compute_shadow_scalar(hm, sun_elevation_rad);
+        shadow::compute_shadow_scalar(hm, sun_elevation_rad)
     }
 }
 
@@ -163,7 +161,7 @@ pub fn compute_shadow_vector_par(hm: &dem_io::Heightmap, sun_elevation_rad: f32)
         eprintln!("[SCALAR FALLBACK] compute_shadow_vector_par: AVX2 not detected");
         #[cfg(not(target_arch = "x86_64"))]
         eprintln!("[SCALAR FALLBACK] compute_shadow_vector_par: no SIMD for this architecture");
-        return shadow::compute_shadow_scalar(hm, sun_elevation_rad);
+        shadow::compute_shadow_scalar(hm, sun_elevation_rad)
     }
 }
 
@@ -210,12 +208,12 @@ pub fn compute_shadow_vector_par_with_azimuth(
         eprintln!(
             "[SCALAR FALLBACK] compute_shadow_vector_par_with_azimuth: no SIMD for this architecture"
         );
-        return shadow::compute_shadow_scalar_with_azimuth(
+        shadow::compute_shadow_scalar_with_azimuth(
             hm,
             sun_azimuth_rad,
             sun_elevation_rad,
             penumbra_meters,
-        );
+        )
     }
 }
 
@@ -255,8 +253,8 @@ pub fn compute_ao_true_hemi(
         let mask: ShadowMask =
             compute_shadow_vector_par_with_azimuth(hm, azimuth, ray_elevation_rad, penumbra_meters);
 
-        for j in 0..output.len() {
-            output[j] += mask.data[j];
+        for (o, m) in output.iter_mut().zip(mask.data.iter()) {
+            *o += *m;
         }
     }
 

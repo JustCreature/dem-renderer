@@ -95,6 +95,8 @@ pub(crate) fn read_byte_order(file: &mut File) -> Result<SampleByteOrder, DemErr
 /// * `predictor` — TIFF Predictor (1 = none, 2 = horizontal, 3 = floating-point).
 /// * `sample_order` — file byte order for Predictor 1/2 (Predictor 3 always
 ///   yields big-endian byte groups per TIFF Tech Note 3).
+// Args describe one TIFF chunk's geometry + decode parameters; each is a distinct input.
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn read_lzw_chunk_f32(
     file: &mut File,
     offset: u64,

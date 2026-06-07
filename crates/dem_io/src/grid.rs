@@ -95,10 +95,10 @@ pub fn assemble_grid(grid: &[Vec<Option<&Heightmap>>]) -> Heightmap {
     let mut assembled_data: Vec<f32> =
         Vec::with_capacity(n_rows * nw_tile.rows * n_cols * nw_tile.cols);
 
-    for tile_row in 0..n_rows {
+    for grid_row in grid {
         for pixel_row in 0..nw_tile.rows {
-            for tile_col in 0..n_cols {
-                match grid[tile_row][tile_col] {
+            for cell in grid_row {
+                match cell {
                     None => assembled_data.extend(std::iter::repeat_n(0.0f32, nw_tile.cols)),
                     Some(hm) => assembled_data.extend_from_slice(
                         &hm.data[pixel_row * nw_tile.cols..(pixel_row + 1) * nw_tile.cols],
@@ -335,10 +335,7 @@ mod tests {
         let ne = mk(2, 2, vec![5.0, 6.0, 7.0, 8.0]);
         let sw = mk(2, 2, vec![9.0, 10.0, 11.0, 12.0]);
         let se = mk(2, 2, vec![13.0, 14.0, 15.0, 16.0]);
-        let grid = vec![
-            vec![Some(&nw), Some(&ne)],
-            vec![Some(&sw), Some(&se)],
-        ];
+        let grid = vec![vec![Some(&nw), Some(&ne)], vec![Some(&sw), Some(&se)]];
         let out = assemble_grid(&grid);
         assert_eq!(out.rows, 4);
         assert_eq!(out.cols, 4);

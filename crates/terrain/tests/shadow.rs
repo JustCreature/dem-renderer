@@ -16,7 +16,10 @@ use terrain::*;
 fn flat_terrain_fully_lit() {
     let h = flat(16, 16, 50.0, 10.0, 10.0);
     let m = compute_shadow_scalar(&h, 0.5);
-    assert!(m.data.iter().all(|&v| v == 1.0), "flat terrain casts no shadow");
+    assert!(
+        m.data.iter().all(|&v| v == 1.0),
+        "flat terrain casts no shadow"
+    );
 }
 
 #[test]
@@ -33,7 +36,11 @@ fn single_ridge_casts_known_shadow() {
     let row = 3;
 
     assert_eq!(m.data[row * cols + 2], 1.0, "west of ridge: lit");
-    assert_eq!(m.data[row * cols + cx], 1.0, "ridge column itself: lit (occluder)");
+    assert_eq!(
+        m.data[row * cols + cx],
+        1.0,
+        "ridge column itself: lit (occluder)"
+    );
     assert_eq!(m.data[row * cols + 10], 0.0, "inside cast shadow: dark");
     assert_eq!(m.data[row * cols + 35], 1.0, "beyond cast shadow: lit");
 }
@@ -95,8 +102,14 @@ fn avx2_shadow_matches_scalar() {
     let limit = (s.data.len() / 200).max(2);
     let n = unsafe { compute_shadow_avx2(&h, 0.6) };
     let np = unsafe { compute_shadow_avx2_parallel(&h, 0.6) };
-    assert!(mask_hard_mismatches(&s.data, &n.data) <= limit, "avx2 west-only");
-    assert!(mask_hard_mismatches(&s.data, &np.data) <= limit, "avx2 parallel");
+    assert!(
+        mask_hard_mismatches(&s.data, &n.data) <= limit,
+        "avx2 west-only"
+    );
+    assert!(
+        mask_hard_mismatches(&s.data, &np.data) <= limit,
+        "avx2 parallel"
+    );
 
     let (az, elev, pen) = (0.0f32, 0.5f32, 50.0f32);
     let sa = compute_shadow_scalar_with_azimuth(&h, az, elev, pen);
@@ -130,13 +143,19 @@ fn ao_peak_occludes_downwind_neighbour() {
     let ao = compute_ao_true_hemi(&h, 16, 0.2, 36.0);
 
     assert_eq!(ao.len(), 40 * cols);
-    assert!(ao.iter().all(|&v| (0.0..=1.0001).contains(&v)), "AO out of [0,1]");
+    assert!(
+        ao.iter().all(|&v| (0.0..=1.0001).contains(&v)),
+        "AO out of [0,1]"
+    );
 
     let near = ao[pr * cols + pc + 1]; // adjacent, inside cast shadow
     let far = ao[pr * cols + pc + 18]; // beyond cast shadow
     assert!(near < 1.0, "neighbour should be partly occluded: {near}");
     assert!(far > 0.999, "far cell should be open: {far}");
-    assert!(near < far, "near {near} should be more occluded than far {far}");
+    assert!(
+        near < far,
+        "near {near} should be more occluded than far {far}"
+    );
 }
 
 // ── dispatcher edge guards ──────────────────────────────────────────────────
@@ -148,7 +167,10 @@ fn tiny_inputs_return_neutral_shadow() {
         let m = compute_shadow_vector(&h, 0.5);
         assert_eq!((m.rows, m.cols), (r, c));
         assert_eq!(m.data.len(), r * c);
-        assert!(m.data.iter().all(|&v| v == 1.0), "neutral shadow is all-lit");
+        assert!(
+            m.data.iter().all(|&v| v == 1.0),
+            "neutral shadow is all-lit"
+        );
 
         let ma = compute_shadow_vector_par_with_azimuth(&h, 0.3, 0.5, 50.0);
         assert!(ma.data.iter().all(|&v| v == 1.0));

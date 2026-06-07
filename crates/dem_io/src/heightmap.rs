@@ -634,7 +634,10 @@ mod tests {
         let n = -9999.0;
         let mut data = vec![n; 9];
         fill_nodata(&mut data, 3, 3, n);
-        assert!(data.iter().all(|v| v.is_nan()), "all cells should be NaN: {data:?}");
+        assert!(
+            data.iter().all(|v| v.is_nan()),
+            "all cells should be NaN: {data:?}"
+        );
     }
 
     #[test]
@@ -653,7 +656,10 @@ mod tests {
         let mut hm = mk_hm(1, 4, vec![-1000.1, -1000.0, -5000.0, 42.0]);
         clamp_nodata_to_sea(&mut hm);
         assert_eq!(hm.data[0], 0.0, "below −1000 → sea");
-        assert_eq!(hm.data[1], -1000.0, "exactly −1000 is NOT clamped (strict <)");
+        assert_eq!(
+            hm.data[1], -1000.0,
+            "exactly −1000 is NOT clamped (strict <)"
+        );
         assert_eq!(hm.data[2], 0.0);
         assert_eq!(hm.data[3], 42.0, "valid terrain untouched");
     }

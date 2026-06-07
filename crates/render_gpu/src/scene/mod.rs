@@ -66,7 +66,6 @@ pub struct GpuScene {
 
     // Readback path
     pub(super) output_buf: wgpu::Buffer,
-    pub(super) readback_buf: wgpu::Buffer,
 
     // Pipeline (compiled once)
     pub(super) render_pipeline: wgpu::ComputePipeline,
@@ -345,7 +344,7 @@ impl GpuScene {
         hm: &Heightmap,
         normal_map: &NormalMap,
         shadow_mask: &ShadowMask,
-        ao_data_mask: &Vec<f32>,
+        ao_data_mask: &[f32],
         width: u32,
         height: u32,
     ) -> Self {
@@ -504,7 +503,7 @@ impl GpuScene {
             "cam",
         );
 
-        // output + readback buffers (fixed size, reused every frame)
+        // output buffer (fixed size, reused every frame)
         let output_buf = vram::create_buffer_tracked(
             &gpu_ctx.device,
             &wgpu::BufferDescriptor {
@@ -514,16 +513,6 @@ impl GpuScene {
                 usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
             },
             "output",
-        );
-        let readback_buf = vram::create_buffer_tracked(
-            &gpu_ctx.device,
-            &wgpu::BufferDescriptor {
-                label: Some("readback"),
-                size: (width * height * 4) as u64,
-                mapped_at_creation: false,
-                usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
-            },
-            "readback",
         );
 
         // render pipeline + bind group (built once, reused every frame)
@@ -848,7 +837,6 @@ impl GpuScene {
             shadow_buf,
             cam_buf,
             output_buf,
-            readback_buf,
             render_pipeline,
             render_bg,
             render_bgl,
@@ -862,128 +850,14 @@ impl GpuScene {
         }
     }
 
-    /// Render one frame. Only writes 128 bytes (camera uniform) then dispatches.
-    pub fn render_frame(
-        &self,
-        origin: [f32; 3],
-        look_at: [f32; 3],
-        fov_deg: f32,
-        aspect: f32,
-        sun_dir: [f32; 3],
-        step_m: f32,
-        t_max: f32,
-        ao_mode: u32,
-        shadows_enabled: u32,
-        fog_enabled: u32,
-        vat_mode: u32,
-        lod_mode: u32,
-    ) -> Vec<u8> {
-        let forward = crate::vector_utils::normalize(crate::vector_utils::sub(look_at, origin));
-        let right =
-            crate::vector_utils::normalize(crate::vector_utils::cross(forward, [0.0, 0.0, 1.0]));
-        let up = crate::vector_utils::cross(right, forward);
-        let half_w = (fov_deg / 2.0_f32).to_radians().tan();
-        let half_h = half_w / aspect;
-
-        let cam = CameraUniforms {
-            origin,
-            _pad0: 0.0,
-            forward,
-            _pad1: 0.0,
-            right,
-            _pad2: 0.0,
-            up,
-            _pad3: 0.0,
-            sun_dir,
-            _pad4: 0.0,
-            half_w,
-            half_h,
-            img_width: self.width,
-            img_height: self.height,
-            hm_cols: self.hm_cols,
-            hm_rows: self.hm_rows,
-            dx_meters: self.dx_meters,
-            dy_meters: self.dy_meters,
-            step_m,
-            t_max,
-            ao_mode,
-            _pad5: 0.0,
-            shadows_enabled,
-            fog_enabled,
-            vat_mode,
-            lod_mode,
-            hm5m_origin_x: self.hm5m_origin_x,
-            hm5m_origin_y: self.hm5m_origin_y,
-            hm5m_extent_x: self.hm5m_extent_x,
-            hm5m_extent_y: self.hm5m_extent_y,
-            hm5m_cols: self.hm5m_cols,
-            hm5m_rows: self.hm5m_rows,
-            hm5m_cos_rot: self.hm5m_cos_rot,
-            hm5m_sin_rot: self.hm5m_sin_rot,
-            hm1m_origin_x: self.hm1m_origin_x,
-            hm1m_origin_y: self.hm1m_origin_y,
-            hm1m_extent_x: self.hm1m_extent_x,
-            hm1m_extent_y: self.hm1m_extent_y,
-            hm1m_cols: self.hm1m_cols,
-            hm1m_rows: self.hm1m_rows,
-            hm1m_cos_rot: self.hm1m_cos_rot,
-            hm1m_sin_rot: self.hm1m_sin_rot,
-            max_terrain_h: self.max_terrain_h,
-            smooth_radius_m: 2000.0,
-            align_mode: 0,
-            _pad7: 0.0,
-        };
-
-        self.gpu_ctx
-            .queue
-            .write_buffer(&self.cam_buf, 0, bytemuck::bytes_of(&cam));
-
-        let mut encoder =
-            self.gpu_ctx
-                .device
-                .create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                    label: Some("render_enc"),
-                });
-        {
-            let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
-                label: Some("render_pass"),
-                timestamp_writes: None,
-            });
-            pass.set_pipeline(&self.render_pipeline);
-            pass.set_bind_group(0, &self.render_bg, &[]);
-            pass.dispatch_workgroups((self.width + 7) / 8, (self.height + 7) / 8, 1);
-        }
-        encoder.copy_buffer_to_buffer(
-            &self.output_buf,
-            0,
-            &self.readback_buf,
-            0,
-            (self.width * self.height * 4) as u64,
-        );
-        self.gpu_ctx.queue.submit([encoder.finish()]);
-
-        let (tx, rx) = std::sync::mpsc::channel();
-        self.readback_buf
-            .slice(..)
-            .map_async(wgpu::MapMode::Read, move |r| tx.send(r).unwrap());
-        self.gpu_ctx
-            .device
-            .poll(wgpu::PollType::Wait {
-                submission_index: None,
-                timeout: None,
-            })
-            .unwrap();
-        rx.recv().unwrap().unwrap();
-
-        let result = {
-            let d = self.readback_buf.slice(..).get_mapped_range();
-            d.to_vec()
-        };
-        self.readback_buf.unmap();
-        result
-    }
-
     /// Dispatches one frame. Only writes 128 bytes (camera uniform) then dispatches.
+    // The args are precisely the *dynamic* (per-frame, input-driven) fields of the std140
+    // `CameraUniforms` this method assembles — camera pose, sun, and render-mode flags that
+    // change every frame from the viewer's input loop. The *static* scene state (heightmap
+    // textures, tier geometry, pipelines) already lives in `self`. Bundling these into a
+    // struct would just reconstruct a slice of `CameraUniforms` for the caller to fill — the
+    // exact layout this method exists to build — so the flat list is kept deliberately.
+    #[allow(clippy::too_many_arguments)]
     pub fn dispatch_frame(
         &self,
         encoder: &mut wgpu::CommandEncoder,
@@ -1002,12 +876,8 @@ impl GpuScene {
         smooth_radius_m: f32,
         align_mode: u32,
     ) {
-        let forward = crate::vector_utils::normalize(crate::vector_utils::sub(look_at, origin));
-        let right =
-            crate::vector_utils::normalize(crate::vector_utils::cross(forward, [0.0, 0.0, 1.0]));
-        let up = crate::vector_utils::cross(right, forward);
-        let half_w = (fov_deg / 2.0_f32).to_radians().tan();
-        let half_h = half_w / aspect;
+        let (forward, right, up) = crate::camera::camera_basis(origin, look_at);
+        let (half_w, half_h) = crate::camera::projection_half_extents(fov_deg, aspect);
 
         let cam = CameraUniforms {
             origin,
@@ -1069,7 +939,7 @@ impl GpuScene {
             });
             pass.set_pipeline(&self.render_pipeline);
             pass.set_bind_group(0, &self.render_bg, &[]);
-            pass.dispatch_workgroups((self.width + 7) / 8, (self.height + 7) / 8, 1);
+            pass.dispatch_workgroups(self.width.div_ceil(8), self.height.div_ceil(8), 1);
         }
     }
 
@@ -1087,18 +957,6 @@ impl GpuScene {
                 usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
             },
             "output",
-        );
-
-        vram::track_buffer_drop(&self.readback_buf, "readback");
-        self.readback_buf = vram::create_buffer_tracked(
-            &self.gpu_ctx.device,
-            &wgpu::BufferDescriptor {
-                label: Some("readback"),
-                size: (width * height * 4) as u64,
-                mapped_at_creation: false,
-                usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
-            },
-            "readback",
         );
 
         self.rebuild_bind_group();

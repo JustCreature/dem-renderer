@@ -57,8 +57,8 @@ fn parse_reports_expected_dims_crs_and_geographic_flag() {
 #[test]
 fn get_tile_epsg_matches_table() {
     for fx in FIXTURES {
-        let epsg = get_tile_epsg(&fixture_path(fx.file))
-            .unwrap_or_else(|e| panic!("{}: {e}", fx.file));
+        let epsg =
+            get_tile_epsg(&fixture_path(fx.file)).unwrap_or_else(|e| panic!("{}: {e}", fx.file));
         assert_eq!(epsg, fx.epsg, "{}", fx.file);
     }
 }
@@ -66,8 +66,8 @@ fn get_tile_epsg_matches_table() {
 #[test]
 fn tile_bounds_land_in_expected_region() {
     for fx in FIXTURES {
-        let (lat_min, lat_max, lon_min, lon_max) =
-            tile_bounds_wgs84(&fixture_path(fx.file)).unwrap_or_else(|e| panic!("{}: {e}", fx.file));
+        let (lat_min, lat_max, lon_min, lon_max) = tile_bounds_wgs84(&fixture_path(fx.file))
+            .unwrap_or_else(|e| panic!("{}: {e}", fx.file));
 
         assert!(lat_min < lat_max, "{}: lat not ordered", fx.file);
         assert!(lon_min < lon_max, "{}: lon not ordered", fx.file);
@@ -92,7 +92,8 @@ fn tile_bounds_land_in_expected_region() {
 #[test]
 fn ifd_zero_scale_matches_pixel_size() {
     for fx in FIXTURES {
-        let scales = ifd_scales(&fixture_path(fx.file)).unwrap_or_else(|e| panic!("{}: {e}", fx.file));
+        let scales =
+            ifd_scales(&fixture_path(fx.file)).unwrap_or_else(|e| panic!("{}: {e}", fx.file));
         let rel = ((scales[0] - fx.px_scale) / fx.px_scale).abs();
         assert!(
             rel < 1e-3,
@@ -138,7 +139,10 @@ fn newzealand_tile_has_a_single_ifd() {
     assert_eq!(scales.len(), 1, "expected a single IFD, got {scales:?}");
 
     let centre = tile_centre_crs(&path).unwrap();
-    assert!(extract_window(&path, centre, 50.0, 0).is_ok(), "IFD-0 must read");
+    assert!(
+        extract_window(&path, centre, 50.0, 0).is_ok(),
+        "IFD-0 must read"
+    );
     assert!(
         extract_window(&path, centre, 50.0, 1).is_err(),
         "there is no IFD-1 to seek to"
@@ -154,7 +158,10 @@ fn everest_resolves_through_inline_geokey_path() {
     let path = fixture_path("everest_hma_8m_albers_inline.tif");
     let p4 = crs::tile_proj4(&path).unwrap();
     assert!(p4.contains("+proj=aea"), "not Albers: {p4}");
-    assert!(p4.contains("+lat_1=25") && p4.contains("+lat_2=47"), "params lost: {p4}");
+    assert!(
+        p4.contains("+lat_1=25") && p4.contains("+lat_2=47"),
+        "params lost: {p4}"
+    );
 
     let hm = parse_geotiff_auto(&path).unwrap();
     assert_eq!(hm.crs_epsg, 4326, "inline CRS → geographic base epsg");
@@ -178,7 +185,10 @@ fn copernicus_geographic_scale_derivation() {
     // dx_deg * 111320 * cos(lat).
     let hm = parse_geotiff_auto(&fixture_path("copernicus_n47e011_30m_wgs84.tif")).unwrap();
     assert!(crs::is_geographic(&hm.crs_proj4));
-    assert!(hm.dx_deg != 0.0, "geographic tile must keep a non-zero dx_deg");
+    assert!(
+        hm.dx_deg != 0.0,
+        "geographic tile must keep a non-zero dx_deg"
+    );
     let expect = hm.dx_deg * 111_320.0 * hm.origin_lat.to_radians().cos();
     assert!(
         (hm.dx_meters - expect).abs() < 1e-3,

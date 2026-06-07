@@ -429,18 +429,19 @@ pub(crate) fn read_geo_key_data(path: &Path) -> Result<GeoKeyData, DemError> {
         }
 
         // GeoKeys 3073 (PCSCitationGeoKey) or 2049 (GeogCitationGeoKey) referencing tag 34737
-        if location == 34737 && (key_id == 3073 || key_id == 2049) {
-            if let Some(ref ascii) = ascii_params {
-                let offset = value_or_offset as usize;
-                let end = (offset + count).min(ascii.len());
-                let candidate = ascii[offset..end].trim_end_matches('\0').trim();
-                if candidate.starts_with("PROJCS[")
-                    || candidate.starts_with("GEOGCS[")
-                    || candidate.starts_with("PROJCRS[")
-                    || candidate.starts_with("GEODCRS[")
-                {
-                    wkt_candidate = Some(candidate.to_string());
-                }
+        if location == 34737
+            && (key_id == 3073 || key_id == 2049)
+            && let Some(ref ascii) = ascii_params
+        {
+            let offset = value_or_offset as usize;
+            let end = (offset + count).min(ascii.len());
+            let candidate = ascii[offset..end].trim_end_matches('\0').trim();
+            if candidate.starts_with("PROJCS[")
+                || candidate.starts_with("GEOGCS[")
+                || candidate.starts_with("PROJCRS[")
+                || candidate.starts_with("GEODCRS[")
+            {
+                wkt_candidate = Some(candidate.to_string());
             }
         }
     }
@@ -626,11 +627,20 @@ mod tests {
     fn epsg_towgs84_range_boundaries() {
         // MGI ranges are 31254..=31259 and 31281..=31290.
         assert!(epsg_towgs84(31259).is_some(), "31259 inside first range");
-        assert!(epsg_towgs84(31260).is_none(), "31260 just outside both ranges");
-        assert!(epsg_towgs84(31280).is_none(), "31280 just below second range");
+        assert!(
+            epsg_towgs84(31260).is_none(),
+            "31260 just outside both ranges"
+        );
+        assert!(
+            epsg_towgs84(31280).is_none(),
+            "31280 just below second range"
+        );
         assert!(epsg_towgs84(31281).is_some(), "31281 start of second range");
         assert!(epsg_towgs84(31290).is_some(), "31290 end of second range");
-        assert!(epsg_towgs84(31291).is_none(), "31291 just above second range");
+        assert!(
+            epsg_towgs84(31291).is_none(),
+            "31291 just above second range"
+        );
     }
 
     #[test]
@@ -675,7 +685,10 @@ mod tests {
         let mut data = empty_keys();
         data.wkt_candidate = Some(wkt.to_string());
         let p4 = proj4_from_keys(&data).unwrap();
-        assert!(is_geographic(&p4), "WKT path should resolve to longlat: {p4}");
+        assert!(
+            is_geographic(&p4),
+            "WKT path should resolve to longlat: {p4}"
+        );
     }
 
     #[test]

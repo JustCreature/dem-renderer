@@ -116,7 +116,10 @@ mod tests {
         let dlat = radius / crate::consts::M_PER_DEG;
         let inside = vec![entry(47.0 + dlat * 0.5, 48.0, 10.99, 11.01)];
         let outside = vec![entry(47.0 + dlat * 2.0, 48.0, 10.99, 11.01)];
-        assert_eq!(tiles_overlapping_wgs84(&inside, 47.0, 11.0, radius), vec![0]);
+        assert_eq!(
+            tiles_overlapping_wgs84(&inside, 47.0, 11.0, radius),
+            vec![0]
+        );
         assert!(tiles_overlapping_wgs84(&outside, 47.0, 11.0, radius).is_empty());
     }
 }

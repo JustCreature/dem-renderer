@@ -153,7 +153,7 @@ impl ApplicationHandler for Viewer {
             }
         }
 
-        let scene: &GpuScene = &self
+        let scene: &GpuScene = self
             .scene
             .as_ref()
             .expect("no scene to get ctx for resumed method run");
@@ -367,12 +367,14 @@ impl ApplicationHandler for Viewer {
                 // recompute shadow only when sun moves more than 0.1° (≈ 2 min real time at 0.4h/s)
                 let sun_moved = (azimuth - self.last_shadow_az).abs() > 0.00175
                     || (elevation - self.last_shadow_el).abs() > 0.00175;
-                if !self.shadow_computing && elevation > 0.0 && sun_moved {
-                    if self.shadow_tx.try_send((azimuth, elevation)).is_ok() {
-                        self.shadow_computing = true;
-                        self.last_shadow_az = azimuth;
-                        self.last_shadow_el = elevation;
-                    }
+                if !self.shadow_computing
+                    && elevation > 0.0
+                    && sun_moved
+                    && self.shadow_tx.try_send((azimuth, elevation)).is_ok()
+                {
+                    self.shadow_computing = true;
+                    self.last_shadow_az = azimuth;
+                    self.last_shadow_el = elevation;
                 }
 
                 // drift-based AO recompute (5 km threshold in tile-local metres)
@@ -385,15 +387,14 @@ impl ApplicationHandler for Viewer {
                     let cam_y = self.cam_pos[1] as f64;
                     // recompute AO when camera drifts far enough that the 20km radius
                     // no longer fully covers the new position with good data
-                    if (cam_x - self.ao_last_x).abs() > AO_DRIFT_THRESHOLD_M
-                        || (cam_y - self.ao_last_y).abs() > AO_DRIFT_THRESHOLD_M
+                    if ((cam_x - self.ao_last_x).abs() > AO_DRIFT_THRESHOLD_M
+                        || (cam_y - self.ao_last_y).abs() > AO_DRIFT_THRESHOLD_M)
+                        && self.ao_tx.try_send((cam_x, cam_y)).is_ok()
                     {
-                        if self.ao_tx.try_send((cam_x, cam_y)).is_ok() {
-                            self.ao_computing = true;
-                            self.ao_last_x = cam_x;
-                            self.ao_last_y = cam_y;
-                            println!("AO recompute triggered at ({cam_x:.0}, {cam_y:.0})");
-                        }
+                        self.ao_computing = true;
+                        self.ao_last_x = cam_x;
+                        self.ao_last_y = cam_y;
+                        println!("AO recompute triggered at ({cam_x:.0}, {cam_y:.0})");
                     }
                 }
 
@@ -620,7 +621,7 @@ impl ApplicationHandler for Viewer {
 
                 encoder.copy_buffer_to_texture(
                     wgpu::TexelCopyBufferInfo {
-                        buffer: &output_buf,
+                        buffer: output_buf,
                         layout: wgpu::TexelCopyBufferLayout {
                             offset: 0,
                             bytes_per_row: Some(self.render_width * 4), // 4 bytes per RGBA pixel
@@ -788,27 +789,27 @@ impl ApplicationHandler for Viewer {
                     };
                 }
             }
-            WindowEvent::MouseInput { state, button, .. } => {
-                if button == winit::event::MouseButton::Left && !self.immersive_mode {
-                    match state {
-                        winit::event::ElementState::Pressed => {
-                            self.mouse_look = true;
-                            let _ = self
-                                .window
-                                .as_ref()
-                                .unwrap()
-                                .set_cursor_grab(winit::window::CursorGrabMode::Locked);
-                            self.window.as_ref().unwrap().set_cursor_visible(false);
-                        }
-                        winit::event::ElementState::Released => {
-                            self.mouse_look = false;
-                            let _ = self
-                                .window
-                                .as_ref()
-                                .unwrap()
-                                .set_cursor_grab(winit::window::CursorGrabMode::None);
-                            self.window.as_ref().unwrap().set_cursor_visible(true);
-                        }
+            WindowEvent::MouseInput { state, button, .. }
+                if button == winit::event::MouseButton::Left && !self.immersive_mode =>
+            {
+                match state {
+                    winit::event::ElementState::Pressed => {
+                        self.mouse_look = true;
+                        let _ = self
+                            .window
+                            .as_ref()
+                            .unwrap()
+                            .set_cursor_grab(winit::window::CursorGrabMode::Locked);
+                        self.window.as_ref().unwrap().set_cursor_visible(false);
+                    }
+                    winit::event::ElementState::Released => {
+                        self.mouse_look = false;
+                        let _ = self
+                            .window
+                            .as_ref()
+                            .unwrap()
+                            .set_cursor_grab(winit::window::CursorGrabMode::None);
+                        self.window.as_ref().unwrap().set_cursor_visible(true);
                     }
                 }
             }
@@ -918,18 +919,18 @@ impl Viewer {
         };
 
         // Step 1: kill fine tier if it's still alive.
-        if let Some(ref mut bev_base) = self.bev_base {
-            if bev_base.fine.is_some() {
-                eprintln!(
-                    "[OOM #{count}] disabling fine tier — freeing ~hm1m_tex + normal + shadow memory"
-                );
-                scene.set_hm1m_inactive();
-                bev_base.fine = None;
-                self.tier_radii.fine_radius_m = 0.0;
-                self.tier_radii.fine_drift_m = 0.0;
-                self.fine_disabled_by_oom = true;
-                return;
-            }
+        if let Some(ref mut bev_base) = self.bev_base
+            && bev_base.fine.is_some()
+        {
+            eprintln!(
+                "[OOM #{count}] disabling fine tier — freeing ~hm1m_tex + normal + shadow memory"
+            );
+            scene.set_hm1m_inactive();
+            bev_base.fine = None;
+            self.tier_radii.fine_radius_m = 0.0;
+            self.tier_radii.fine_drift_m = 0.0;
+            self.fine_disabled_by_oom = true;
+            return;
         }
 
         // Step 2: kill close tier.

@@ -1,6 +1,5 @@
 mod camera;
 mod context;
-mod render_rexture;
 mod scene;
 mod vector_utils;
 pub mod vram;
@@ -8,7 +7,6 @@ pub mod vram;
 pub use context::{
     GpuContext, OOM_COUNT, OOM_OBSERVED, VramClass, clear_oom_flag, signal_oom_for_testing,
 };
-pub use render_rexture::render_gpu_texture;
 pub use scene::GpuScene;
 
 /// Convert f32 heightmap slice to native-endian f16 bytes for R16Float GPU texture upload.
@@ -153,6 +151,9 @@ mod tests {
         half::f16::from_ne_bytes([bytes[idx * 2], bytes[idx * 2 + 1]]).to_f32()
     }
 
+    // Byte-length asserts are written as `cols * rows * 2` (the f16 byte size) with the
+    // mip's literal dimensions, so `1 * 1 * 2` stays readable instead of collapsing to `2`.
+    #[allow(clippy::identity_op)]
     #[test]
     fn mip_pyramid_shapes_and_lengths() {
         // 4×4 base → hm_mip_count(4,4) = 3 → 2 generated levels: 2×2 then 1×1.

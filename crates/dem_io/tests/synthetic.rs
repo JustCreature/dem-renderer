@@ -132,7 +132,10 @@ fn overview_cache_round_trip_preserves_crs() {
 
     // The cache is a multi-IFD overview pyramid with a coarsest level near 32 m.
     let scales = ifd_scales(&cache).unwrap();
-    assert!(scales.len() >= 2, "cache should be multi-IFD, got {scales:?}");
+    assert!(
+        scales.len() >= 2,
+        "cache should be multi-IFD, got {scales:?}"
+    );
     let coarsest = *scales.last().unwrap();
     assert!(
         (coarsest - 32.0).abs() < 4.0,

@@ -502,7 +502,11 @@ mod tests {
         assert!(s.dc_step.abs() < 1e-6, "dc_step = {}", s.dc_step);
         assert!((s.dr_step - 1.0).abs() < 1e-6, "dr_step = {}", s.dr_step);
         // ground distance per step = |dr_step|·dy = 12.
-        assert!((s.dist_per_step - 12.0).abs() < 1e-4, "dist = {}", s.dist_per_step);
+        assert!(
+            (s.dist_per_step - 12.0).abs() < 1e-4,
+            "dist = {}",
+            s.dist_per_step
+        );
         assert_eq!(s.starting_pixels.len(), 7, "one ray per column");
         assert!(s.starting_pixels.iter().all(|&(r, _)| r == 0.0));
     }
@@ -512,7 +516,11 @@ mod tests {
         // az = π/4: |dc| == |dr| → first branch, dominant axis steps ±1, the other
         // follows fractionally; both entry edges (right + top) seed rays.
         let s = dda_setup(4, 4, std::f32::consts::FRAC_PI_4, 10.0, 10.0);
-        assert!((s.dc_step.abs() - 1.0).abs() < 1e-6, "dc_step = {}", s.dc_step);
+        assert!(
+            (s.dc_step.abs() - 1.0).abs() < 1e-6,
+            "dc_step = {}",
+            s.dc_step
+        );
         assert!(s.dr_step.abs() <= 1.0 + 1e-6, "dr_step = {}", s.dr_step);
         assert!(
             s.starting_pixels.len() > 4,

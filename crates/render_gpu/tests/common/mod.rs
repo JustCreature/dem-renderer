@@ -32,8 +32,7 @@ pub fn try_ctx() -> Option<GpuContext> {
         let info = adapter.get_info();
         let vram_class = VramClass::detect(&info);
 
-        let wanted =
-            wgpu::Features::FLOAT32_FILTERABLE | wgpu::Features::TEXTURE_FORMAT_16BIT_NORM;
+        let wanted = wgpu::Features::FLOAT32_FILTERABLE | wgpu::Features::TEXTURE_FORMAT_16BIT_NORM;
         let enabled = adapter.features() & wanted;
 
         let (device, queue) = adapter

@@ -619,6 +619,8 @@ impl HudRenderer {
         );
     }
 
+    // Per-frame HUD state (camera/sun/settings/fps) forwarded to the overlay; kept flat.
+    #[allow(clippy::too_many_arguments)]
     pub fn draw(
         &mut self,
         queue: &wgpu::Queue,
@@ -929,7 +931,7 @@ impl HudRenderer {
         let mut rpass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
             label: Some("hud"),
             color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                view: &surface_view,
+                view: surface_view,
                 resolve_target: None,
                 ops: wgpu::Operations {
                     load: wgpu::LoadOp::Load,

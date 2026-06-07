@@ -20,20 +20,20 @@ fn dispatch_once(scene: &GpuScene, ctx: &render_gpu::GpuContext) {
         .create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
     scene.dispatch_frame(
         &mut enc,
-        [0.0, 0.0, 1000.0], // origin
+        [0.0, 0.0, 1000.0],  // origin
         [100.0, 100.0, 0.0], // look_at
-        60.0,               // fov
-        1.0,                // aspect
-        [0.3, 0.3, 0.9],    // sun_dir
-        10.0,               // step_m
-        20000.0,            // t_max
-        0,                  // ao_mode
-        1,                  // shadows_enabled
-        1,                  // fog_enabled
-        0,                  // vat_mode
-        0,                  // lod_mode
-        2000.0,             // smooth_radius_m
-        0,                  // align_mode
+        60.0,                // fov
+        1.0,                 // aspect
+        [0.3, 0.3, 0.9],     // sun_dir
+        10.0,                // step_m
+        20000.0,             // t_max
+        0,                   // ao_mode
+        1,                   // shadows_enabled
+        1,                   // fog_enabled
+        0,                   // vat_mode
+        0,                   // lod_mode
+        2000.0,              // smooth_radius_m
+        0,                   // align_mode
     );
     ctx.queue.submit([enc.finish()]);
     drain(ctx);

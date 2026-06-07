@@ -115,6 +115,12 @@ pub struct GpuContext {
     pub vram_class: VramClass,
 }
 
+impl Default for GpuContext {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl GpuContext {
     pub fn new() -> Self {
         pollster::block_on(async {
@@ -257,17 +263,26 @@ mod tests {
     fn unknown_gpus_default_to_mid() {
         // Healthy discrete / integrated parts not on the tiny-card list.
         assert_eq!(
-            VramClass::detect(&info("NVIDIA GeForce RTX 4090", wgpu::DeviceType::DiscreteGpu)),
+            VramClass::detect(&info(
+                "NVIDIA GeForce RTX 4090",
+                wgpu::DeviceType::DiscreteGpu
+            )),
             VramClass::Mid
         );
         assert_eq!(
-            VramClass::detect(&info("Intel Iris Plus Graphics", wgpu::DeviceType::IntegratedGpu)),
+            VramClass::detect(&info(
+                "Intel Iris Plus Graphics",
+                wgpu::DeviceType::IntegratedGpu
+            )),
             VramClass::Mid
         );
         // GTX 1650 has 4 GB — explicitly NOT downgraded (OOM handler catches the
         // rare reload spike instead).
         assert_eq!(
-            VramClass::detect(&info("NVIDIA GeForce GTX 1650", wgpu::DeviceType::DiscreteGpu)),
+            VramClass::detect(&info(
+                "NVIDIA GeForce GTX 1650",
+                wgpu::DeviceType::DiscreteGpu
+            )),
             VramClass::Mid
         );
     }

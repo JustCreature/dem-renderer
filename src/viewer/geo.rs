@@ -74,8 +74,14 @@ mod tests {
         let (_, el_noon) = sun_position(LAT_47, SUMMER_SOLSTICE, 12.0);
         let (_, el_morning) = sun_position(LAT_47, SUMMER_SOLSTICE, 9.0);
         let (_, el_afternoon) = sun_position(LAT_47, SUMMER_SOLSTICE, 15.0);
-        assert!(el_noon > el_morning, "noon {el_noon} should top morning {el_morning}");
-        assert!(el_noon > el_afternoon, "noon {el_noon} should top afternoon {el_afternoon}");
+        assert!(
+            el_noon > el_morning,
+            "noon {el_noon} should top morning {el_morning}"
+        );
+        assert!(
+            el_noon > el_afternoon,
+            "noon {el_noon} should top afternoon {el_afternoon}"
+        );
     }
 
     #[test]
@@ -85,8 +91,14 @@ mod tests {
         // The afternoon branch is the `TAU - az` path.
         let (az_morning, _) = sun_position(LAT_47, SUMMER_SOLSTICE, 9.0);
         let (az_afternoon, _) = sun_position(LAT_47, SUMMER_SOLSTICE, 15.0);
-        assert!(az_morning < PI, "morning azimuth {az_morning} should be east of south");
-        assert!(az_afternoon > PI, "afternoon azimuth {az_afternoon} should be west of south");
+        assert!(
+            az_morning < PI,
+            "morning azimuth {az_morning} should be east of south"
+        );
+        assert!(
+            az_afternoon > PI,
+            "afternoon azimuth {az_afternoon} should be west of south"
+        );
         assert!(az_morning < az_afternoon);
     }
 
@@ -131,8 +143,14 @@ mod tests {
         // x = Δlon° · M_PER_DEG · cos(lat); y = Δlat° · M_PER_DEG.
         let expected_x = 0.001 * M_PER_DEG as f32 * 47.0_f32.to_radians().cos();
         let expected_y = 0.001 * M_PER_DEG as f32;
-        assert!((x - expected_x).abs() < 0.5, "x = {x}, expected ≈ {expected_x}");
-        assert!((y - expected_y).abs() < 0.5, "y = {y}, expected ≈ {expected_y}");
+        assert!(
+            (x - expected_x).abs() < 0.5,
+            "x = {x}, expected ≈ {expected_x}"
+        );
+        assert!(
+            (y - expected_y).abs() < 0.5,
+            "y = {y}, expected ≈ {expected_y}"
+        );
     }
 
     #[test]

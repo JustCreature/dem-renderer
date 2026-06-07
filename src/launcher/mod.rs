@@ -420,10 +420,8 @@ impl ApplicationHandler for LauncherApp {
 
             WindowEvent::KeyboardInput {
                 event: key_event, ..
-            } => {
-                if key_event.state == winit::event::ElementState::Pressed {
-                    self.handle_key(el, key_event.physical_key);
-                }
+            } if key_event.state == winit::event::ElementState::Pressed => {
+                self.handle_key(el, key_event.physical_key);
             }
 
             WindowEvent::RedrawRequested => {
@@ -453,7 +451,7 @@ impl ApplicationHandler for LauncherApp {
                 // For the SelectDem screen: show the chosen filename and a reset button
                 // only when the user has picked something other than the bundled default.
                 let tile_5m_is_custom =
-                    settings.tile_5m_path != std::path::PathBuf::from(DEFAULT_TILE_5M_PATH);
+                    settings.tile_5m_path.as_path() != std::path::Path::new(DEFAULT_TILE_5M_PATH);
                 let tile_5m_display = settings
                     .tile_5m_path
                     .file_name()

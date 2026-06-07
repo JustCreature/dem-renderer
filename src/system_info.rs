@@ -84,10 +84,10 @@ pub fn print_system_info() {
     if let Some(rustc) = rustc_version() {
         println!("rustc          : {rustc}");
     }
-    if let Ok(flags) = std::env::var("RUSTFLAGS") {
-        if !flags.is_empty() {
-            println!("RUSTFLAGS      : {flags}");
-        }
+    if let Ok(flags) = std::env::var("RUSTFLAGS")
+        && !flags.is_empty()
+    {
+        println!("RUSTFLAGS      : {flags}");
     }
 
     println!("===================");
@@ -231,7 +231,7 @@ fn numa_nodes() -> Option<String> {
             .output()
             .ok()?;
         let n = String::from_utf8(out.stdout).ok()?.trim().to_string();
-        return Some(format!("{n} (macOS unified memory, no NUMA)"));
+        Some(format!("{n} (macOS unified memory, no NUMA)"))
     }
     #[cfg(target_os = "windows")]
     {

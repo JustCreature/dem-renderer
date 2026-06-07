@@ -70,7 +70,10 @@ fn reload_grow_does_not_double_peak() {
         "drop-first expected ~4× (got {ratio:.3}×); ~5× would mean the old \
          tier was not freed before allocating the new one"
     );
-    assert!(ratio > 3.5, "128² tier should be ~4× the 64² tier (got {ratio:.3}×)");
+    assert!(
+        ratio > 3.5,
+        "128² tier should be ~4× the 64² tier (got {ratio:.3}×)"
+    );
 }
 
 #[test]
@@ -88,7 +91,10 @@ fn set_inactive_frees_tracked_textures() {
     let (cn, cs, _) = derive_maps(&close);
     let close_norm = render_gpu::pack_normals_rg16_bytes(&cn.nx, &cn.ny);
     scene.upload_hm5m(0.0, 0.0, 0.0, 480.0, 480.0, &close, &close_norm, &cs);
-    assert!(tex_bytes() - baseline > 0, "upload should grow tracked textures");
+    assert!(
+        tex_bytes() - baseline > 0,
+        "upload should grow tracked textures"
+    );
 
     // Deactivation runs the same drop-first cycle down to a 1×1 placeholder, so
     // tracked textures return to ~baseline (within the few bytes of the new

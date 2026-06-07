@@ -273,12 +273,12 @@ pub fn extract_window(
     let mut data = vec![NODATA; out_w * out_h];
 
     let (tw, th) = decoder.chunk_dimensions(); // returns (u32, u32)
-    let tiles_across = (cols as usize + tw as usize - 1) / tw as usize;
+    let tiles_across = (cols as usize).div_ceil(tw as usize);
 
     let tc0 = px0 / tw as usize;
-    let tc1 = (px1 + tw as usize - 1) / tw as usize; // exclusive, rounded up
+    let tc1 = px1.div_ceil(tw as usize); // exclusive, rounded up
     let tr0 = py0 / th as usize;
-    let tr1 = (py1 + th as usize - 1) / th as usize;
+    let tr1 = py1.div_ceil(th as usize);
 
     // Same LZW bypass as build_downsampled (see issue #40 — tiff crate's strict
     // EOI requirement crashes on the last chunk of some LZW tiles on Windows).

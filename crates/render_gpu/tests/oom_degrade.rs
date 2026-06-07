@@ -18,12 +18,18 @@ use serial_test::serial;
 #[serial]
 fn signal_sets_observed_and_increments_count() {
     clear_oom_flag();
-    assert!(!OOM_OBSERVED.load(Ordering::SeqCst), "cleared flag must be false");
+    assert!(
+        !OOM_OBSERVED.load(Ordering::SeqCst),
+        "cleared flag must be false"
+    );
 
     let before = OOM_COUNT.load(Ordering::SeqCst);
     signal_oom_for_testing();
 
-    assert!(OOM_OBSERVED.load(Ordering::SeqCst), "signal must raise the flag");
+    assert!(
+        OOM_OBSERVED.load(Ordering::SeqCst),
+        "signal must raise the flag"
+    );
     assert_eq!(
         OOM_COUNT.load(Ordering::SeqCst),
         before + 1,
