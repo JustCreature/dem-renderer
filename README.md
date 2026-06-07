@@ -1,5 +1,7 @@
 # dem-renderer
 
+[![codecov](https://codecov.io/gh/JustCreature/dem-renderer/branch/main/graph/badge.svg)](https://codecov.io/gh/JustCreature/dem-renderer)
+
 A real-time 3D terrain renderer in Rust that raymarches real-world elevation data on the GPU. Open any GeoTIFF with a recognised CRS and fly through it. When a high-resolution source is paired with coarser context tiles, the viewer streams up to three resolution tiers — coarse base / 5 m mid / 1 m fine — and blends them seamlessly in a single WGSL shader.
 
 ![Hintertux glacier area, Tyrol](docs/screenshot.png)
