@@ -6,7 +6,7 @@ use dem_io::Heightmap;
 use rayon::iter::{IndexedParallelIterator, ParallelIterator};
 use rayon::slice::ParallelSliceMut;
 
-// ── AVX2 8-wide west-only ─────────────────────────────────────────────────────
+// AVX2 8-wide west-only
 //
 // Processes 8 rows at a time in SIMD lanes (same idea as NEON 4-wide, but wider).
 // Running-max and shadow state are tracked across 8 rows simultaneously.
@@ -90,7 +90,7 @@ pub unsafe fn compute_shadow_avx2(hm: &Heightmap, sun_elevation_rad: f32) -> Sha
     }
 }
 
-// ── AVX2 parallel 8-wide west-only ───────────────────────────────────────────
+// AVX2 parallel 8-wide west-only
 
 /// # Safety
 /// The caller must ensure the target CPU supports AVX2 (`is_x86_feature_detected!("avx2")`);
@@ -175,7 +175,7 @@ pub unsafe fn compute_shadow_avx2_parallel(hm: &Heightmap, sun_elevation_rad: f3
     }
 }
 
-// ── AVX2 parallel arbitrary azimuth (DDA) ────────────────────────────────────
+// AVX2 parallel arbitrary azimuth (DDA)
 //
 // Extends the NEON 4-ray DDA approach to 8 rays per SIMD group.
 // Parallelises over groups of 8 starting pixels via rayon.
@@ -237,7 +237,7 @@ pub unsafe fn compute_shadow_avx2_parallel_with_azimuth(
                 return;
             }
 
-            // ── AVX2: 8 rays in parallel ──────────────────────────────────────
+            // AVX2: 8 rays in parallel
             let mut rf = [
                 rays[0].0, rays[1].0, rays[2].0, rays[3].0, rays[4].0, rays[5].0, rays[6].0,
                 rays[7].0,

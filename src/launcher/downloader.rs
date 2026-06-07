@@ -104,7 +104,7 @@ pub fn begin_download(tiles_dir: PathBuf) -> (mpsc::Receiver<DownloadProgress>, 
             return;
         }
 
-        // ── Phase 1: check which files need downloading ────────────────────
+        // Phase 1: check which files need downloading
         let mut tasks: Vec<FileTask> = Vec::new();
 
         for (i, entry) in entries.iter().enumerate() {
@@ -155,7 +155,7 @@ pub fn begin_download(tiles_dir: PathBuf) -> (mpsc::Receiver<DownloadProgress>, 
             return;
         }
 
-        // ── Phase 2: download only what's missing ─────────────────────────
+        // Phase 2: download only what's missing
         // bytes_done / bytes_total tracks only the actual download work in this
         // session — pre-existing bytes are excluded so the ring goes 0 → 100 %
         // cleanly without the 100 → 65 % regression caused by skipped files.

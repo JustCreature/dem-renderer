@@ -1,7 +1,7 @@
 use std::time::{SystemTime, UNIX_EPOCH};
 
 fn main() {
-    // ── Launcher version line ────────────────────────────────────────────────
+    // Launcher version line
     // The canonical version lives ONLY in Cargo.toml. Release CI passes the tag via
     // DEM_RENDERER_RELEASE_VERSION (and verifies it equals the Cargo.toml version), so
     // the launcher UI string is derived, never a second literal that can drift. Local

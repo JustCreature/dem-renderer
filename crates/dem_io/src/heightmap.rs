@@ -584,7 +584,7 @@ mod tests {
         hm
     }
 
-    // ----- fill_nodata -----------------------------------------------------
+    // fill_nodata
 
     #[test]
     fn fill_nodata_fills_with_mean_of_nearest_valid_along_rays() {
@@ -649,7 +649,7 @@ mod tests {
         assert_eq!(data, before);
     }
 
-    // ----- clamp_nodata_to_sea --------------------------------------------
+    // clamp_nodata_to_sea
 
     #[test]
     fn clamp_nodata_to_sea_uses_strict_less_than() {
@@ -679,7 +679,7 @@ mod tests {
         assert!(hm.data.is_empty());
     }
 
-    // ----- fill_nodata_from_base ------------------------------------------
+    // fill_nodata_from_base
 
     #[test]
     fn fill_from_base_fills_fully_nodata_window() {

@@ -256,7 +256,7 @@ impl BevBaseState {
         let close_radius_m = radii.close_radius_m;
         let fine_radius_m = radii.fine_radius_m;
 
-        // ── base worker ────────────────────────────────────────────────────────────────
+        // base worker
         let (base_tx, base_worker_rx) = mpsc::sync_channel::<(f64, f64)>(1);
         let (base_worker_tx, base_rx) = mpsc::channel::<TierData>();
         let base_idx = Arc::clone(&base_index);
@@ -338,7 +338,7 @@ impl BevBaseState {
             }
         });
 
-        // ── close worker ───────────────────────────────────────────────────────────────
+        // close worker
         // Shared slot: close worker writes its latest filled hm; fine worker reads it to
         // fill 1m NODATA from the 5m source.
         let recent_5m: Arc<std::sync::Mutex<Option<Arc<Heightmap>>>> =
@@ -399,7 +399,7 @@ impl BevBaseState {
             }
         });
 
-        // ── blocking initial close-tier load ──────────────────────────────────────────
+        // blocking initial close-tier load
         // Loads synchronously so the viewer starts with close-range detail immediately
         // rather than waiting for the first drift threshold to fire.
         let mut last_5m_lat = 0.0_f64;
@@ -449,7 +449,7 @@ impl BevBaseState {
             }
         }
 
-        // ── fine worker ────────────────────────────────────────────────────────────────
+        // fine worker
         // fine_radius_m == 0.0 is the runtime kill sentinel (set by the OOM
         // degradation path). None of the launcher presets currently set it to
         // zero — even Low loads a tiny 1 km fine window — but we keep the gate
@@ -688,7 +688,7 @@ pub(super) fn cross_crs_world_origin(hm: &Heightmap, base_hm: &Heightmap) -> (f3
 mod tests {
     use super::*;
 
-    // ── tier_radii ─────────────────────────────────────────────────────────
+    // tier_radii
 
     #[test]
     fn tier_radii_are_internally_ordered() {
@@ -716,7 +716,7 @@ mod tests {
         assert!(hi.fine_radius_m >= mid.fine_radius_m && mid.fine_radius_m >= lo.fine_radius_m);
     }
 
-    // ── select_ifd ───────────────────────────────────────────────────────────
+    // select_ifd
 
     #[test]
     fn select_ifd_picks_finest_level_meeting_scale_and_size() {
@@ -738,7 +738,7 @@ mod tests {
         assert_eq!(select_ifd(&scales, 4.0, 1_000_000.0, 8192), 1);
     }
 
-    // ── cap_to_gpu_limit ─────────────────────────────────────────────────────
+    // cap_to_gpu_limit
 
     fn proj_hm(rows: usize, cols: usize) -> Heightmap {
         Heightmap {
@@ -778,7 +778,7 @@ mod tests {
         assert_eq!(out.crs_origin_x, 4.0);
     }
 
-    // ── StreamingTier drift bookkeeping ──────────────────────────────────────
+    // StreamingTier drift bookkeeping
 
     fn streaming_tier(init_cx: f64, init_cy: f64, drift_m: f64) -> StreamingTier {
         // Worker-side endpoints are dropped immediately; these tests never send.

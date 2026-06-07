@@ -25,7 +25,7 @@ pub use shadow_avx2::{
     compute_shadow_avx2, compute_shadow_avx2_parallel, compute_shadow_avx2_parallel_with_azimuth,
 };
 
-// ── Platform dispatchers ──────────────────────────────────────────────────────
+// Platform dispatchers
 // On aarch64 → NEON (always available).
 // On x86_64  → AVX2 when detected at runtime, scalar fallback otherwise.
 // Other platforms → scalar only.

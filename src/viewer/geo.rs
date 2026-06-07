@@ -67,7 +67,7 @@ mod tests {
     const SUMMER_SOLSTICE: i32 = 172; // ~21 June
     const WINTER_SOLSTICE: i32 = 355; // ~21 December
 
-    // ── sun_position ─────────────────────────────────────────────────────────
+    // sun_position
 
     #[test]
     fn elevation_peaks_at_solar_noon() {
@@ -112,7 +112,7 @@ mod tests {
         );
     }
 
-    // ── latlon_to_tile_metres ────────────────────────────────────────────────
+    // latlon_to_tile_metres
 
     /// Geographic heightmap fixture. `dx_meters`/`dy_meters` are set to bogus
     /// values on purpose — the geographic branch must derive m/px from `dx_deg`.

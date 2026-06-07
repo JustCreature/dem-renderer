@@ -39,26 +39,26 @@ pub fn print_system_info() {
         cpus.len(),
     );
 
-    // ── Cache sizes ──────────────────────────────────────────────────────────
+    // Cache sizes
     if let Some(caches) = cache_sizes() {
         println!("Cache          : {caches}");
     }
 
-    // ── NUMA nodes ───────────────────────────────────────────────────────────
+    // NUMA nodes
     if let Some(numa) = numa_nodes() {
         println!("NUMA nodes     : {numa}");
     }
 
-    // ── Power / scheduler mode ───────────────────────────────────────────────
+    // Power / scheduler mode
     if let Some(power) = power_mode() {
         println!("Power mode     : {power}");
     }
 
-    // ── RAM ──────────────────────────────────────────────────────────────────
+    // RAM
     let total_gb = sys.total_memory() / 1_073_741_824;
     println!("RAM            : {total_gb} GB");
 
-    // ── GPU ──────────────────────────────────────────────────────────────────
+    // GPU
     #[cfg(target_os = "macos")]
     if let Some(gpu) = macos_gpu() {
         println!("GPU            : {gpu}");
@@ -72,7 +72,7 @@ pub fn print_system_info() {
         println!("GPU            : {gpu}");
     }
 
-    // ── Build info ───────────────────────────────────────────────────────────
+    // Build info
     println!(
         "Build profile  : {}",
         if cfg!(debug_assertions) {
@@ -94,7 +94,7 @@ pub fn print_system_info() {
     println!();
 }
 
-// ── cache sizes ─────────────────────────────────────────────────────────────
+// cache sizes
 
 fn cache_sizes() -> Option<String> {
     #[cfg(target_os = "macos")]
@@ -205,7 +205,7 @@ fn windows_cache_sizes() -> Option<String> {
     }
 }
 
-// ── NUMA nodes ───────────────────────────────────────────────────────────────
+// ── NUMA nodes
 #[allow(dead_code)]
 fn numa_nodes() -> Option<String> {
     #[cfg(target_os = "linux")]
@@ -256,7 +256,7 @@ fn numa_nodes() -> Option<String> {
     None
 }
 
-// ── power / scheduler mode ───────────────────────────────────────────────────
+// power / scheduler mode
 #[allow(dead_code)]
 fn power_mode() -> Option<String> {
     #[cfg(target_os = "macos")]
@@ -325,7 +325,7 @@ fn windows_power_mode() -> Option<String> {
     })
 }
 
-// ── rustc version ────────────────────────────────────────────────────────────
+// rustc version
 #[allow(dead_code)]
 fn rustc_version() -> Option<String> {
     let out = std::process::Command::new("rustc")
@@ -337,7 +337,7 @@ fn rustc_version() -> Option<String> {
         .map(|s| s.trim().to_string())
 }
 
-// ── GPU helpers ──────────────────────────────────────────────────────────────
+// GPU helpers
 
 #[allow(dead_code)]
 #[cfg(target_os = "macos")]
@@ -415,7 +415,7 @@ fn windows_gpu() -> Option<String> {
     }
 }
 
-// ── utilities ────────────────────────────────────────────────────────────────
+// utilities
 #[allow(dead_code)]
 fn fmt_bytes(b: u64) -> String {
     if b >= 1_048_576 {

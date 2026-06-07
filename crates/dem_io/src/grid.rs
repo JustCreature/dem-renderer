@@ -325,7 +325,7 @@ mod tests {
         }
     }
 
-    // ----- assemble_grid ---------------------------------------------------
+    // assemble_grid
 
     #[test]
     fn assemble_grid_interleaves_tile_rows_correctly() {
@@ -404,7 +404,7 @@ mod tests {
         assemble_grid(&grid);
     }
 
-    // ----- crop ------------------------------------------------------------
+    // crop
 
     #[test]
     fn crop_full_extent_is_identity_data() {
@@ -458,7 +458,7 @@ mod tests {
         assert_eq!(out.rows, 0);
     }
 
-    // ----- stitch_windows --------------------------------------------------
+    // stitch_windows
 
     fn placed(centre_e: f64, centre_n: f64, radius: f64, data: Vec<f32>) -> Heightmap {
         // 2×2 window placed exactly at the output's NW corner.
@@ -506,7 +506,7 @@ mod tests {
         assert_eq!(out.data[0], 2.0, "window col 1 lands in output col 0");
     }
 
-    // ----- stitch_windows_geographic --------------------------------------
+    // stitch_windows_geographic
 
     #[test]
     fn stitch_geographic_fixes_dx_meters_with_cos_lat() {
@@ -531,7 +531,7 @@ mod tests {
         assert!((out.dy_meters - deg_per_px * 111_320.0).abs() < 1e-6);
     }
 
-    // ----- load_grid_from_paths -------------------------------------------
+    // load_grid_from_paths
 
     /// Loader that derives a 1×1 tile from a "lat_lon" filename, value = lon.
     /// Returns None for the sentinel "skip".

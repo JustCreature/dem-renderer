@@ -553,7 +553,7 @@ impl ApplicationHandler for LauncherApp {
                                     hairline_rule(ui);
                                     ui.add_space(8.0);
 
-                                    // ── Content — screen-specific rows only ────────────────
+                                    // Content — screen-specific rows only
                                     match screen {
                                         Screen::Main => {
                                             main_evt = screens::main_menu::show(ui, main_anim);
@@ -577,7 +577,7 @@ impl ApplicationHandler for LauncherApp {
                                         }
                                     }
 
-                                    // ── Footer — always bottom-pinned via bottom_up ────────
+                                    // Footer — always bottom-pinned via bottom_up
                                     // Compute strings after show() so SelectDem's free-space
                                     // cache is already populated.
                                     let (fstatus, fright) = screen_footer(screen, ui.ctx());

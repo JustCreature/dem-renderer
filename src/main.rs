@@ -25,7 +25,7 @@ use winit::event::WindowEvent;
 use winit::event_loop::ActiveEventLoop;
 use winit::window::WindowId;
 
-// ── Phase state machine ──────────────────────────────────────────────────────
+// Phase state machine
 // A single ApplicationHandler delegates to the active phase.  Switching from
 // Launcher to Viewer never calls el.exit(), so winit never hides the window and
 // the surface is transferred in-place — the platform layer (CAMetalLayer, etc.)

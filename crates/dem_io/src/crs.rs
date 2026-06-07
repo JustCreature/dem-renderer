@@ -554,7 +554,7 @@ mod tests {
         }
     }
 
-    // ----- is_geographic ---------------------------------------------------
+    // is_geographic
 
     #[test]
     fn is_geographic_matches_longlat_and_latlong() {
@@ -566,7 +566,7 @@ mod tests {
         assert!(is_geographic("longlatfoo"));
     }
 
-    // ----- to_wgs84 / from_wgs84 ------------------------------------------
+    // to_wgs84 / from_wgs84
 
     #[test]
     fn wgs84_round_trip_through_projected_crs() {
@@ -592,7 +592,7 @@ mod tests {
         assert!(to_wgs84(0.0, 0.0, "this is not a proj string").is_err());
     }
 
-    // ----- epsg_to_proj4 ---------------------------------------------------
+    // epsg_to_proj4
 
     #[test]
     fn epsg_to_proj4_known_code() {
@@ -612,7 +612,7 @@ mod tests {
         assert!(epsg_to_proj4(65000).is_err());
     }
 
-    // ----- epsg_towgs84 (private, datum-shift ranges) ----------------------
+    // epsg_towgs84 (private, datum-shift ranges)
 
     #[test]
     fn epsg_towgs84_known_datums() {
@@ -649,7 +649,7 @@ mod tests {
         assert!(epsg_towgs84(99999).is_none());
     }
 
-    // ----- proj4_from_keys discovery paths --------------------------------
+    // proj4_from_keys discovery paths
 
     #[test]
     fn proj4_from_keys_epsg_path() {

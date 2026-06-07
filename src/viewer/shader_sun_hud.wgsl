@@ -24,7 +24,7 @@ struct SunHud {
 
 @group(0) @binding(0) var<uniform> u: SunHud;
 
-// ── Vertex shader ─────────────────────────────────────────────────────────────
+// Vertex shader
 // Passes NDC positions straight through.  The CPU sends a full-screen quad
 // (two triangles covering −1..+1 in both axes) so every screen pixel gets a
 // fragment invocation and we can do all the circle math per-pixel.
@@ -33,7 +33,7 @@ fn vs_main(@location(0) pos: vec2<f32>) -> @builtin(position) vec4<f32> {
     return vec4<f32>(pos.x, pos.y, 0.0, 1.0);
 }
 
-// ── Helper: SDF of line segment a→b ──────────────────────────────────────────
+// Helper: SDF of line segment a→b
 // Returns the shortest distance from pixel p to the segment [a, b].
 // Used to draw the needle and tick marks as anti-aliased lines.
 //
@@ -49,7 +49,7 @@ fn seg_sdf(p: vec2<f32>, a: vec2<f32>, b: vec2<f32>) -> f32 {
     return length(pa - ba * t);                  // distance to nearest point on segment
 }
 
-// ── Helper: clockwise angle from top ─────────────────────────────────────────
+// Helper: clockwise angle from top
 // Returns the angle of pixel p around `center`, measured clockwise from 12 o'clock.
 //   0        = straight up    (12 o'clock)
 //   TAU / 4  = right          ( 3 o'clock)
@@ -69,7 +69,7 @@ fn frag_angle(p: vec2<f32>, center: vec2<f32>) -> f32 {
     return a;
 }
 
-// ── Helper: season colour from angular position ───────────────────────────────
+// Helper: season colour from angular position
 // The season circle's ring is coloured by which season each arc position falls in.
 // angle=0 is the summer solstice (top); the year runs clockwise.
 // Season boundaries are the number of days after Jun 21, converted to radians.
@@ -83,7 +83,7 @@ fn season_col(angle: f32) -> vec3<f32> {
     return vec3<f32>(0.25, 0.80, 0.30);             // spring → green
 }
 
-// ── Helper: draw one tick mark ────────────────────────────────────────────────
+// Helper: draw one tick mark
 // A tick is a short radial line segment at a given angle on the ring.
 // `inner` is the fraction of the radius where the tick starts (0.72 = 72% out).
 // Returns the SDF distance so the caller can blend it into the colour.
@@ -96,7 +96,7 @@ fn tick(p: vec2<f32>, center: vec2<f32>, r: f32, angle: f32, inner: f32) -> f32 
     return seg_sdf(p, a, b);
 }
 
-// ── Main circle drawing function ──────────────────────────────────────────────
+// Main circle drawing function
 // Draws one complete circle (background disc + coloured ring + tick marks +
 // needle + centre dot) and returns the RGBA colour for the current pixel.
 // kind=0 → season circle (coloured ring, season tints)
@@ -112,7 +112,7 @@ fn draw_circle(p: vec2<f32>, center: vec2<f32>, r: f32, needle: f32, kind: i32) 
 
     var col = vec4<f32>(0.0);  // start fully transparent
 
-    // ── Background disc ───────────────────────────────────────────────────────
+    // Background disc
     // Fill the interior with a semi-transparent tint so the terrain shows through.
     // Season circle: dim version of the season colour at that angle (22% brightness).
     // Time circle:   uniform dark grey.
@@ -125,7 +125,7 @@ fn draw_circle(p: vec2<f32>, center: vec2<f32>, r: f32, needle: f32, kind: i32) 
         }
     }
 
-    // ── Outer ring ────────────────────────────────────────────────────────────
+    // Outer ring
     // A thin band around d ≈ r, anti-aliased by blending over 1.8 pixels.
     // ring_d = distance from the ring edge (0 = exactly on the ring).
     // Colour: season ring uses the season colour; time ring is white.
@@ -138,7 +138,7 @@ fn draw_circle(p: vec2<f32>, center: vec2<f32>, r: f32, needle: f32, kind: i32) 
         // weight = 1.0 at ring_d=0 (dead centre of ring), 0.0 at ring_d=1.8 (edge)
     }
 
-    // ── Tick marks ────────────────────────────────────────────────────────────
+    // Tick marks
     // Four white radial lines at the cardinal positions of each circle.
     // The tick SDF returns a distance; if < 1.5px we paint it white with
     // the same linear anti-alias blend as the ring.
@@ -165,7 +165,7 @@ fn draw_circle(p: vec2<f32>, center: vec2<f32>, r: f32, needle: f32, kind: i32) 
         if tick(p, center, r, h21, 0.72) < 1.5 { col = mix(col, vec4<f32>(1.0, 1.0, 1.0, 0.9), 1.0 - tick(p, center, r, h21, 0.72) / 1.5); }
     }
 
-    // ── Yellow needle ─────────────────────────────────────────────────────────
+    // Yellow needle
     // A line from the centre to (r − 9) pixels out in the needle direction.
     // Only drawn inside the disc (d < r − 3) so it doesn't bleed onto the ring.
     // The needle direction uses the same sin/−cos clock-angle conversion as tick().
@@ -179,7 +179,7 @@ fn draw_circle(p: vec2<f32>, center: vec2<f32>, r: f32, needle: f32, kind: i32) 
         }
     }
 
-    // ── White centre dot ──────────────────────────────────────────────────────
+    // White centre dot
     // A solid white disc of radius 3.5px hides the messy needle base and
     // gives the clock a clean pivot point.
     if d < 3.5 {
@@ -189,7 +189,7 @@ fn draw_circle(p: vec2<f32>, center: vec2<f32>, r: f32, needle: f32, kind: i32) 
     return col;
 }
 
-// ── Helper: HUD panel background SDF ─────────────────────────────────────────
+// Helper: HUD panel background SDF
 // Returns the signed distance for a single rounded rectangle that covers the
 // entire HUD widget: both circles + all surrounding cardinal labels + the
 // current-value labels to the left.
@@ -202,30 +202,30 @@ fn draw_circle(p: vec2<f32>, center: vec2<f32>, r: f32, needle: f32, kind: i32) 
 //   bottom: cy2 + radius + 28  (below the Winter/18:00 label)
 fn panel_rect_sdf(p: vec2<f32>) -> f32 {
     let cx = u.cx1;   // cx1 == cx2: both circles share the same X
-    let r  = u.radius;
+    let r = u.radius;
     let x0 = cx - r - 112.0;
     let x1 = cx + r + 72.0;
     let y0 = u.cy1 - r - 28.0;
     let y1 = u.cy2 + r + 28.0;
     // Rounded-rect SDF (corner radius 8 px for a smooth panel feel).
-    let center   = vec2<f32>((x0 + x1) * 0.5, (y0 + y1) * 0.5);
+    let center = vec2<f32>((x0 + x1) * 0.5, (y0 + y1) * 0.5);
     let half_ext = vec2<f32>((x1 - x0) * 0.5, (y1 - y0) * 0.5);
     let cr = 8.0;
     let q = abs(p - center) - half_ext + vec2<f32>(cr);
     return length(max(q, vec2<f32>(0.0))) + min(max(q.x, q.y), 0.0) - cr;
 }
 
-// ── Fragment shader (entry point) ─────────────────────────────────────────────
+// Fragment shader (entry point)
 // Runs once per pixel of the full-screen quad.
 // Rendering order (back to front):
 //   1. Panel background — dark semi-transparent rounded rect behind everything.
 //   2. Circles          — drawn on top of the panel wherever they overlap.
 @fragment
 fn fs_main(@builtin(position) frag_pos: vec4<f32>) -> @location(0) vec4<f32> {
-    let p  = frag_pos.xy;
+    let p = frag_pos.xy;
     let c1 = vec2<f32>(u.cx1, u.cy1);
     let c2 = vec2<f32>(u.cx2, u.cy2);
-    let r  = u.radius;
+    let r = u.radius;
 
     let d1 = length(p - c1);   // distance to season circle centre
     let d2 = length(p - c2);   // distance to time circle centre
@@ -234,7 +234,7 @@ fn fs_main(@builtin(position) frag_pos: vec4<f32>) -> @location(0) vec4<f32> {
     // Discard pixels that are outside both circles and outside the panel.
     if d1 > r + 1.5 && d2 > r + 1.5 && pd > 1.0 { discard; }
 
-    // ── Circles (drawn first so they appear above the panel background) ────────
+    // Circles (drawn first so they appear above the panel background)
     // Each pixel belongs to at most one circle; check season circle first.
     if d1 <= r + 1.5 {
         return draw_circle(p, c1, r, u.day_angle, 0);   // season circle
@@ -243,7 +243,7 @@ fn fs_main(@builtin(position) frag_pos: vec4<f32>) -> @location(0) vec4<f32> {
         return draw_circle(p, c2, r, u.hour_angle, 1);  // time circle
     }
 
-    // ── Panel background (pixels inside the panel but outside both circles) ────
+    // Panel background (pixels inside the panel but outside both circles)
     // Alpha fades from 0.60 deep inside to 0 at 1 px outside the rounded edge.
     let alpha = 0.60 * clamp(1.0 - pd, 0.0, 1.0);
     return vec4<f32>(0.05, 0.05, 0.05, alpha);

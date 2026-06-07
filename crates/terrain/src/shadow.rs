@@ -10,7 +10,7 @@ use rayon::{
 
 use dem_io::Heightmap;
 
-// ── shared DDA helpers ───────────────────────────────────────────────────────
+// shared DDA helpers
 
 pub(crate) struct DdaSetup {
     pub(crate) dc_step: f32,
@@ -68,7 +68,7 @@ pub(crate) fn dda_setup(
     }
 }
 
-// ── public output type ───────────────────────────────────────────────────────
+// public output type
 
 pub struct ShadowMask {
     pub data: Vec<f32>,
@@ -76,7 +76,7 @@ pub struct ShadowMask {
     pub cols: usize,
 }
 
-// ── scalar west-only (phase 3 baseline) ─────────────────────────────────────
+// scalar west-only (phase 3 baseline)
 
 pub fn compute_shadow_scalar(hm: &Heightmap, sun_elevation_rad: f32) -> ShadowMask {
     let mut data: Vec<f32> = vec![1.0f32; hm.rows * hm.cols];
@@ -105,7 +105,7 @@ pub fn compute_shadow_scalar(hm: &Heightmap, sun_elevation_rad: f32) -> ShadowMa
     }
 }
 
-// ── scalar branchless west-only ──────────────────────────────────────────────
+// scalar branchless west-only
 
 pub fn compute_shadow_scalar_branchless(hm: &Heightmap, sun_elevation_rad: f32) -> ShadowMask {
     let mut data: Vec<f32> = vec![1.0f32; hm.rows * hm.cols];
@@ -133,7 +133,7 @@ pub fn compute_shadow_scalar_branchless(hm: &Heightmap, sun_elevation_rad: f32) 
     }
 }
 
-// ── scalar arbitrary azimuth (DDA) ───────────────────────────────────────────
+// scalar arbitrary azimuth (DDA)
 
 pub fn compute_shadow_scalar_with_azimuth(
     hm: &Heightmap,
@@ -182,7 +182,7 @@ pub fn compute_shadow_scalar_with_azimuth(
     }
 }
 
-// ── NEON 4-wide west-only ────────────────────────────────────────────────────
+// NEON 4-wide west-only
 
 /// # Safety
 /// Uses `core::arch::aarch64` NEON intrinsics, so it must run on an aarch64 target.
@@ -254,7 +254,7 @@ pub unsafe fn compute_shadow_neon(hm: &Heightmap, sun_elevation_rad: f32) -> Sha
     }
 }
 
-// ── NEON parallel west-only ───────────────────────────────────────────────────
+// NEON parallel west-only
 
 /// # Safety
 /// Uses `core::arch::aarch64` NEON intrinsics, so it must run on an aarch64 target.
@@ -336,7 +336,7 @@ pub unsafe fn compute_shadow_neon_parallel(hm: &Heightmap, sun_elevation_rad: f3
     }
 }
 
-// ── NEON parallel arbitrary azimuth (DDA) ────────────────────────────────────
+// NEON parallel arbitrary azimuth (DDA)
 //
 // Parallelises over groups of 4 starting pixels (rayon).
 // Within each group, 4 rays run simultaneously in NEON lanes.
@@ -386,7 +386,7 @@ pub unsafe fn compute_shadow_neon_parallel_with_azimuth(
     starting_pixels.par_chunks_mut(4).for_each(|rays| {
         let ptr = data_ptr.get();
 
-        // ── scalar fallback for the last chunk (< 4 rays) ────────────────
+        // scalar fallback for the last chunk (< 4 rays)
         if rays.len() < 4 {
             for (sr, sc) in rays.iter().copied() {
                 let mut rm = f32::NEG_INFINITY;
@@ -411,7 +411,7 @@ pub unsafe fn compute_shadow_neon_parallel_with_azimuth(
             return;
         }
 
-        // ── NEON: 4 rays in parallel ──────────────────────────────────────
+        // NEON: 4 rays in parallel
         let mut rf = [rays[0].0, rays[1].0, rays[2].0, rays[3].0];
         let mut cf = [rays[0].1, rays[1].1, rays[2].1, rays[3].1];
         let mut dist = 0.0f32;
@@ -502,7 +502,7 @@ pub unsafe fn compute_shadow_neon_parallel_with_azimuth(
     }
 }
 
-// ── unit tests for the crate-private DDA geometry ────────────────────────────
+// unit tests for the crate-private DDA geometry
 //
 // `dda_setup` is `pub(crate)` and unreachable from `tests/`, so its geometry
 // (dominant-axis ±1 normalisation, per-quadrant entry-edge seeding, ground

@@ -120,7 +120,7 @@ mod tests {
 
     use super::*;
 
-    // ── hm_mip_count ─────────────────────────────────────────────────────────
+    // hm_mip_count
 
     #[test]
     fn mip_count_diamond_head_regression() {
@@ -145,7 +145,7 @@ mod tests {
         assert_eq!(hm_mip_count(0, 0), 1); // .max(1) guards the all-zero case
     }
 
-    // ── gen_hm_mip_bytes ─────────────────────────────────────────────────────
+    // gen_hm_mip_bytes
 
     fn decode_f16_le(bytes: &[u8], idx: usize) -> f32 {
         half::f16::from_ne_bytes([bytes[idx * 2], bytes[idx * 2 + 1]]).to_f32()
@@ -203,7 +203,7 @@ mod tests {
         }
     }
 
-    // ── normal packing ───────────────────────────────────────────────────────
+    // normal packing
 
     fn decode_rg16(bytes: &[u8], idx: usize) -> (f32, f32) {
         let o = idx * 4;
@@ -260,7 +260,7 @@ mod tests {
         }
     }
 
-    // ── AO + heightmap byte packing ──────────────────────────────────────────
+    // AO + heightmap byte packing
 
     #[test]
     fn ao_u8_scales_and_saturates() {
