@@ -99,9 +99,8 @@ dem_renderer/
 │   │   ├── lib.rs                          # public exports + CPU-side helpers (hm_to_f16_bytes, gen_hm_mip_bytes, pack_normals_*, pack_ao_u8)
 │   │   ├── context.rs                      # GpuContext (Arc-backed Device/Queue, Instance, Adapter, VramClass); OOM atomics + on_uncaptured_error
 │   │   ├── vram.rs                         # AtomicU64 alloc/drop accounting; create_*_tracked wrappers around wgpu allocations
-│   │   ├── camera.rs                       # CameraUniforms — std140-aligned struct mirrored in WGSL
+│   │   ├── camera.rs                       # CameraUniforms (std140 struct mirrored in WGSL) + camera_basis / projection_half_extents helpers
 │   │   ├── vector_utils.rs
-│   │   ├── render_rexture.rs
 │   │   ├── shader_texture.wgsl             # main compute raymarcher (3-tier blend, AO, fog, LOD, bicubic Catmull-Rom)
 │   │   └── scene/
 │   │       ├── mod.rs                      # GpuScene::{new, resize, update_heightmap, update_shadow, update_ao, dispatch_frame}; make_tier_size_placeholders
@@ -394,6 +393,17 @@ Use `#[inline(never)]` during profiling so functions appear as distinct symbols.
 - Prefer `core::arch` over `std::simd` when stable intrinsics cover the operation.
 - Name SIMD dispatch functions explicitly: `compute_normals_neon()`, `compute_normals_avx2()`, `compute_normals_vector()` (dispatcher).
 - ISA-specific modules go behind `#[cfg(target_arch = "x86_64")]` / `#[cfg(target_arch = "aarch64")]` and the dispatcher logs `[SCALAR FALLBACK]` when neither path is available.
+- Some functions deliberately exceed clippy's `too_many_arguments` (the HUD `draw` uniform mirror, tier byte-upload paths `upload_hm5m`/`upload_hm1m`, `dispatch_frame`, `prepare_scene_with_ctx`, `menu_row`), and `Phase` / `LauncherOutcome` trip `large_enum_variant`. These are intentional — flat shader-mirror / worker-packed-byte signatures where a struct adds no clarity, and singleton state machines that are never stored in a collection (so the per-element size penalty does not apply; boxing would only add a dispatch-path allocation). Keep them as rationale'd `#[allow(...)]`; do **not** refactor into structs or box the variants to satisfy clippy.
+
+---
+
+## Testing
+
+- The workspace crates (`dem_io`, `terrain`, `render_gpu`) carry inline `#[cfg(test)]` unit tests plus `tests/` integration suites (`render_gpu`'s GPU suites build a real wgpu device).
+- **The top-level `dem_renderer` package is a binary-only crate** — `[[bin]]` + build script, no `lib` target (verify with `cargo metadata`: `dem_renderer [['bin'], ['custom-build']]`). Rust `tests/` integration tests link against a package's *library* target, so an integration test here **cannot reach** `launcher::*` / `viewer::*` at all; those functions are also `pub(super)`/private, doubly unreachable from an external crate. **Tests for app code (launcher/viewer) must therefore be inline `#[cfg(test)] mod tests { use super::*; … }`** in the module itself (child modules can see the parent's private items). Run them with `cargo test --bin dem_renderer`.
+- Test the pure logic, skip the glue: covered targets are `viewer::geo::{sun_position, latlon_to_tile_metres}`, `viewer::tiers::{tier_radii, select_ifd, cap_to_gpu_limit, StreamingTier}`, `viewer::tile_index::tiles_overlapping_wgs84`, and `launcher::config` (serde round-trip / defaults). `main.rs` and the egui screens are device/winit glue with no behavioural signal — don't test them; verify the UI with `/run` + screenshots instead.
+- `Heightmap` / `TileEntry` / `ShadowMask` / `TierData` have all-public fields and no `Default`/constructor — build struct literals in fixtures rather than adding test-only constructors to production types.
+- Only extract a `src/lib.rs` if black-box public-API tests are genuinely wanted; those overlap with `render_gpu`'s existing GPU suite, so it's rarely worth the refactor.
 
 ---
 
