@@ -262,6 +262,9 @@ mod tests {
         assert_eq!(mips[1].2.len(), 4);
     }
 
+    // The expected value is written as `(0 + 40 + 80 + 120) / 4` so the four
+    // contributing texels stay visible, instead of collapsing to a bare `60`.
+    #[allow(clippy::identity_op)]
     #[test]
     fn rgba_mip_averages_rgb_but_takes_nearest_alpha() {
         // 2×2 base where the four texels have RGB 0/40/80/120 and alphas that
