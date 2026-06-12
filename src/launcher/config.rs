@@ -18,6 +18,18 @@ pub struct DemoViewConfig {
     pub close_tile_paths: Vec<PathBuf>,
     #[serde(default = "default_base_paths")]
     pub base_tile_paths: Vec<PathBuf>,
+    /// DSM tiles (trees/buildings as surface height) composited over the fine
+    /// tier's DTM where they overlap. Missing files degrade gracefully — the
+    /// tile index skips paths that don't exist on disk.
+    #[serde(default = "default_surface_paths")]
+    pub surface_tile_paths: Vec<PathBuf>,
+    /// Orthophoto mosaics streamed as albedo windows (fine + close ortho tiers).
+    #[serde(default = "default_ortho_paths")]
+    pub ortho_tile_paths: Vec<PathBuf>,
+    /// Land-cover mosaics; material codes (water/vegetation/buildings) are baked
+    /// into the ortho windows' alpha channel for shader-side material shading.
+    #[serde(default = "default_landcover_paths")]
+    pub landcover_tile_paths: Vec<PathBuf>,
 }
 
 fn default_demo_cam_lat() -> f64 {
@@ -39,6 +51,20 @@ fn default_fine_paths() -> Vec<PathBuf> {
 
 fn default_close_paths() -> Vec<PathBuf> {
     vec![PathBuf::from("big_size/DGM_R5.tif")]
+}
+
+fn default_surface_paths() -> Vec<PathBuf> {
+    vec![PathBuf::from(
+        "big_size/ALS_DSM_CRS3035RES50000mN2650000E4450000.tif",
+    )]
+}
+
+fn default_ortho_paths() -> Vec<PathBuf> {
+    vec![PathBuf::from("color/2019470_Mosaik_RGB.tif")]
+}
+
+fn default_landcover_paths() -> Vec<PathBuf> {
+    vec![PathBuf::from("color/2022470_Mosaik_LC.tif")]
 }
 
 fn default_base_paths() -> Vec<PathBuf> {
@@ -90,6 +116,9 @@ impl Default for DemoViewConfig {
             fine_tile_paths: default_fine_paths(),
             close_tile_paths: default_close_paths(),
             base_tile_paths: default_base_paths(),
+            surface_tile_paths: default_surface_paths(),
+            ortho_tile_paths: default_ortho_paths(),
+            landcover_tile_paths: default_landcover_paths(),
         }
     }
 }
@@ -310,5 +339,23 @@ mod tests {
         assert!(!d.base_tile_paths.is_empty());
         assert!(!d.close_tile_paths.is_empty());
         assert!(!d.fine_tile_paths.is_empty());
+        assert!(!d.surface_tile_paths.is_empty());
+        assert!(!d.ortho_tile_paths.is_empty());
+        assert!(!d.landcover_tile_paths.is_empty());
+    }
+
+    #[test]
+    fn old_config_without_surface_or_color_fields_gets_defaults() {
+        // A config.toml written before the DSM/ortho fields existed must still
+        // parse, with the new fields falling back to their serde defaults.
+        let s: LauncherSettings = toml::from_str(
+            "[demo_view]\ncamera_lat = 47.0\nfine_tile_paths = [\"a.tif\"]\n",
+        )
+        .expect("pre-DSM config parses");
+        assert_eq!(s.demo_view.camera_lat, 47.0);
+        assert_eq!(s.demo_view.fine_tile_paths, vec![PathBuf::from("a.tif")]);
+        assert_eq!(s.demo_view.surface_tile_paths, default_surface_paths());
+        assert_eq!(s.demo_view.ortho_tile_paths, default_ortho_paths());
+        assert_eq!(s.demo_view.landcover_tile_paths, default_landcover_paths());
     }
 }
