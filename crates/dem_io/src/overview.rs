@@ -48,6 +48,7 @@ pub(crate) fn build_downsampled(
     let src_dy = scale_tag[1];
     let crs_origin_x = tiepoint[3];
     let crs_origin_y = tiepoint[4];
+    let gdal_nodata = crate::geotiff::read_gdal_nodata(&mut decoder);
 
     let is_geo = crs::is_geographic(&proj4);
     let (origin_lat, origin_lon) = if is_geo {
@@ -137,7 +138,7 @@ pub(crate) fn build_downsampled(
                 for local_c in 0..(tile_col1 - tile_col0) {
                     let gc = tile_col0 + local_c;
                     let v = tile_data[local_r * actual_tw + local_c];
-                    if v.is_nan() || v < -1000.0 {
+                    if crate::geotiff::is_nodata_value(v, gdal_nodata) {
                         continue;
                     }
                     // Scatter this pixel into every downsample level simultaneously.

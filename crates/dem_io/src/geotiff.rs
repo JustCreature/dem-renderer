@@ -8,6 +8,27 @@ use crate::heightmap::fill_nodata;
 use crate::lzw_lenient;
 use crate::{DemError, Heightmap};
 
+/// Read the GDAL_NODATA ASCII tag (42113) from the decoder's current IFD.
+/// GDAL writes the NoData sentinel as decimal text (e.g. "3.4028235e+38" for the
+/// BEV ALS DSM); absent or unparseable tags yield `None`.
+pub(crate) fn read_gdal_nodata<R: std::io::Read + std::io::Seek>(
+    decoder: &mut Decoder<R>,
+) -> Option<f32> {
+    let value = decoder.find_tag(Tag::Unknown(42113)).ok().flatten()?;
+    let text = value.into_string().ok()?;
+    text.trim().trim_end_matches('\0').parse::<f32>().ok()
+}
+
+/// Shared NoData predicate for float DEM samples.
+/// Catches IEEE NaN, the SRTM-style large-negative sentinel, the large-positive
+/// float-max sentinel family (BEV ALS DSM uses +3.4028235e38 — without this check
+/// it parses as a valid 3.4e38 m elevation and poisons `max_terrain_h` and the
+/// raymarch sky exit), and the file's declared GDAL_NODATA value if any.
+#[inline]
+pub(crate) fn is_nodata_value(v: f32, gdal_nodata: Option<f32>) -> bool {
+    v.is_nan() || !(-1000.0..1.0e38).contains(&v) || gdal_nodata.is_some_and(|nd| v == nd)
+}
+
 /// Returns ModelPixelScaleTag[0] from a GeoTIFF, or 0.0 on failure.
 pub fn geotiff_pixel_scale(path: &Path) -> f64 {
     let Ok(file) = File::open(path) else {
@@ -76,6 +97,8 @@ pub fn parse_geotiff_auto(path: &Path) -> Result<Heightmap, DemError> {
             )
         };
 
+    let gdal_nodata = read_gdal_nodata(&mut decoder);
+
     let img = decoder.read_image()?;
     let raw: Vec<f32> = match img {
         DecodingResult::F32(v) => v,
@@ -86,7 +109,13 @@ pub fn parse_geotiff_auto(path: &Path) -> Result<Heightmap, DemError> {
     const NODATA: f32 = -9999.0;
     let mut data: Vec<f32> = raw
         .iter()
-        .map(|&v| if v.is_nan() || v < -1000.0 { NODATA } else { v })
+        .map(|&v| {
+            if is_nodata_value(v, gdal_nodata) {
+                NODATA
+            } else {
+                v
+            }
+        })
         .collect();
 
     let before = data.iter().filter(|&&v| v == NODATA).count();
@@ -234,6 +263,9 @@ pub fn extract_window(
     let crs_origin_x = tiepoint[3]; // easting of top-left corner in EPSG:31287 metres
     let crs_origin_y = tiepoint[4];
 
+    // GDAL_NODATA lives on IFD 0 like the other geo-tags.
+    let gdal_nodata = read_gdal_nodata(&mut decoder);
+
     // Seek to the requested IFD level for pixel data and actual dimensions.
     decoder.seek_to_image(ifd_level)?;
     let (cols, rows): (u32, u32) = decoder.dimensions()?;
@@ -345,11 +377,11 @@ pub fn extract_window(
                     // BEV DGM uses 0.0 as NoData sentinel instead of the SRTM convention
                     // (-32 768) or IEEE NaN.  This is safe because the minimum valid elevation
                     // in Austria is ~115 m (Hungarian border lowlands) — no real terrain pixel
-                    // can be zero.  The three conditions cover:
-                    //   v == 0.0    — BEV DGM NoData sentinel
-                    //   v.is_nan()  — IEEE NaN from corrupt or partial tiles
-                    //   v < -1000.0 — large-negative sentinel (SRTM-style, defensive guard)
-                    data[dst + i] = if v == 0.0 || v.is_nan() || v < -1000.0 {
+                    // can be zero.  The conditions cover:
+                    //   v == 0.0          — BEV DGM NoData sentinel
+                    //   is_nodata_value() — NaN, large-negative sentinel, float-max sentinel
+                    //                       family, and the file's declared GDAL_NODATA value
+                    data[dst + i] = if v == 0.0 || is_nodata_value(v, gdal_nodata) {
                         NODATA
                     } else {
                         v
