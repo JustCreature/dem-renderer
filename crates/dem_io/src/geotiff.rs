@@ -231,6 +231,42 @@ pub fn ifd_scales(path: &Path) -> Result<Vec<f64>, DemError> {
     Ok(scales)
 }
 
+/// Like `ifd_scales`, but skips non-image IFDs and reports which IFD index each
+/// scale belongs to. COGs with per-dataset transparency masks (e.g. BEV ortho
+/// mosaics) interleave mask IFDs (NewSubfileType bit 2) with the overview chain —
+/// walking by raw index would mis-pair scales with IFDs there. Returns
+/// `(ifd_index, scale)` pairs, finest first; scale is in the unit of the pixel
+/// scale tag (m/px projected, deg/px geographic).
+pub fn ifd_overview_levels(path: &Path) -> Result<Vec<(usize, f64)>, DemError> {
+    const MASK_BIT: u64 = 4; // NewSubfileType (tag 254) bit 2 = transparency mask
+
+    let file = File::open(path)?;
+    let mut decoder = Decoder::new(std::io::BufReader::new(file))?.with_limits(Limits::unlimited());
+    decoder.seek_to_image(0)?;
+    let (full_cols, _) = decoder.dimensions()?;
+    let base_scale = decoder.get_tag(Tag::Unknown(33550))?.into_f64_vec()?[0];
+
+    let mut levels = Vec::new();
+    let mut ifd = 0usize;
+    loop {
+        if ifd > 0 && decoder.seek_to_image(ifd).is_err() {
+            break;
+        }
+        let subfile_type = decoder
+            .find_tag(Tag::NewSubfileType)
+            .ok()
+            .flatten()
+            .and_then(|v| v.into_u64().ok())
+            .unwrap_or(0);
+        if subfile_type & MASK_BIT == 0 {
+            let (cols, _) = decoder.dimensions()?;
+            levels.push((ifd, base_scale * (full_cols as f64 / cols as f64)));
+        }
+        ifd += 1;
+    }
+    Ok(levels)
+}
+
 pub fn extract_window(
     path: &Path,
     centre_crs: (f64, f64),
