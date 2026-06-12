@@ -111,6 +111,10 @@ pub(crate) struct Viewer {
     /// banner silent). Drives the red "OOM prevented" warning in the HUD.
     fine_disabled_by_oom: bool,
     align_mode_viz: bool, // V key: show all 3 tiers as separate colored surfaces
+    /// T key: drape the streamed orthophoto albedo over the terrain. Harmless
+    /// when no ortho window is loaded — the shader skips draping while both
+    /// ortho extents are 0.
+    ortho_enabled: bool,
 }
 
 impl ApplicationHandler for Viewer {
@@ -616,6 +620,7 @@ impl ApplicationHandler for Viewer {
                     self.lod_mode,
                     self.smooth_radius_m,
                     self.align_mode_viz as u32,
+                    self.ortho_enabled as u32,
                 );
                 let output_buf: &wgpu::Buffer = scene.get_output_buffer();
 
@@ -1239,6 +1244,7 @@ impl Viewer {
             close_tier_disabled: false,
             fine_disabled_by_oom: false,
             align_mode_viz: false,
+            ortho_enabled: true,
         }
     }
 }

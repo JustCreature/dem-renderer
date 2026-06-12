@@ -47,6 +47,24 @@ struct CameraUniforms {
     smooth_radius_m: f32,
     align_mode: u32,
     _pad7: f32,
+    // fine ortho albedo window (extent_x == 0.0 means inactive)
+    ortho_fine_origin_x: f32,
+    ortho_fine_origin_y: f32,
+    ortho_fine_extent_x: f32,
+    ortho_fine_extent_y: f32,
+    ortho_fine_cos_rot: f32,
+    ortho_fine_sin_rot: f32,
+    // close ortho albedo window (extent_x == 0.0 means inactive)
+    ortho_close_origin_x: f32,
+    ortho_close_origin_y: f32,
+    ortho_close_extent_x: f32,
+    ortho_close_extent_y: f32,
+    ortho_close_cos_rot: f32,
+    ortho_close_sin_rot: f32,
+    ortho_mode: u32,
+    _pad8: f32,
+    _pad9: f32,
+    _pad10: f32,
 }
 
 // camera uniforms struct
@@ -75,6 +93,12 @@ struct CameraUniforms {
 @group(0) @binding(17) var hm1m_normal_tex: texture_2d<f32>;
 @group(0) @binding(18) var hm1m_normal_samp: sampler;
 @group(0) @binding(19) var<storage, read> hm1m_shadow: array<f32>;
+// ortho albedo windows: rgb = orthophoto, a = material code
+// (water 1.0, high veg ~0.75, med veg ~0.5, building ~0.25, none 0)
+@group(0) @binding(20) var ortho_fine_tex: texture_2d<f32>;
+@group(0) @binding(21) var ortho_fine_samp: sampler;
+@group(0) @binding(22) var ortho_close_tex: texture_2d<f32>;
+@group(0) @binding(23) var ortho_close_samp: sampler;
 
 // Width of the blend zone at the edge of any tier boundary, in metres.
 // smoothstep from 0 (edge, fully base tier) to BLEND_MARGIN (inner, fully close tier).
@@ -209,6 +233,50 @@ fn apply_convergence_1m(lx: f32, ly: f32) -> vec2<f32> {
         lx * cam.hm1m_cos_rot + ly * cam.hm1m_sin_rot,
         -lx * cam.hm1m_sin_rot + ly * cam.hm1m_cos_rot
     );
+}
+
+// Ortho-window blend weight at world position (x, y): 0 outside the rectangle,
+// smoothstep over BLEND_MARGIN of edge distance inside (same scheme as the
+// height tiers). The returned uv is rotation-corrected and normalised.
+struct OrthoSample {
+    weight: f32,
+    uv: vec2<f32>,
+}
+
+fn ortho_fine_sample_at(x: f32, y: f32) -> OrthoSample {
+    var s = OrthoSample(0.0, vec2<f32>(0.0));
+    if cam.ortho_fine_extent_x <= 0.0 { return s; }
+    let lx = x - cam.ortho_fine_origin_x;
+    let ly = y - cam.ortho_fine_origin_y;
+    if lx < 0.0 || lx >= cam.ortho_fine_extent_x || ly < 0.0 || ly >= cam.ortho_fine_extent_y {
+        return s;
+    }
+    let edge = min(min(lx, cam.ortho_fine_extent_x - lx), min(ly, cam.ortho_fine_extent_y - ly));
+    let a = vec2<f32>(
+        lx * cam.ortho_fine_cos_rot + ly * cam.ortho_fine_sin_rot,
+        -lx * cam.ortho_fine_sin_rot + ly * cam.ortho_fine_cos_rot
+    );
+    s.weight = smoothstep(0.0, BLEND_MARGIN, edge);
+    s.uv = vec2<f32>(a.x / cam.ortho_fine_extent_x, a.y / cam.ortho_fine_extent_y);
+    return s;
+}
+
+fn ortho_close_sample_at(x: f32, y: f32) -> OrthoSample {
+    var s = OrthoSample(0.0, vec2<f32>(0.0));
+    if cam.ortho_close_extent_x <= 0.0 { return s; }
+    let lx = x - cam.ortho_close_origin_x;
+    let ly = y - cam.ortho_close_origin_y;
+    if lx < 0.0 || lx >= cam.ortho_close_extent_x || ly < 0.0 || ly >= cam.ortho_close_extent_y {
+        return s;
+    }
+    let edge = min(min(lx, cam.ortho_close_extent_x - lx), min(ly, cam.ortho_close_extent_y - ly));
+    let a = vec2<f32>(
+        lx * cam.ortho_close_cos_rot + ly * cam.ortho_close_sin_rot,
+        -lx * cam.ortho_close_sin_rot + ly * cam.ortho_close_cos_rot
+    );
+    s.weight = smoothstep(0.0, BLEND_MARGIN, edge);
+    s.uv = vec2<f32>(a.x / cam.ortho_close_extent_x, a.y / cam.ortho_close_extent_y);
+    return s;
 }
 
 // Catmull-Rom 1D weight vector for fractional offset t ∈ [0, 1].
@@ -798,13 +866,57 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
         // is narrow enough that the easing is what gives the coastline its crisp edge.
         let coastal = mix(sea, turquoise, clamp(pos.z / 15.5, 0.0, 1.0));
         let base = mix(coastal, land, smoothstep(15.5, 17.0, pos.z));
-        let base_r = base.x;
-        let base_g = base.y;
-        let base_b = base.z;
 
-        let r = u32(clamp(base_r * brightness, 0.0, 255.0));
-        let g = u32(clamp(base_g * brightness, 0.0, 255.0));
-        let b = u32(clamp(base_b * brightness, 0.0, 255.0));
+        // ── albedo: procedural ramp, overridden by streamed ortho windows ──
+        // Close window first, fine window on top (same nesting as the height
+        // tiers). The mip level reuses the distance heuristic from the march
+        // loop so distant ortho texels don't shimmer; each texture clamps to
+        // its own level count because fine/close windows differ in size.
+        var albedo = base;
+        var ortho_w = 0.0;   // strongest ortho influence at this hit
+        var material = 0.0;  // land-cover material code from the winning sample's alpha
+        if cam.ortho_mode == 1u {
+            let lod_mip_div_o = select(select(select(8000.0, 15000.0, cam.lod_mode < 3u), 30000.0, cam.lod_mode < 2u), 1000000000.0, cam.lod_mode == 0u);
+            let mip_o = log2(1.0 + t / lod_mip_div_o);
+
+            let oc = ortho_close_sample_at(pos.x, pos.y);
+            if oc.weight > 0.0 {
+                let mip_c = min(mip_o, f32(textureNumLevels(ortho_close_tex) - 1u));
+                let s = textureSampleLevel(ortho_close_tex, ortho_close_samp, oc.uv, mip_c);
+                albedo = mix(albedo, s.rgb * 255.0, oc.weight);
+                material = mix(material, s.a, oc.weight);
+                ortho_w = max(ortho_w, oc.weight);
+            }
+            let ofs = ortho_fine_sample_at(pos.x, pos.y);
+            if ofs.weight > 0.0 {
+                let mip_f = min(mip_o, f32(textureNumLevels(ortho_fine_tex) - 1u));
+                let s = textureSampleLevel(ortho_fine_tex, ortho_fine_samp, ofs.uv, mip_f);
+                albedo = mix(albedo, s.rgb * 255.0, ofs.weight);
+                material = mix(material, s.a, ofs.weight);
+                ortho_w = max(ortho_w, ofs.weight);
+            }
+        }
+
+        // The orthophoto already contains the capture day's sun shading; running
+        // our full diffuse on top double-shades (north faces go pitch black).
+        // Where ortho wins, lift the brightness floor but keep enough relief
+        // modulation that the geometry still reads.
+        let lit = mix(brightness, clamp(brightness, 0.55, 1.0), ortho_w * 0.7);
+        var rgb = albedo * lit;
+
+        // Water material (land-cover class baked in alpha): flatten the noisy
+        // ortho water pixels toward a lake tint and add a sun glint along the
+        // mirror direction. smoothstep over the code keeps shorelines soft.
+        let water = smoothstep(0.85, 0.95, material);
+        if water > 0.0 {
+            rgb = mix(rgb, vec3<f32>(45.0, 80.0, 110.0) * lit, water * 0.55);
+            let glint = pow(max(dot(reflect(dir, normal), normalized_sun_dir), 0.0), 64.0);
+            rgb += vec3<f32>(255.0, 240.0, 210.0) * glint * water * 0.5 * shadow_factor;
+        }
+
+        let r = clamp(rgb.x, 0.0, 255.0);
+        let g = clamp(rgb.y, 0.0, 255.0);
+        let b = clamp(rgb.z, 0.0, 255.0);
 
         // add fog/haze in the distance — fog colour tracks the sky gradient so
         // looking up at a distant peak hazes into the correct overhead tone.
@@ -818,9 +930,9 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
         let fog_far = 60000.0 * alt_visibility_mul;   // 60 km at sea level
         let fog_t = select(0.0, smoothstep(fog_near, fog_far, t), cam.fog_enabled == 1u);
 
-        let fr = mix(f32(r), sky.x, fog_t);
-        let fg = mix(f32(g), sky.y, fog_t);
-        let fb = mix(f32(b), sky.z, fog_t);
+        let fr = mix(r, sky.x, fog_t);
+        let fg = mix(g, sky.y, fog_t);
+        let fb = mix(b, sky.z, fog_t);
 
         output[gid.y * cam.img_width + gid.x] = u32(fb) | (u32(fg) << 8u) | (u32(fr) << 16u) | (255u << 24u);  // bgra format
     } else {
