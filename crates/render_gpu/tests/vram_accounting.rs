@@ -106,3 +106,38 @@ fn set_inactive_frees_tracked_textures() {
         "inactive tier should free its textures (residual {after} bytes)"
     );
 }
+
+#[test]
+#[serial]
+fn ortho_inactive_frees_tracked_textures() {
+    gpu_or_skip!(ctx);
+
+    let base = pseudo_random(64, 64, 6, 500.0, 30.0, 30.0);
+    let (bn, bs, bao) = derive_maps(&base);
+    let mut scene = GpuScene::new(ctx.clone(), &base, &bn, &bs, &bao, 64, 64);
+
+    let baseline = tex_bytes();
+
+    let (w, h) = (128usize, 128usize);
+    let rgba: Vec<u8> = vec![200; w * h * 4];
+    let mips = render_gpu::gen_rgba_mip_bytes(&rgba, w, h);
+    scene.upload_ortho_fine(0.0, 0.0, 0.0, 128.0, 128.0, w as u32, h as u32, &rgba, &mips);
+    let foot = tex_bytes() - baseline;
+    assert!(foot > 0, "ortho upload should grow tracked textures");
+
+    // Same-size re-upload: grow-only logic, no allocation.
+    scene.upload_ortho_fine(1.0, 1.0, 0.0, 128.0, 128.0, w as u32, h as u32, &rgba, &mips);
+    assert_eq!(
+        tex_bytes() - baseline,
+        foot,
+        "same-size ortho reload must not allocate"
+    );
+
+    // Deactivation drops down to the 1×1 placeholder.
+    scene.set_ortho_fine_inactive();
+    let after = tex_bytes() - baseline;
+    assert!(
+        after.abs() < 1024,
+        "inactive ortho should free its texture (residual {after} bytes)"
+    );
+}

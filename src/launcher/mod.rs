@@ -198,6 +198,9 @@ impl LauncherApp {
             cfg.fine_tile_paths = resolve(cfg.fine_tile_paths);
             cfg.close_tile_paths = resolve(cfg.close_tile_paths);
             cfg.base_tile_paths = resolve(cfg.base_tile_paths);
+            cfg.surface_tile_paths = resolve(cfg.surface_tile_paths);
+            cfg.ortho_tile_paths = resolve(cfg.ortho_tile_paths);
+            cfg.landcover_tile_paths = resolve(cfg.landcover_tile_paths);
             cfg
         };
         // Write resolved absolute paths back into settings so LauncherOutcome::Start

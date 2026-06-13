@@ -49,7 +49,7 @@ Settings persist to `dirs::config_dir() / dem_renderer / config.toml` (macOS: `~
 |---|---|
 | `src/viewer/mod.rs` | `Viewer` (ApplicationHandler), WASD+mouse, sun animation, tile streaming dispatch, key bindings |
 | `src/viewer/scene_init.rs` | `prepare_scene_with_ctx` (single-tile / projected-CRS streaming), `prepare_demo_scene_with_ctx` (N×M Copernicus base, camera-centered crop to `GPU_SAFE_PX`), `compute_ao_cropped` |
-| `src/viewer/tiers.rs` | `StreamingTier` (drift-detected reload), `BevBaseState` (base/close/fine workers), `TierRadii` + `tier_radii(VramClass)` preset mapping, `cross_crs_world_origin_and_extent`, `select_ifd`, `cap_to_gpu_limit` |
+| `src/viewer/tiers.rs` | `StreamingTier<T: TierCentre>` (drift-detected reload; payload-generic), `BevBaseState` (base/close/fine + color_fine/color_close ortho workers), `TierRadii` + `tier_radii(VramClass)`, `OrthoRadii` + `ortho_radii(VramClass)`, `cross_crs_world_origin_and_extent`, `select_ifd`, `select_overview_level`, `cap_to_gpu_limit` |
 | `src/viewer/tile_index.rs` | `TileEntry` + `TileIndex` — discover WGS84 bounds of multiple tiles per tier; `tiles_overlapping_wgs84` |
 | `src/viewer/geo.rs` | `latlon_to_tile_metres` (handles both geographic and projected CRSes), `sun_position` |
 | `src/viewer/hud_renderer.rs` | glyphon HUD overlay, sun indicator, settings panel |
@@ -83,8 +83,9 @@ dem_renderer/
 ├── crates/
 │   ├── dem_io/src/
 │   │   ├── lib.rs
-│   │   ├── heightmap.rs                    # Heightmap (f32 data), parse_bil, fill_nodata, fill_nodata_from_base
-│   │   ├── geotiff.rs                      # parse_geotiff_auto, extract_window, ifd_scales, tile_bounds_wgs84, tile_centre_crs
+│   │   ├── heightmap.rs                    # Heightmap (f32 data), parse_bil, fill_nodata, fill_nodata_from_base, composite_surface_over (DSM-over-DTM)
+│   │   ├── geotiff.rs                      # parse_geotiff_auto, extract_window, ifd_scales, ifd_overview_levels (mask-aware), tile_bounds_wgs84, tile_centre_crs, GDAL_NODATA(42113)-aware NoData predicate
+│   │   ├── color.rs                        # extract_color_window: ortho RGB (JPEG YCbCr→RGB) + land-cover material codes packed RGBA8; landcover_histogram
 │   │   ├── grid.rs                         # assemble_grid (N×M), load_grid_from_paths, crop, stitch_windows[_geographic]
 │   │   ├── crs.rs                          # tile_proj4 / to_wgs84 / from_wgs84 / is_geographic / epsg_towgs84 / read_raw_crs_tags (proj4rs + proj4wkt + crs-definitions; WKT → inline-GeoKey → EPSG fallback chain)
 │   │   ├── overview.rs                     # ensure_overview_cache: build .tmp_dem_pre_calc_*.tif from large single-IFD tiles (copies source CRS tags verbatim so cache is self-describing)
@@ -175,8 +176,18 @@ For projected single-file mode and demo mode, the viewer spawns three background
 | 8 / 9 | AO texture (R8Unorm) + sampler |
 | 10–14 | 5 m close tier — heightmap (R32Float) + samp + normals (Rg16Snorm) + samp + shadow buffer |
 | 15–19 | 1 m fine tier — same layout as 5 m |
+| 20/21 | Fine ortho albedo (Rgba8Unorm, mipped; RGB = orthophoto, A = land-cover material code) + sampler |
+| 22/23 | Close ortho albedo + sampler |
 
 `scene::bind_group::rebuild_bind_group()` rebuilds the BG whenever a tier's texture / buffer is recreated (size grows). Steady-state reloads do not allocate — `write_texture` / `write_buffer` overwrite in place.
+
+### DSM + Ortho/Land-Cover Layers (Tirol demo)
+
+- **DSM (surface model, trees/buildings)**: `demo_view.surface_tile_paths` (default: the BEV ALS DSM, EPSG:3035 1 m). The fine worker extracts a DSM window with the same centre/radius as its DTM window and paints it on with `dem_io::composite_surface_over` (6 px feather; DTM stays the canvas so coverage never shrinks). Normals/shadows/bicubic then run on the composite — canopy and buildings get geometry and self-shadowing with zero shader changes. The DSM's `GDAL_NODATA = +3.4028235e38` is caught by the generalized NoData predicate (tag 42113 + `≥1e38` guard) — without it those cells parse as 3.4e38 m elevations and poison `max_terrain_h`.
+- **Ortho albedo**: `demo_view.ortho_tile_paths` + `landcover_tile_paths` (defaults: BEV 20 cm RGB + LC mosaics, EPSG:31255). Two `StreamingTier<ColorData>` workers (fine ≈0.8 m/px, close ≈6.4 m/px; radii per `ortho_radii(VramClass)`) read windows via `extract_color_window` — JPEG YCbCr chunks decoded by the tiff crate's zune path, BT.601-converted on the worker, land cover nearest-resampled onto the ortho grid. One RGBA8 texture per window: RGB = albedo, **A = material code ladder** (water 255 / high veg 192 / med veg 128 / building 64 / other 0 — codes ≥64 apart so bilinear boundary mixes degrade gracefully; mip gen box-filters RGB but takes nearest A). LC classes pinned empirically (`examples/inspect_color.rs`): 1=high veg, 2=ground/ice, 3=med veg, 4=buildings, 5=water, 6=low veg, 15=NoData. Note the LC mosaic is **Gray(4)** — 4-bit nibble-packed chunks, unpacked in `extract_u8_window`; the RGB mosaic interleaves **mask IFDs** in its chain, hence `ifd_overview_levels` (NewSubfileType-filtered) instead of raw `ifd_scales`.
+- **Shader**: hit-point albedo = procedural ramp → close ortho → fine ortho (edge-smoothstep over `BLEND_MARGIN`, per-window rotation like the height tiers, distance-heuristic mip). Where ortho wins, the brightness floor is lifted (`mix(brightness, clamp(brightness, 0.55, 1.0), w·0.7)`) because the photo carries baked sun shading — full diffuse on top double-shades north faces. Water (A ≥ ~0.9) blends toward a lake tint + mirror-direction sun glint. `T` toggles the drape (`ortho_mode` uniform).
+- **OOM ladder step 0**: both ortho textures are dropped before the fine tier — cosmetic-first degradation.
+- Missing files degrade gracefully everywhere (`build_tile_index` skips absent paths; empty index → no workers spawned).
 
 ---
 

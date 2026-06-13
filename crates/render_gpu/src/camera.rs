@@ -53,6 +53,26 @@ pub struct CameraUniforms {
     pub smooth_radius_m: f32,
     pub align_mode: u32, // 0=off, 1=tier viz (green/blue/red)
     pub _pad7: f32,
+    // fine ortho window (extent_x == 0.0 means inactive) — albedo texture draped
+    // over the fine tier's neighbourhood; own rect because the ortho's CRS
+    // (e.g. MGI GK Central) differs from both the base and fine-tier CRSes.
+    pub ortho_fine_origin_x: f32,
+    pub ortho_fine_origin_y: f32,
+    pub ortho_fine_extent_x: f32,
+    pub ortho_fine_extent_y: f32,
+    pub ortho_fine_cos_rot: f32,
+    pub ortho_fine_sin_rot: f32,
+    // close ortho window (extent_x == 0.0 means inactive)
+    pub ortho_close_origin_x: f32,
+    pub ortho_close_origin_y: f32,
+    pub ortho_close_extent_x: f32,
+    pub ortho_close_extent_y: f32,
+    pub ortho_close_cos_rot: f32,
+    pub ortho_close_sin_rot: f32,
+    pub ortho_mode: u32, // 0=off, 1=drape ortho albedo (T key)
+    pub _pad8: f32,
+    pub _pad9: f32,
+    pub _pad10: f32,
 }
 
 /// World-space camera basis `(forward, right, up)` for a +Z-up look-at camera.
@@ -83,21 +103,26 @@ mod tests {
 
     /// Layout guard: the struct is mirrored byte-for-byte in WGSL (std140). Any
     /// field added/removed/reordered without updating the shader must trip this.
-    /// Total: 14 vec4-sized rows × 16 bytes = 224.
+    /// Total: 18 vec4-sized rows × 16 bytes = 288.
     ///
     /// The size check alone would pass a same-size field swap, so we also pin the
     /// offsets of the std140-sensitive `vec3` members — each must sit on a 16-byte
     /// boundary, which is exactly what the trailing `_padN` fields exist to enforce.
     /// A missing pad shifts one of these and fails here instead of silently making
-    /// the shader read the wrong bytes.
+    /// the shader read the wrong bytes. The two ortho-window blocks are pinned the
+    /// same way: 12 scalars starting right after `_pad7`, with `ortho_mode` + 3 pads
+    /// closing the final 16-byte row.
     #[test]
     fn camera_uniforms_layout_is_std140() {
-        assert_eq!(std::mem::size_of::<CameraUniforms>(), 224);
+        assert_eq!(std::mem::size_of::<CameraUniforms>(), 288);
         assert_eq!(std::mem::offset_of!(CameraUniforms, origin), 0);
         assert_eq!(std::mem::offset_of!(CameraUniforms, forward), 16);
         assert_eq!(std::mem::offset_of!(CameraUniforms, right), 32);
         assert_eq!(std::mem::offset_of!(CameraUniforms, up), 48);
         assert_eq!(std::mem::offset_of!(CameraUniforms, sun_dir), 64);
+        assert_eq!(std::mem::offset_of!(CameraUniforms, ortho_fine_origin_x), 224);
+        assert_eq!(std::mem::offset_of!(CameraUniforms, ortho_close_origin_x), 248);
+        assert_eq!(std::mem::offset_of!(CameraUniforms, ortho_mode), 272);
     }
 
     #[test]

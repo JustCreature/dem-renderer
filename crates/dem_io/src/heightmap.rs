@@ -439,6 +439,126 @@ pub fn fill_nodata_from_base(hm: &mut Heightmap, base: &Heightmap) {
     }
 }
 
+/// Paint the valid cells of `overlay` (a DSM window) onto `canvas` (the fine
+/// DTM window), feathering `feather_px` pixels at the overlay's validity and
+/// window boundaries so canopy/building walls don't produce a hard step where
+/// the ALS coverage ends.
+///
+/// Direction matters: the canvas keeps its full extent, so fine-tier coverage
+/// never shrinks where the DSM window is smaller (it is clipped to its tile
+/// bounds near coverage edges). This is deliberately NOT `fill_nodata_from_base`
+/// with swapped roles — that function's 30 px outward blend would sand real
+/// canopy detail toward bare earth along every coverage edge.
+///
+/// Both rasters must share the same projected CRS and pixel scale (the DSM and
+/// the 1 m DTM tiles are both EPSG:3035 on the same metre lattice); anything
+/// else is a no-op with a warning since cross-CRS resampling is not this
+/// function's job.
+pub fn composite_surface_over(canvas: &mut Heightmap, overlay: &Heightmap, feather_px: usize) {
+    use std::collections::VecDeque;
+
+    if canvas.rows == 0 || canvas.cols == 0 || overlay.rows == 0 || overlay.cols == 0 {
+        return;
+    }
+    if canvas.crs_proj4 != overlay.crs_proj4 {
+        eprintln!("[surface] overlay CRS differs from canvas — skipping composite");
+        return;
+    }
+    let dx = canvas.dx_meters;
+    let dy = canvas.dy_meters;
+    if (overlay.dx_meters - dx).abs() > 0.01 * dx || (overlay.dy_meters - dy).abs() > 0.01 * dy {
+        eprintln!(
+            "[surface] overlay scale {}×{} differs from canvas {}×{} — skipping composite",
+            overlay.dx_meters, overlay.dy_meters, dx, dy
+        );
+        return;
+    }
+
+    // Integer pixel offset of the overlay's top-left corner within the canvas.
+    // Both windows come from extract_window on tiles sharing one metre lattice,
+    // so the offset is integral up to float noise.
+    let off_c = ((overlay.crs_origin_x - canvas.crs_origin_x) / dx).round() as isize;
+    let off_r = ((canvas.crs_origin_y - overlay.crs_origin_y) / dy).round() as isize;
+
+    let n = overlay.rows * overlay.cols;
+    let valid: Vec<bool> = overlay.data.iter().map(|&v| v > -1000.0).collect();
+
+    // Multi-source BFS: distance (in pixels) from each valid overlay cell to the
+    // nearest invalid cell or window edge. dist saturates at feather_px — beyond
+    // that the overlay applies at full weight.
+    let mut dist = vec![u32::MAX; n];
+    let mut queue: VecDeque<usize> = VecDeque::new();
+    for r in 0..overlay.rows {
+        for c in 0..overlay.cols {
+            let i = r * overlay.cols + c;
+            if !valid[i] {
+                continue;
+            }
+            let at_edge = r == 0 || c == 0 || r == overlay.rows - 1 || c == overlay.cols - 1;
+            let near_invalid = [(-1i32, 0i32), (1, 0), (0, -1), (0, 1)].iter().any(|&(dr, dc)| {
+                let nr = r as i32 + dr;
+                let nc = c as i32 + dc;
+                nr >= 0
+                    && nr < overlay.rows as i32
+                    && nc >= 0
+                    && nc < overlay.cols as i32
+                    && !valid[nr as usize * overlay.cols + nc as usize]
+            });
+            if at_edge || near_invalid {
+                dist[i] = 1;
+                queue.push_back(i);
+            }
+        }
+    }
+    while let Some(i) = queue.pop_front() {
+        let d = dist[i];
+        if d as usize >= feather_px {
+            continue;
+        }
+        let r = i / overlay.cols;
+        let c = i % overlay.cols;
+        for &(dr, dc) in &[(-1i32, 0i32), (1, 0), (0, -1), (0, 1)] {
+            let nr = r as i32 + dr;
+            let nc = c as i32 + dc;
+            if nr < 0 || nr >= overlay.rows as i32 || nc < 0 || nc >= overlay.cols as i32 {
+                continue;
+            }
+            let ni = nr as usize * overlay.cols + nc as usize;
+            if !valid[ni] || dist[ni] != u32::MAX {
+                continue;
+            }
+            dist[ni] = d + 1;
+            queue.push_back(ni);
+        }
+    }
+
+    for r in 0..overlay.rows {
+        let cr = r as isize + off_r;
+        if cr < 0 || cr >= canvas.rows as isize {
+            continue;
+        }
+        for c in 0..overlay.cols {
+            let i = r * overlay.cols + c;
+            if !valid[i] {
+                continue;
+            }
+            let cc = c as isize + off_c;
+            if cc < 0 || cc >= canvas.cols as isize {
+                continue;
+            }
+            let ci = cr as usize * canvas.cols + cc as usize;
+            let under = canvas.data[ci];
+            // A canvas sentinel must never be blended toward — take the surface.
+            let t = if under <= -1000.0 || feather_px == 0 {
+                1.0
+            } else {
+                (dist[i].min(feather_px as u32) as f32) / feather_px as f32
+            };
+            canvas.data[ci] = under * (1.0 - t) + overlay.data[i] * t;
+        }
+    }
+}
+
 fn build_grayscale_png(heightmap: &Heightmap, cols: usize, rows: usize) {
     let min = heightmap.data.iter().cloned().fold(f32::INFINITY, f32::min);
     let max = heightmap
@@ -734,6 +854,78 @@ mod tests {
         for &v in &hm.data {
             assert!(v <= -1000.0, "uncovered cell kept as sentinel, got {v}");
         }
+    }
+
+    // composite_surface_over
+
+    /// Projected 1 m/px heightmap with a CRS string so the same-CRS check passes.
+    fn mk_proj(rows: usize, cols: usize, ox: f64, oy: f64, data: Vec<f32>) -> Heightmap {
+        let mut hm = mk_hm(rows, cols, data);
+        hm.crs_origin_x = ox;
+        hm.crs_origin_y = oy;
+        hm.crs_proj4 = "+proj=laea +lat_0=52 +lon_0=10".to_string();
+        hm
+    }
+
+    #[test]
+    fn composite_paints_overlay_with_full_weight_past_feather() {
+        // 9×9 canvas at 100 m, fully-valid 9×9 overlay at 130 m, feather 2.
+        // The centre cell is ≥2 px from every overlay edge → full overlay value.
+        // An edge cell is at distance 1 → 50/50 blend.
+        let mut canvas = mk_proj(9, 9, 0.0, 9.0, vec![100.0; 81]);
+        let overlay = mk_proj(9, 9, 0.0, 9.0, vec![130.0; 81]);
+        composite_surface_over(&mut canvas, &overlay, 2);
+        assert_eq!(canvas.data[4 * 9 + 4], 130.0, "interior takes full surface");
+        assert_eq!(canvas.data[0], 115.0, "window-edge cell blends 50/50");
+    }
+
+    #[test]
+    fn composite_respects_pixel_offset() {
+        // Overlay's top-left sits 2 px east / 1 px south of the canvas origin.
+        let mut canvas = mk_proj(6, 6, 0.0, 6.0, vec![100.0; 36]);
+        let overlay = mk_proj(3, 3, 2.0, 5.0, vec![200.0; 9]);
+        composite_surface_over(&mut canvas, &overlay, 0);
+        assert_eq!(canvas.data[2 * 6 + 3], 200.0, "overlay centre lands at (r2,c3)");
+        assert_eq!(canvas.data[0], 100.0, "outside overlay untouched");
+        assert_eq!(canvas.data[5 * 6 + 5], 100.0);
+    }
+
+    #[test]
+    fn composite_skips_overlay_nodata_holes_and_feathers_around_them() {
+        // Fully valid except a centre sentinel; feather 1 ⇒ all valid cells are
+        // boundary cells (dist 1 == feather) so they still get full weight, while
+        // the hole itself keeps the canvas value.
+        let mut canvas = mk_proj(3, 3, 0.0, 3.0, vec![100.0; 9]);
+        let mut over = vec![150.0; 9];
+        over[4] = -9999.0;
+        let overlay = mk_proj(3, 3, 0.0, 3.0, over);
+        composite_surface_over(&mut canvas, &overlay, 1);
+        assert_eq!(canvas.data[4], 100.0, "hole keeps the DTM value");
+        assert_eq!(canvas.data[0], 150.0, "valid cells at dist=feather get full weight");
+    }
+
+    #[test]
+    fn composite_never_blends_toward_canvas_sentinel() {
+        // Canvas cell is the NODATA sentinel: even at the feather boundary the
+        // overlay must apply fully instead of mixing in -9999 (a crater).
+        let mut canvas = mk_proj(3, 3, 0.0, 3.0, vec![-9999.0; 9]);
+        let overlay = mk_proj(3, 3, 0.0, 3.0, vec![140.0; 9]);
+        composite_surface_over(&mut canvas, &overlay, 4);
+        assert!(canvas.data.iter().all(|&v| v == 140.0), "{:?}", canvas.data);
+    }
+
+    #[test]
+    fn composite_requires_matching_crs_and_scale() {
+        let mut canvas = mk_proj(3, 3, 0.0, 3.0, vec![100.0; 9]);
+        let mut overlay = mk_proj(3, 3, 0.0, 3.0, vec![150.0; 9]);
+        overlay.crs_proj4 = "+proj=utm +zone=33".to_string();
+        composite_surface_over(&mut canvas, &overlay, 1);
+        assert!(canvas.data.iter().all(|&v| v == 100.0), "CRS mismatch → no-op");
+
+        let mut overlay2 = mk_proj(3, 3, 0.0, 3.0, vec![150.0; 9]);
+        overlay2.dx_meters = 2.0;
+        composite_surface_over(&mut canvas, &overlay2, 1);
+        assert!(canvas.data.iter().all(|&v| v == 100.0), "scale mismatch → no-op");
     }
 
     #[test]

@@ -37,7 +37,8 @@ use crate::viewer::hud_renderer::HudRenderer;
 use self::geo::{latlon_to_tile_metres, sun_position};
 use self::scene_init::{INIT_SIM_DAY, INIT_SIM_HOUR, compute_ao_cropped};
 use self::tiers::{
-    AO_DRIFT_THRESHOLD_M, BevBaseState, TierRadii, cross_crs_world_origin_and_extent, tier_radii,
+    AO_DRIFT_THRESHOLD_M, BevBaseState, TierRadii, cross_crs_world_origin_and_extent, ortho_radii,
+    tier_radii,
 };
 use crate::consts::{GPU_SAFE_PX, M_PER_DEG};
 
@@ -111,6 +112,10 @@ pub(crate) struct Viewer {
     /// banner silent). Drives the red "OOM prevented" warning in the HUD.
     fine_disabled_by_oom: bool,
     align_mode_viz: bool, // V key: show all 3 tiers as separate colored surfaces
+    /// T key: drape the streamed orthophoto albedo over the terrain. Harmless
+    /// when no ortho window is loaded — the shader skips draping while both
+    /// ortho extents are 0.
+    ortho_enabled: bool,
 }
 
 impl ApplicationHandler for Viewer {
@@ -442,9 +447,12 @@ impl ApplicationHandler for Viewer {
                             scene.update_shadow(&data.shadow);
                             // The fine-tier origins are offsets relative to the base heightmap origin.
                             // After a base reload the origin shifts, so the old offsets are wrong —
-                            // hide both fine tiers until their workers deliver fresh windows.
+                            // hide both fine tiers (and both ortho windows, whose origins are
+                            // base-relative too) until their workers deliver fresh windows.
                             scene.set_hm5m_inactive();
                             scene.set_hm1m_inactive();
+                            scene.set_ortho_fine_inactive();
+                            scene.set_ortho_close_inactive();
                         }
                         self.hm = data.hm;
                         // Recalibrate drift threshold to match the actual loaded window.
@@ -463,6 +471,12 @@ impl ApplicationHandler for Viewer {
                         bev_base.close.invalidate();
                         if let Some(ref mut fine) = bev_base.fine {
                             fine.invalidate();
+                        }
+                        if let Some(ref mut cf) = bev_base.color_fine {
+                            cf.invalidate();
+                        }
+                        if let Some(ref mut cc) = bev_base.color_close {
+                            cc.invalidate();
                         }
                         // Respawn shadow worker with updated heightmap.
                         let (new_tx, new_worker_rx) = mpsc::sync_channel::<(f32, f32)>(1);
@@ -580,6 +594,71 @@ impl ApplicationHandler for Viewer {
                             }
                         }
                     }
+
+                    // ── ortho albedo windows (fine + close) ──
+                    // Same drift/trigger discipline as the height tiers; the
+                    // upload is a texture write (+ reallocation only on size
+                    // change), so the main-thread cost matches the other tiers.
+                    if let Some(ref mut cf) = bev_base.color_fine {
+                        if let Some(data) = cf.try_recv() {
+                            let (ox, oy, ex, ey, rot) =
+                                cross_crs_world_origin_and_extent(&data.window.georef, &self.hm);
+                            self.scene.as_mut().unwrap().upload_ortho_fine(
+                                ox,
+                                oy,
+                                rot,
+                                ex,
+                                ey,
+                                data.window.georef.cols as u32,
+                                data.window.georef.rows as u32,
+                                &data.window.rgba,
+                                &data.mips,
+                            );
+                            println!(
+                                "ortho fine updated: {}×{} at {:.1}m/px",
+                                data.window.georef.cols,
+                                data.window.georef.rows,
+                                data.window.georef.dx_meters
+                            );
+                        }
+                        if detail_allowed && !cf.computing {
+                            let (lat, lon) = cam_wgs84(self.cam_pos, &self.hm);
+                            if cf.needs_reload(lat, lon) && cf.try_trigger(lat, lon) {
+                                println!("ortho fine reload triggered at lat={lat:.4} lon={lon:.4}");
+                            }
+                        }
+                    }
+                    if let Some(ref mut cc) = bev_base.color_close {
+                        if let Some(data) = cc.try_recv() {
+                            let (ox, oy, ex, ey, rot) =
+                                cross_crs_world_origin_and_extent(&data.window.georef, &self.hm);
+                            self.scene.as_mut().unwrap().upload_ortho_close(
+                                ox,
+                                oy,
+                                rot,
+                                ex,
+                                ey,
+                                data.window.georef.cols as u32,
+                                data.window.georef.rows as u32,
+                                &data.window.rgba,
+                                &data.mips,
+                            );
+                            println!(
+                                "ortho close updated: {}×{} at {:.1}m/px",
+                                data.window.georef.cols,
+                                data.window.georef.rows,
+                                data.window.georef.dx_meters
+                            );
+                        }
+                        if detail_allowed && !cc.computing {
+                            let (lat, lon) = cam_wgs84(self.cam_pos, &self.hm);
+                            if cc.needs_reload(lat, lon) && cc.try_trigger(lat, lon) {
+                                println!(
+                                    "ortho close reload triggered at lat={lat:.4} lon={lon:.4}"
+                                );
+                            }
+                        }
+                    }
                 }
 
                 let surface: &wgpu::Surface =
@@ -616,6 +695,7 @@ impl ApplicationHandler for Viewer {
                     self.lod_mode,
                     self.smooth_radius_m,
                     self.align_mode_viz as u32,
+                    self.ortho_enabled as u32,
                 );
                 let output_buf: &wgpu::Buffer = scene.get_output_buffer();
 
@@ -750,6 +830,16 @@ impl ApplicationHandler for Viewer {
                         self.smooth_radius_m = presets[(cur + 1) % presets.len()];
                         return;
                     }
+                    // Toggle the streamed orthophoto albedo drape. The shader
+                    // falls back to the procedural elevation ramp when off.
+                    if kc == KeyCode::KeyT && event.state == winit::event::ElementState::Pressed {
+                        self.ortho_enabled = !self.ortho_enabled;
+                        eprintln!(
+                            "ortho albedo: {}",
+                            if self.ortho_enabled { "on" } else { "off" }
+                        );
+                        return;
+                    }
                     // Debug: force close + fine tier reloads on the next frame.
                     // Used to repro tier-swap memory peaks without flying.
                     if kc == KeyCode::KeyR && event.state == winit::event::ElementState::Pressed {
@@ -758,7 +848,13 @@ impl ApplicationHandler for Viewer {
                             if let Some(ref mut fine) = bev_base.fine {
                                 fine.invalidate();
                             }
-                            eprintln!("[vram] debug: close + fine tiers invalidated (R)");
+                            if let Some(ref mut cf) = bev_base.color_fine {
+                                cf.invalidate();
+                            }
+                            if let Some(ref mut cc) = bev_base.color_close {
+                                cc.invalidate();
+                            }
+                            eprintln!("[vram] debug: close + fine + ortho tiers invalidated (R)");
                         }
                         return;
                     }
@@ -903,9 +999,11 @@ impl Viewer {
     /// the active tier set instead of letting the next allocation panic.
     ///
     /// Step-down order:
+    ///  0. Ortho albedo windows — cosmetic only, cheapest quality loss; both
+    ///     textures reclaimed via `set_ortho_*_inactive`.
     ///  1. Fine tier — disabled, GPU memory reclaimed via `set_hm1m_inactive`.
     ///  2. Close tier — disabled, GPU memory reclaimed via `set_hm5m_inactive`.
-    ///  3. If both already disabled and we still OOM, give up — the base tier
+    ///  3. If all already disabled and we still OOM, give up — the base tier
     ///     itself isn't safe to drop, so we let wgpu's default behaviour panic.
     fn poll_and_handle_oom(&mut self) {
         if !render_gpu::OOM_OBSERVED.load(std::sync::atomic::Ordering::Relaxed) {
@@ -917,6 +1015,21 @@ impl Viewer {
         let Some(scene) = self.scene.as_mut() else {
             return;
         };
+
+        // Step 0: drop both ortho albedo windows — terrain geometry is intact,
+        // the shader falls back to the procedural ramp.
+        if let Some(ref mut bev_base) = self.bev_base
+            && (bev_base.color_fine.is_some() || bev_base.color_close.is_some())
+        {
+            eprintln!(
+                "[OOM #{count}] disabling ortho albedo windows — freeing both RGBA textures"
+            );
+            scene.set_ortho_fine_inactive();
+            scene.set_ortho_close_inactive();
+            bev_base.color_fine = None;
+            bev_base.color_close = None;
+            return;
+        }
 
         // Step 1: kill fine tier if it's still alive.
         if let Some(ref mut bev_base) = self.bev_base
@@ -1061,15 +1174,35 @@ impl Viewer {
             let fine_index = Arc::new(tile_index::build_tile_index(&dv.fine_tile_paths));
             let close_index = Arc::new(tile_index::build_tile_index(&dv.close_tile_paths));
             let base_index = Arc::new(tile_index::build_tile_index(&dv.base_tile_paths));
+            let surface_index = Arc::new(tile_index::build_tile_index(&dv.surface_tile_paths));
+            if !surface_index.is_empty() {
+                println!(
+                    "DSM surface overlay active ({} tile(s))",
+                    surface_index.len()
+                );
+            }
+            let ortho_index = Arc::new(tile_index::build_tile_index(&dv.ortho_tile_paths));
+            let lc_index = Arc::new(tile_index::build_tile_index(&dv.landcover_tile_paths));
+            if !ortho_index.is_empty() {
+                println!(
+                    "ortho albedo streaming active ({} mosaic(s), {} land-cover)",
+                    ortho_index.len(),
+                    lc_index.len()
+                );
+            }
             let (cam_lat_d, cam_lon_d) = (dv.camera_lat, dv.camera_lon);
             bev_base = Some(BevBaseState::new(
                 fine_index,
                 close_index,
                 base_index,
+                surface_index,
+                ortho_index,
+                lc_index,
                 cam_lat_d,
                 cam_lon_d,
                 lat_rad,
                 tier_radii,
+                ortho_radii(chosen_class),
                 &hm,
                 &mut scene,
             ));
@@ -1177,10 +1310,14 @@ impl Viewer {
                 fine_index,
                 close_index,
                 base_index,
+                Arc::new(vec![]), // single-file mode has no DSM surface overlay
+                Arc::new(vec![]), // …and no ortho albedo mosaics
+                Arc::new(vec![]),
                 CAM_LAT,
                 CAM_LON,
                 lat_rad,
                 tier_radii,
+                ortho_radii(chosen_class),
                 &hm,
                 &mut scene,
             ));
@@ -1239,6 +1376,7 @@ impl Viewer {
             close_tier_disabled: false,
             fine_disabled_by_oom: false,
             align_mode_viz: false,
+            ortho_enabled: true,
         }
     }
 }

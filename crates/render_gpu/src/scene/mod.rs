@@ -60,6 +60,31 @@ pub struct GpuScene {
     pub(super) hm1m_sin_rot: f32,
     pub(super) hm1m_buf_elems: u64,
 
+    // ortho albedo windows (placeholder until upload_ortho_*; extent_x==0 = inactive)
+    pub(super) _ortho_fine_tex: wgpu::Texture,
+    pub(super) _ortho_fine_view: wgpu::TextureView,
+    pub(super) _ortho_fine_sampler: wgpu::Sampler,
+    pub(super) ortho_fine_origin_x: f32,
+    pub(super) ortho_fine_origin_y: f32,
+    pub(super) ortho_fine_extent_x: f32,
+    pub(super) ortho_fine_extent_y: f32,
+    pub(super) ortho_fine_cos_rot: f32,
+    pub(super) ortho_fine_sin_rot: f32,
+    pub(super) ortho_fine_cols: u32,
+    pub(super) ortho_fine_rows: u32,
+
+    pub(super) _ortho_close_tex: wgpu::Texture,
+    pub(super) _ortho_close_view: wgpu::TextureView,
+    pub(super) _ortho_close_sampler: wgpu::Sampler,
+    pub(super) ortho_close_origin_x: f32,
+    pub(super) ortho_close_origin_y: f32,
+    pub(super) ortho_close_extent_x: f32,
+    pub(super) ortho_close_extent_y: f32,
+    pub(super) ortho_close_cos_rot: f32,
+    pub(super) ortho_close_sin_rot: f32,
+    pub(super) ortho_close_cols: u32,
+    pub(super) ortho_close_rows: u32,
+
     // Mutable per-frame / per-sun-update
     pub(super) shadow_buf: wgpu::Buffer,
     pub(super) cam_buf: wgpu::Buffer,
@@ -309,6 +334,53 @@ pub(super) fn make_tier_size_placeholders(
     (texture, view, normal_tex, normal_view, shadow_buf)
 }
 
+/// 1×1 Rgba8Unorm placeholder texture for an ortho albedo slot. Used both at
+/// scene creation and by the drop-first reload cycle (`upload_ortho_*` /
+/// `set_ortho_*_inactive`) — the existing `make_tier_size_placeholders` is
+/// hardcoded to the height-tier resource trio (R16Float + Rgba8Snorm + shadow
+/// buffer), so the ortho slot gets its own minimal variant.
+pub(super) fn make_ortho_placeholder(
+    device: &wgpu::Device,
+    queue: &wgpu::Queue,
+    label: &str,
+) -> (wgpu::Texture, wgpu::TextureView) {
+    let tex_label = format!("{}_tex", label);
+    let texture = vram::create_texture_tracked(
+        device,
+        &wgpu::TextureDescriptor {
+            label: Some(&tex_label),
+            size: wgpu::Extent3d {
+                width: 1,
+                height: 1,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::Rgba8Unorm,
+            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+            view_formats: &[],
+        },
+        &tex_label,
+    );
+    queue.write_texture(
+        texture.as_image_copy(),
+        &[0u8, 0, 0, 0],
+        wgpu::TexelCopyBufferLayout {
+            offset: 0,
+            bytes_per_row: Some(4),
+            rows_per_image: None,
+        },
+        wgpu::Extent3d {
+            width: 1,
+            height: 1,
+            depth_or_array_layers: 1,
+        },
+    );
+    let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+    (texture, view)
+}
+
 /// Generate mip levels 1..7 for a heightmap texture using a max filter.
 pub(super) fn write_hm_mips(
     queue: &wgpu::Queue,
@@ -327,6 +399,35 @@ pub(super) fn write_hm_mips(
             wgpu::TexelCopyBufferLayout {
                 offset: 0,
                 bytes_per_row: Some(w * 2),
+                rows_per_image: None,
+            },
+            wgpu::Extent3d {
+                width: *w,
+                height: *h,
+                depth_or_array_layers: 1,
+            },
+        );
+    }
+}
+
+/// Write pre-generated RGBA8 mip levels 1..N (4 bytes/texel).
+pub(super) fn write_rgba_mips(
+    queue: &wgpu::Queue,
+    texture: &wgpu::Texture,
+    mips: &[(u32, u32, Vec<u8>)],
+) {
+    for (mip_idx, (w, h, data)) in mips.iter().enumerate() {
+        queue.write_texture(
+            wgpu::TexelCopyTextureInfo {
+                texture,
+                mip_level: (mip_idx + 1) as u32,
+                origin: wgpu::Origin3d::ZERO,
+                aspect: wgpu::TextureAspect::All,
+            },
+            data,
+            wgpu::TexelCopyBufferLayout {
+                offset: 0,
+                bytes_per_row: Some(w * 4),
                 rows_per_image: None,
             },
             wgpu::Extent3d {
@@ -457,6 +558,22 @@ impl GpuScene {
             hm1m_normal_sampler,
             hm1m_shadow_buf,
         ) = create_tier_placeholder(&gpu_ctx.device, &gpu_ctx.queue, "hm1m");
+
+        // ortho albedo placeholders (1×1 Rgba8Unorm) — inactive until upload_ortho_*
+        let (ortho_fine_tex, ortho_fine_view) =
+            make_ortho_placeholder(&gpu_ctx.device, &gpu_ctx.queue, "ortho_fine");
+        let (ortho_close_tex, ortho_close_view) =
+            make_ortho_placeholder(&gpu_ctx.device, &gpu_ctx.queue, "ortho_close");
+        let mk_ortho_sampler = || {
+            gpu_ctx.device.create_sampler(&wgpu::SamplerDescriptor {
+                mag_filter: wgpu::FilterMode::Linear,
+                min_filter: wgpu::FilterMode::Linear,
+                mipmap_filter: wgpu::MipmapFilterMode::Linear,
+                ..Default::default()
+            })
+        };
+        let ortho_fine_sampler = mk_ortho_sampler();
+        let ortho_close_sampler = mk_ortho_sampler();
 
         // normals packed buffer: bits 31–16 = nx_i16, bits 15–0 = ny_i16; nz reconstructed in shader
         // COPY_DST so update_heightmap can write_buffer
@@ -680,6 +797,39 @@ impl GpuScene {
                             },
                             count: None,
                         },
+                        // ortho albedo windows (fine 20/21, close 22/23)
+                        wgpu::BindGroupLayoutEntry {
+                            binding: 20,
+                            visibility: wgpu::ShaderStages::COMPUTE,
+                            ty: wgpu::BindingType::Texture {
+                                sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                                view_dimension: wgpu::TextureViewDimension::D2,
+                                multisampled: false,
+                            },
+                            count: None,
+                        },
+                        wgpu::BindGroupLayoutEntry {
+                            binding: 21,
+                            visibility: wgpu::ShaderStages::COMPUTE,
+                            ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                            count: None,
+                        },
+                        wgpu::BindGroupLayoutEntry {
+                            binding: 22,
+                            visibility: wgpu::ShaderStages::COMPUTE,
+                            ty: wgpu::BindingType::Texture {
+                                sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                                view_dimension: wgpu::TextureViewDimension::D2,
+                                multisampled: false,
+                            },
+                            count: None,
+                        },
+                        wgpu::BindGroupLayoutEntry {
+                            binding: 23,
+                            visibility: wgpu::ShaderStages::COMPUTE,
+                            ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                            count: None,
+                        },
                     ],
                 });
 
@@ -765,6 +915,23 @@ impl GpuScene {
                         binding: 19,
                         resource: hm1m_shadow_buf.as_entire_binding(),
                     },
+                    // ortho albedo windows (placeholders)
+                    wgpu::BindGroupEntry {
+                        binding: 20,
+                        resource: wgpu::BindingResource::TextureView(&ortho_fine_view),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 21,
+                        resource: wgpu::BindingResource::Sampler(&ortho_fine_sampler),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 22,
+                        resource: wgpu::BindingResource::TextureView(&ortho_close_view),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 23,
+                        resource: wgpu::BindingResource::Sampler(&ortho_close_sampler),
+                    },
                 ],
             });
         let render_shader = gpu_ctx
@@ -834,6 +1001,28 @@ impl GpuScene {
             hm1m_cos_rot: 1.0,
             hm1m_sin_rot: 0.0,
             hm1m_buf_elems: 1,
+            _ortho_fine_tex: ortho_fine_tex,
+            _ortho_fine_view: ortho_fine_view,
+            _ortho_fine_sampler: ortho_fine_sampler,
+            ortho_fine_origin_x: 0.0,
+            ortho_fine_origin_y: 0.0,
+            ortho_fine_extent_x: 0.0,
+            ortho_fine_extent_y: 0.0,
+            ortho_fine_cos_rot: 1.0,
+            ortho_fine_sin_rot: 0.0,
+            ortho_fine_cols: 0,
+            ortho_fine_rows: 0,
+            _ortho_close_tex: ortho_close_tex,
+            _ortho_close_view: ortho_close_view,
+            _ortho_close_sampler: ortho_close_sampler,
+            ortho_close_origin_x: 0.0,
+            ortho_close_origin_y: 0.0,
+            ortho_close_extent_x: 0.0,
+            ortho_close_extent_y: 0.0,
+            ortho_close_cos_rot: 1.0,
+            ortho_close_sin_rot: 0.0,
+            ortho_close_cols: 0,
+            ortho_close_rows: 0,
             shadow_buf,
             cam_buf,
             output_buf,
@@ -875,6 +1064,7 @@ impl GpuScene {
         lod_mode: u32,
         smooth_radius_m: f32,
         align_mode: u32,
+        ortho_mode: u32,
     ) {
         let (forward, right, up) = crate::camera::camera_basis(origin, look_at);
         let (half_w, half_h) = crate::camera::projection_half_extents(fov_deg, aspect);
@@ -926,6 +1116,22 @@ impl GpuScene {
             smooth_radius_m,
             align_mode,
             _pad7: 0.0,
+            ortho_fine_origin_x: self.ortho_fine_origin_x,
+            ortho_fine_origin_y: self.ortho_fine_origin_y,
+            ortho_fine_extent_x: self.ortho_fine_extent_x,
+            ortho_fine_extent_y: self.ortho_fine_extent_y,
+            ortho_fine_cos_rot: self.ortho_fine_cos_rot,
+            ortho_fine_sin_rot: self.ortho_fine_sin_rot,
+            ortho_close_origin_x: self.ortho_close_origin_x,
+            ortho_close_origin_y: self.ortho_close_origin_y,
+            ortho_close_extent_x: self.ortho_close_extent_x,
+            ortho_close_extent_y: self.ortho_close_extent_y,
+            ortho_close_cos_rot: self.ortho_close_cos_rot,
+            ortho_close_sin_rot: self.ortho_close_sin_rot,
+            ortho_mode,
+            _pad8: 0.0,
+            _pad9: 0.0,
+            _pad10: 0.0,
         };
 
         self.gpu_ctx

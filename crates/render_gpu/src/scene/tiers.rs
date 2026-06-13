@@ -378,6 +378,232 @@ impl GpuScene {
         self.hm1m_sin_rot = rot_rad.sin();
     }
 
+    /// Upload the fine ortho albedo window (RGBA8: RGB = orthophoto, A = material
+    /// code). Same drop-first reallocation strategy as `upload_hm5m`; steady-state
+    /// reloads with unchanged dimensions overwrite in place via `write_texture`.
+    // Args are the worker-packed byte slices + window geometry; kept flat by design.
+    #[allow(clippy::too_many_arguments)]
+    pub fn upload_ortho_fine(
+        &mut self,
+        origin_x: f32,
+        origin_y: f32,
+        rot_rad: f32,
+        extent_x: f32,
+        extent_y: f32,
+        cols: u32,
+        rows: u32,
+        rgba: &[u8],
+        mips: &[(u32, u32, Vec<u8>)],
+    ) {
+        let size_changed = cols != self.ortho_fine_cols || rows != self.ortho_fine_rows;
+
+        if size_changed {
+            // Drop-first cycle (see upload_hm5m): placeholder swap → rebuild →
+            // poll(Wait) so the old texture is actually freed before the new
+            // allocation. extent_x = 0.0 keeps the shader off the placeholder.
+            self.ortho_fine_extent_x = 0.0;
+
+            vram::track_texture_drop(&self._ortho_fine_tex, "ortho_fine_tex");
+            let (ph_tex, ph_view) = super::make_ortho_placeholder(
+                &self.gpu_ctx.device,
+                &self.gpu_ctx.queue,
+                "ortho_fine",
+            );
+            self._ortho_fine_tex = ph_tex;
+            self._ortho_fine_view = ph_view;
+            self.ortho_fine_cols = 0;
+            self.ortho_fine_rows = 0;
+
+            self.rebuild_bind_group();
+            let _ = self.gpu_ctx.device.poll(wgpu::PollType::Wait {
+                submission_index: None,
+                timeout: None,
+            });
+
+            vram::track_texture_drop(&self._ortho_fine_tex, "ortho_fine_tex");
+            let texture = vram::create_texture_tracked(
+                &self.gpu_ctx.device,
+                &wgpu::TextureDescriptor {
+                    label: Some("ortho_fine_tex"),
+                    size: wgpu::Extent3d {
+                        width: cols,
+                        height: rows,
+                        depth_or_array_layers: 1,
+                    },
+                    mip_level_count: crate::hm_mip_count(cols, rows),
+                    sample_count: 1,
+                    dimension: wgpu::TextureDimension::D2,
+                    format: wgpu::TextureFormat::Rgba8Unorm,
+                    usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+                    view_formats: &[],
+                },
+                "ortho_fine_tex",
+            );
+            self._ortho_fine_view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+            self._ortho_fine_tex = texture;
+
+            self.rebuild_bind_group();
+        }
+
+        self.gpu_ctx.queue.write_texture(
+            self._ortho_fine_tex.as_image_copy(),
+            rgba,
+            wgpu::TexelCopyBufferLayout {
+                offset: 0,
+                bytes_per_row: Some(cols * 4),
+                rows_per_image: None,
+            },
+            wgpu::Extent3d {
+                width: cols,
+                height: rows,
+                depth_or_array_layers: 1,
+            },
+        );
+        super::write_rgba_mips(&self.gpu_ctx.queue, &self._ortho_fine_tex, mips);
+
+        self.ortho_fine_origin_x = origin_x;
+        self.ortho_fine_origin_y = origin_y;
+        self.ortho_fine_extent_x = extent_x;
+        self.ortho_fine_extent_y = extent_y;
+        self.ortho_fine_cols = cols;
+        self.ortho_fine_rows = rows;
+        self.ortho_fine_cos_rot = rot_rad.cos();
+        self.ortho_fine_sin_rot = rot_rad.sin();
+    }
+
+    /// Disable the fine ortho window and eagerly free its texture.
+    /// See `set_hm5m_inactive` for the mechanism.
+    pub fn set_ortho_fine_inactive(&mut self) {
+        if self.ortho_fine_cols == 0 && self.ortho_fine_rows == 0 && self.ortho_fine_extent_x == 0.0
+        {
+            return;
+        }
+        self.ortho_fine_extent_x = 0.0;
+        vram::track_texture_drop(&self._ortho_fine_tex, "ortho_fine_tex");
+        let (ph_tex, ph_view) =
+            super::make_ortho_placeholder(&self.gpu_ctx.device, &self.gpu_ctx.queue, "ortho_fine");
+        self._ortho_fine_tex = ph_tex;
+        self._ortho_fine_view = ph_view;
+        self.ortho_fine_cols = 0;
+        self.ortho_fine_rows = 0;
+        self.rebuild_bind_group();
+        let _ = self.gpu_ctx.device.poll(wgpu::PollType::Wait {
+            submission_index: None,
+            timeout: None,
+        });
+    }
+
+    /// Upload the close ortho albedo window. Same mechanism as `upload_ortho_fine`.
+    // Args are the worker-packed byte slices + window geometry; kept flat by design.
+    #[allow(clippy::too_many_arguments)]
+    pub fn upload_ortho_close(
+        &mut self,
+        origin_x: f32,
+        origin_y: f32,
+        rot_rad: f32,
+        extent_x: f32,
+        extent_y: f32,
+        cols: u32,
+        rows: u32,
+        rgba: &[u8],
+        mips: &[(u32, u32, Vec<u8>)],
+    ) {
+        let size_changed = cols != self.ortho_close_cols || rows != self.ortho_close_rows;
+
+        if size_changed {
+            self.ortho_close_extent_x = 0.0;
+
+            vram::track_texture_drop(&self._ortho_close_tex, "ortho_close_tex");
+            let (ph_tex, ph_view) = super::make_ortho_placeholder(
+                &self.gpu_ctx.device,
+                &self.gpu_ctx.queue,
+                "ortho_close",
+            );
+            self._ortho_close_tex = ph_tex;
+            self._ortho_close_view = ph_view;
+            self.ortho_close_cols = 0;
+            self.ortho_close_rows = 0;
+
+            self.rebuild_bind_group();
+            let _ = self.gpu_ctx.device.poll(wgpu::PollType::Wait {
+                submission_index: None,
+                timeout: None,
+            });
+
+            vram::track_texture_drop(&self._ortho_close_tex, "ortho_close_tex");
+            let texture = vram::create_texture_tracked(
+                &self.gpu_ctx.device,
+                &wgpu::TextureDescriptor {
+                    label: Some("ortho_close_tex"),
+                    size: wgpu::Extent3d {
+                        width: cols,
+                        height: rows,
+                        depth_or_array_layers: 1,
+                    },
+                    mip_level_count: crate::hm_mip_count(cols, rows),
+                    sample_count: 1,
+                    dimension: wgpu::TextureDimension::D2,
+                    format: wgpu::TextureFormat::Rgba8Unorm,
+                    usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+                    view_formats: &[],
+                },
+                "ortho_close_tex",
+            );
+            self._ortho_close_view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+            self._ortho_close_tex = texture;
+
+            self.rebuild_bind_group();
+        }
+
+        self.gpu_ctx.queue.write_texture(
+            self._ortho_close_tex.as_image_copy(),
+            rgba,
+            wgpu::TexelCopyBufferLayout {
+                offset: 0,
+                bytes_per_row: Some(cols * 4),
+                rows_per_image: None,
+            },
+            wgpu::Extent3d {
+                width: cols,
+                height: rows,
+                depth_or_array_layers: 1,
+            },
+        );
+        super::write_rgba_mips(&self.gpu_ctx.queue, &self._ortho_close_tex, mips);
+
+        self.ortho_close_origin_x = origin_x;
+        self.ortho_close_origin_y = origin_y;
+        self.ortho_close_extent_x = extent_x;
+        self.ortho_close_extent_y = extent_y;
+        self.ortho_close_cols = cols;
+        self.ortho_close_rows = rows;
+        self.ortho_close_cos_rot = rot_rad.cos();
+        self.ortho_close_sin_rot = rot_rad.sin();
+    }
+
+    /// Disable the close ortho window and eagerly free its texture.
+    pub fn set_ortho_close_inactive(&mut self) {
+        if self.ortho_close_cols == 0
+            && self.ortho_close_rows == 0
+            && self.ortho_close_extent_x == 0.0
+        {
+            return;
+        }
+        self.ortho_close_extent_x = 0.0;
+        vram::track_texture_drop(&self._ortho_close_tex, "ortho_close_tex");
+        let (ph_tex, ph_view) =
+            super::make_ortho_placeholder(&self.gpu_ctx.device, &self.gpu_ctx.queue, "ortho_close");
+        self._ortho_close_tex = ph_tex;
+        self._ortho_close_view = ph_view;
+        self.ortho_close_cols = 0;
+        self.ortho_close_rows = 0;
+        self.rebuild_bind_group();
+        let _ = self.gpu_ctx.device.poll(wgpu::PollType::Wait {
+            submission_index: None,
+            timeout: None,
+        });
+    }
+
     /// Disable the 1 m fine tier and eagerly free its GPU resources.
     /// See `set_hm5m_inactive` for the mechanism.
     pub fn set_hm1m_inactive(&mut self) {

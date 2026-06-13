@@ -81,6 +81,22 @@ impl GpuScene {
                         binding: 19,
                         resource: self._hm1m_shadow_buf.as_entire_binding(),
                     },
+                    wgpu::BindGroupEntry {
+                        binding: 20,
+                        resource: wgpu::BindingResource::TextureView(&self._ortho_fine_view),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 21,
+                        resource: wgpu::BindingResource::Sampler(&self._ortho_fine_sampler),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 22,
+                        resource: wgpu::BindingResource::TextureView(&self._ortho_close_view),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 23,
+                        resource: wgpu::BindingResource::Sampler(&self._ortho_close_sampler),
+                    },
                 ],
             });
     }

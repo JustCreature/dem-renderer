@@ -76,6 +76,51 @@ pub fn gen_hm_mip_bytes(
     mips
 }
 
+/// Generate mip level byte data for an RGBA8 ortho texture (levels 1..N-1,
+/// N = `hm_mip_count(cols, rows)`). RGB channels are box-averaged; the alpha
+/// channel — a discrete material-code ladder, not coverage — takes the top-left
+/// sample instead, because averaging codes (0/64/128/192/255) would fabricate
+/// classes that don't exist at that location.
+/// Call on a background thread before `GpuScene::upload_ortho_*`.
+pub fn gen_rgba_mip_bytes(base_rgba: &[u8], cols: usize, rows: usize) -> Vec<(u32, u32, Vec<u8>)> {
+    let extra_mips = (hm_mip_count(cols as u32, rows as u32) as usize).saturating_sub(1);
+    let mut mips: Vec<(u32, u32, Vec<u8>)> = Vec::with_capacity(extra_mips);
+    let mut prev_w = cols;
+    let mut prev_h = rows;
+    for i in 0..extra_mips {
+        let w = (prev_w / 2).max(1);
+        let h = (prev_h / 2).max(1);
+        let mip_bytes = {
+            let prev: &[u8] = if i == 0 { base_rgba } else { &mips[i - 1].2 };
+            let mut out = Vec::with_capacity(w * h * 4);
+            for row in 0..h {
+                for col in 0..w {
+                    let r0 = (row * 2).min(prev_h - 1);
+                    let r1 = (row * 2 + 1).min(prev_h - 1);
+                    let c0 = (col * 2).min(prev_w - 1);
+                    let c1 = (col * 2 + 1).min(prev_w - 1);
+                    let px = |r: usize, c: usize| -> &[u8] {
+                        let off = (r * prev_w + c) * 4;
+                        &prev[off..off + 4]
+                    };
+                    let (p00, p01, p10, p11) = (px(r0, c0), px(r0, c1), px(r1, c0), px(r1, c1));
+                    for ch in 0..3 {
+                        let sum =
+                            p00[ch] as u16 + p01[ch] as u16 + p10[ch] as u16 + p11[ch] as u16;
+                        out.push((sum / 4) as u8);
+                    }
+                    out.push(p00[3]); // material code: nearest, never averaged
+                }
+            }
+            out
+        };
+        prev_w = w;
+        prev_h = h;
+        mips.push((w as u32, h as u32, mip_bytes));
+    }
+    mips
+}
+
 /// Pack normal vectors into Rg16Snorm bytes (4 bytes/pixel) for GPU texture upload.
 /// Call on a background thread before `GpuScene::upload_hm5m` / `upload_hm1m`.
 pub fn pack_normals_rg16_bytes(nx: &[f32], ny: &[f32]) -> Vec<u8> {
@@ -200,6 +245,49 @@ mod tests {
         for (w, h, bytes) in &mips {
             assert!(*w >= 1 && *h >= 1);
             assert_eq!(bytes.len(), (*w * *h * 2) as usize);
+        }
+    }
+
+    // gen_rgba_mip_bytes
+
+    #[test]
+    fn rgba_mip_shapes_match_hm_pyramid() {
+        // 4×4 RGBA base → 2 generated levels (2×2, 1×1), 4 bytes/texel.
+        let base = vec![100u8; 4 * 4 * 4];
+        let mips = gen_rgba_mip_bytes(&base, 4, 4);
+        assert_eq!(mips.len(), hm_mip_count(4, 4) as usize - 1);
+        assert_eq!((mips[0].0, mips[0].1), (2, 2));
+        assert_eq!(mips[0].2.len(), 2 * 2 * 4);
+        assert_eq!((mips[1].0, mips[1].1), (1, 1));
+        assert_eq!(mips[1].2.len(), 4);
+    }
+
+    // The expected value is written as `(0 + 40 + 80 + 120) / 4` so the four
+    // contributing texels stay visible, instead of collapsing to a bare `60`.
+    #[allow(clippy::identity_op)]
+    #[test]
+    fn rgba_mip_averages_rgb_but_takes_nearest_alpha() {
+        // 2×2 base where the four texels have RGB 0/40/80/120 and alphas that
+        // would average to a nonexistent material code (0+255+64+128)/4 = 111.
+        #[rustfmt::skip]
+        let base = vec![
+            0, 0, 0, 0,        40, 40, 40, 255,
+            80, 80, 80, 64,    120, 120, 120, 128,
+        ];
+        let mips = gen_rgba_mip_bytes(&base, 2, 2);
+        assert_eq!((mips[0].0, mips[0].1), (1, 1));
+        let m = &mips[0].2;
+        assert_eq!(m[0], (0 + 40 + 80 + 120) / 4, "RGB box-averaged");
+        assert_eq!(m[3], 0, "alpha = top-left sample, never an average");
+    }
+
+    #[test]
+    fn rgba_mip_odd_dimensions_clamp_like_hm_path() {
+        let base = vec![7u8; 5 * 3 * 4];
+        let mips = gen_rgba_mip_bytes(&base, 5, 3);
+        assert_eq!((mips[0].0, mips[0].1), (2, 1));
+        for (w, h, bytes) in &mips {
+            assert_eq!(bytes.len(), (*w * *h * 4) as usize);
         }
     }
 

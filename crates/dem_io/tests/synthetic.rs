@@ -42,6 +42,40 @@ fn write_min_geotiff(
     img.write_data(data).unwrap();
 }
 
+/// Like `write_min_geotiff` but also writes the GDAL_NODATA ASCII tag (42113),
+/// the way GDAL/opals declare per-file sentinels (e.g. the BEV ALS DSM's +3.4e38).
+#[allow(clippy::too_many_arguments)]
+fn write_min_geotiff_with_nodata(
+    path: &Path,
+    cols: u32,
+    rows: u32,
+    scale: (f64, f64),
+    origin: (f64, f64),
+    geo_key_dir: &[u16],
+    data: &[f32],
+    nodata: &str,
+) {
+    let file = File::create(path).unwrap();
+    let mut enc = TiffEncoder::new(BufWriter::new(file)).unwrap();
+    let mut img = enc.new_image::<colortype::Gray32Float>(cols, rows).unwrap();
+    img.encoder()
+        .write_tag(Tag::Unknown(33550), &[scale.0, scale.1, 0.0_f64][..])
+        .unwrap();
+    img.encoder()
+        .write_tag(
+            Tag::Unknown(33922),
+            &[0.0_f64, 0.0, 0.0, origin.0, origin.1, 0.0][..],
+        )
+        .unwrap();
+    img.encoder()
+        .write_tag(Tag::Unknown(34735), geo_key_dir)
+        .unwrap();
+    img.encoder()
+        .write_tag(Tag::Unknown(42113), nodata)
+        .unwrap();
+    img.write_data(data).unwrap();
+}
+
 /// GeoKeyDirectory for a projected CRS given by EPSG (3072).
 fn projected_dir(epsg: u16) -> Vec<u16> {
     // header: version 1.1.0, 2 keys; GTModelType=1 (projected); ProjectedCSType=epsg
@@ -151,6 +185,98 @@ fn overview_cache_round_trip_preserves_crs() {
     );
     assert_eq!(src_tags.geo_double_params, cache_tags.geo_double_params);
     assert_eq!(src_tags.geo_ascii_params, cache_tags.geo_ascii_params);
+}
+
+#[test]
+fn float_max_sentinel_maps_to_nodata() {
+    // The BEV ALS DSM declares NoData = +3.4028235e38 via GDAL_NODATA. Before the
+    // generalized predicate, those cells parsed as valid 3.4e38 m elevations.
+    let dir = tempfile::tempdir().unwrap();
+    let src = dir.path().join("dsm.tif");
+    let mut data = ramp(8, 8);
+    data[0] = 3.402_823_5e38;
+    data[27] = 3.402_823_5e38;
+    write_min_geotiff_with_nodata(
+        &src,
+        8,
+        8,
+        (1.0, 1.0),
+        (4_450_000.0, 2_700_000.0),
+        &projected_dir(3035),
+        &data,
+        "3.4028235e+38",
+    );
+
+    // extract_window does not infill, so sentinels must surface as exact -9999.
+    let win = dem_io::extract_window(&src, (4_450_004.0, 2_699_996.0), 10.0, 0).unwrap();
+    assert_eq!((win.cols, win.rows), (8, 8));
+    assert_eq!(win.data[0], -9999.0, "float-max sentinel → NODATA");
+    assert_eq!(win.data[27], -9999.0);
+    assert!(
+        win.data.iter().all(|&v| v < 1.0e38),
+        "no float-max value may survive into the heightmap"
+    );
+    assert_eq!(win.data[1], data[1], "valid neighbours pass through");
+}
+
+#[test]
+fn declared_gdal_nodata_value_maps_to_nodata() {
+    // A finite sentinel inside the "plausible elevation" range is only catchable
+    // via the GDAL_NODATA tag — neither the NaN nor the ±magnitude checks fire.
+    let dir = tempfile::tempdir().unwrap();
+    let src = dir.path().join("custom_nodata.tif");
+    let mut data = ramp(8, 8);
+    data[5] = -500.0;
+    data[42] = -500.0;
+    write_min_geotiff_with_nodata(
+        &src,
+        8,
+        8,
+        (1.0, 1.0),
+        (4_450_000.0, 2_700_000.0),
+        &projected_dir(3035),
+        &data,
+        "-500",
+    );
+
+    let win = dem_io::extract_window(&src, (4_450_004.0, 2_699_996.0), 10.0, 0).unwrap();
+    assert_eq!(win.data[5], -9999.0, "tag-declared sentinel → NODATA");
+    assert_eq!(win.data[42], -9999.0);
+    assert_eq!(win.data[6], data[6], "valid neighbours pass through");
+}
+
+#[test]
+fn ifd_overview_levels_enumerates_a_multi_ifd_pyramid() {
+    // The overview cache is a multi-IFD GeoTIFF with no transparency-mask IFDs,
+    // so ifd_overview_levels must return one (ifd, scale) pair per level with
+    // contiguous indices and ascending scales. (The mask-skip branch needs a
+    // real BEV ortho and is covered by the gated local_big_tiles suite.)
+    let dir = tempfile::tempdir().unwrap();
+    let src = dir.path().join("src.tif");
+    let (cols, rows) = (96, 96);
+    write_min_geotiff(
+        &src,
+        cols,
+        rows,
+        (2.0, 2.0),
+        (4_400_000.0, 2_700_000.0),
+        &projected_dir(3035),
+        &ramp(cols, rows),
+    );
+    let cache = ensure_overview_cache(&src, |_, _| {})
+        .expect("cache build")
+        .expect("sub-5m source needs a cache");
+
+    let levels = dem_io::ifd_overview_levels(&cache).expect("walk IFDs");
+    assert!(levels.len() >= 2, "multi-IFD pyramid expected, got {levels:?}");
+    assert_eq!(levels[0].0, 0, "first level is IFD 0");
+    for (i, &(ifd, scale)) in levels.iter().enumerate() {
+        assert_eq!(ifd, i, "no mask IFDs → contiguous indices");
+        assert!(scale > 0.0, "positive pixel scale");
+    }
+    for pair in levels.windows(2) {
+        assert!(pair[1].1 > pair[0].1, "scales increase down the pyramid");
+    }
 }
 
 #[test]

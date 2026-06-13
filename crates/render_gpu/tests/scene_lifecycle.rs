@@ -34,6 +34,7 @@ fn dispatch_once(scene: &GpuScene, ctx: &render_gpu::GpuContext) {
         0,                   // lod_mode
         2000.0,              // smooth_radius_m
         0,                   // align_mode
+        0,                   // ortho_mode
     );
     ctx.queue.submit([enc.finish()]);
     drain(ctx);
@@ -94,5 +95,48 @@ fn tier_upload_then_inactive_survives_validation() {
     // Deactivate both tiers (drop-first placeholder path) and dispatch again.
     scene.set_hm1m_inactive();
     scene.set_hm5m_inactive();
+    dispatch_once(&scene, &ctx);
+}
+
+#[test]
+fn ortho_upload_then_inactive_survives_validation() {
+    gpu_or_skip!(ctx);
+
+    let base = pseudo_random(64, 64, 4, 500.0, 30.0, 30.0);
+    let (bn, bs, bao) = derive_maps(&base);
+    let mut scene = GpuScene::new(ctx.clone(), &base, &bn, &bs, &bao, 96, 96);
+    dispatch_once(&scene, &ctx);
+
+    // Upload both ortho windows with full mip chains — exercises the grow path
+    // on bindings 20–23 plus the per-mip write_texture calls. The dispatch runs
+    // with ortho_mode = 0 in dispatch_once, but validation covers the bindings
+    // regardless of the uniform flag.
+    let (w, h) = (96usize, 64usize);
+    let rgba: Vec<u8> = (0..w * h * 4).map(|i| (i % 251) as u8).collect();
+    let mips = render_gpu::gen_rgba_mip_bytes(&rgba, w, h);
+    scene.upload_ortho_fine(0.0, 0.0, 0.01, 96.0, 64.0, w as u32, h as u32, &rgba, &mips);
+    dispatch_once(&scene, &ctx);
+
+    let (cw, ch) = (40usize, 56usize);
+    let rgba_c: Vec<u8> = (0..cw * ch * 4).map(|i| (i % 13) as u8).collect();
+    let mips_c = render_gpu::gen_rgba_mip_bytes(&rgba_c, cw, ch);
+    scene.upload_ortho_close(
+        0.0, 0.0, -0.02, 256.0, 358.4, cw as u32, ch as u32, &rgba_c, &mips_c,
+    );
+    dispatch_once(&scene, &ctx);
+
+    // Same-size re-upload writes in place (no reallocation path).
+    scene.upload_ortho_fine(5.0, 5.0, 0.0, 96.0, 64.0, w as u32, h as u32, &rgba, &mips);
+    dispatch_once(&scene, &ctx);
+
+    // Grow the fine window — drop-first reallocation on binding 20.
+    let (gw, gh) = (130usize, 90usize);
+    let rgba_g: Vec<u8> = vec![128; gw * gh * 4];
+    let mips_g = render_gpu::gen_rgba_mip_bytes(&rgba_g, gw, gh);
+    scene.upload_ortho_fine(0.0, 0.0, 0.0, 130.0, 90.0, gw as u32, gh as u32, &rgba_g, &mips_g);
+    dispatch_once(&scene, &ctx);
+
+    scene.set_ortho_fine_inactive();
+    scene.set_ortho_close_inactive();
     dispatch_once(&scene, &ctx);
 }

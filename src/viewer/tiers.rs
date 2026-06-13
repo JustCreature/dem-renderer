@@ -129,23 +129,51 @@ pub(super) struct TierData {
     pub(super) gpu_ao_u8: Vec<u8>,
 }
 
-/// Per-tier channel state and drift-detection bookkeeping.
+/// Worker-result bundle for an ortho albedo window: pre-packed RGBA bytes (in
+/// `window.rgba`), CPU-generated mips, and the WGS84 centre for drift tracking.
+pub(super) struct ColorData {
+    pub(super) window: dem_io::ColorWindow,
+    pub(super) mips: Vec<(u32, u32, Vec<u8>)>,
+    pub(super) centre_lat: f64,
+    pub(super) centre_lon: f64,
+}
+
+/// Anything a streaming worker can deliver: exposes the WGS84 centre of the
+/// loaded window so `StreamingTier` can do payload-agnostic drift bookkeeping.
+pub(super) trait TierCentre {
+    fn centre(&self) -> (f64, f64);
+}
+
+impl TierCentre for TierData {
+    fn centre(&self) -> (f64, f64) {
+        (self.centre_lat, self.centre_lon)
+    }
+}
+
+impl TierCentre for ColorData {
+    fn centre(&self) -> (f64, f64) {
+        (self.centre_lat, self.centre_lon)
+    }
+}
+
+/// Per-tier channel state and drift-detection bookkeeping, generic over the
+/// worker's payload (`TierData` for height tiers, `ColorData` for ortho).
 ///
 /// `last_cx`/`last_cy` store WGS84 (lat, lon) in degrees.
 /// `drift_threshold_m` is stored in degrees (metres / M_PER_DEG).
-pub(super) struct StreamingTier {
+pub(super) struct StreamingTier<T: TierCentre = TierData> {
     pub(super) tx: mpsc::SyncSender<(f64, f64)>,
-    rx: mpsc::Receiver<TierData>,
+    rx: mpsc::Receiver<T>,
     pub(super) computing: bool,
     last_cx: f64,
     last_cy: f64,
     drift_threshold_m: f64,
 }
 
-impl StreamingTier {
+impl<T: TierCentre> StreamingTier<T> {
     pub(super) fn new(
         tx: mpsc::SyncSender<(f64, f64)>,
-        rx: mpsc::Receiver<TierData>,
+        rx: mpsc::Receiver<T>,
         init_cx: f64,
         init_cy: f64,
         drift_threshold_m: f64,
@@ -180,12 +208,13 @@ impl StreamingTier {
 
     /// Poll for a finished bundle. On success, clears `computing` and
     /// updates `last_cx`/`last_cy` from the bundle's centre coordinates.
-    pub(super) fn try_recv(&mut self) -> Option<TierData> {
+    pub(super) fn try_recv(&mut self) -> Option<T> {
         match self.rx.try_recv() {
             Ok(data) => {
                 self.computing = false;
-                self.last_cx = data.centre_lat;
-                self.last_cy = data.centre_lon;
+                let (cx, cy) = data.centre();
+                self.last_cx = cx;
+                self.last_cy = cy;
                 Some(data)
             }
             Err(_) => None,
@@ -222,11 +251,190 @@ pub(super) fn select_ifd(scales: &[f64], min_scale_m: f64, radius_m: f64, max_px
     scales.len().saturating_sub(1)
 }
 
+/// `select_ifd` over mask-filtered `(ifd, scale)` pairs (from
+/// `dem_io::ifd_overview_levels`) — needed for ortho mosaics whose IFD chain
+/// interleaves transparency-mask IFDs with the overview pyramid, where a raw
+/// scale index no longer equals the IFD index.
+pub(super) fn select_overview_level(
+    levels: &[(usize, f64)],
+    min_scale_m: f64,
+    radius_m: f64,
+    max_px: u32,
+) -> (usize, f64) {
+    for &(ifd, scale) in levels {
+        let window_px = (radius_m * 2.0 / scale) as u32;
+        if scale >= min_scale_m && window_px <= max_px {
+            return (ifd, scale);
+        }
+    }
+    levels.last().copied().unwrap_or((0, 1.0))
+}
+
+/// Ortho albedo window geometry per VRAM class. Target scales snap to the BEV
+/// mosaics' 0.2·2^k overview pyramid inside `select_overview_level`; RGBA8 +
+/// ⅓ mips puts the steady-state cost at ≈170 MB (Mid), ≈330 MB (High), ≈17 MB
+/// (Low) for both windows together — reclaimed first by the OOM ladder.
+#[derive(Clone, Copy, Debug)]
+pub(super) struct OrthoRadii {
+    pub(super) fine_radius_m: f64,
+    pub(super) fine_min_scale_m: f64,
+    pub(super) fine_drift_m: f64,
+    pub(super) close_radius_m: f64,
+    pub(super) close_min_scale_m: f64,
+    pub(super) close_drift_m: f64,
+}
+
+pub(super) fn ortho_radii(class: VramClass) -> OrthoRadii {
+    match class {
+        VramClass::High => OrthoRadii {
+            fine_radius_m: 3_000.0,
+            fine_min_scale_m: 0.75,
+            fine_drift_m: 800.0,
+            close_radius_m: 20_000.0,
+            close_min_scale_m: 6.0,
+            close_drift_m: 3_000.0,
+        },
+        VramClass::Mid => OrthoRadii {
+            fine_radius_m: 2_000.0,
+            fine_min_scale_m: 0.75,
+            fine_drift_m: 600.0,
+            close_radius_m: 14_000.0,
+            close_min_scale_m: 6.0,
+            close_drift_m: 2_000.0,
+        },
+        VramClass::Low => OrthoRadii {
+            fine_radius_m: 1_000.0,
+            fine_min_scale_m: 1.5,
+            fine_drift_m: 300.0,
+            close_radius_m: 8_000.0,
+            close_min_scale_m: 12.0,
+            close_drift_m: 1_500.0,
+        },
+    }
+}
+
+/// Spawn a background worker that streams camera-centred ortho albedo windows
+/// (RGB orthophoto + land-cover material codes packed RGBA). Mirrors the height
+/// tier workers: receives WGS84 `(lat, lon)`, resolves the ortho tile's CRS and
+/// mask-filtered overview level, reads + converts the window, packs mips, sends.
+fn spawn_color_worker(
+    ortho_index: Arc<super::tile_index::TileIndex>,
+    lc_index: Arc<super::tile_index::TileIndex>,
+    radius_m: f64,
+    min_scale_m: f64,
+    drift_m: f64,
+    label: &'static str,
+) -> StreamingTier<ColorData> {
+    use super::tile_index::tiles_overlapping_wgs84;
+    use std::collections::HashMap;
+    use std::path::{Path, PathBuf};
+
+    let (tx, worker_rx) = mpsc::sync_channel::<(f64, f64)>(1);
+    let (worker_tx, rx) = mpsc::channel::<ColorData>();
+
+    std::thread::spawn(move || {
+        // Overview walking opens the file and touches every IFD header; cache
+        // per path so steady-state reloads skip it.
+        let mut levels_cache: HashMap<PathBuf, Vec<(usize, f64)>> = HashMap::new();
+        let levels_for = |cache: &mut HashMap<PathBuf, Vec<(usize, f64)>>,
+                              path: &Path|
+         -> Vec<(usize, f64)> {
+            if let Some(v) = cache.get(path) {
+                return v.clone();
+            }
+            let v = dem_io::ifd_overview_levels(path).unwrap_or_else(|_| vec![(0, 1.0)]);
+            cache.insert(path.to_path_buf(), v.clone());
+            v
+        };
+
+        while let Ok((lat, lon)) = worker_rx.recv() {
+            let overlapping = tiles_overlapping_wgs84(&ortho_index, lat, lon, radius_m);
+            let Some(&oi) = overlapping.first() else {
+                continue;
+            };
+            let entry = &ortho_index[oi];
+            let Ok(centre) = dem_io::crs::from_wgs84(lat, lon, &entry.crs_proj4) else {
+                continue;
+            };
+            let rgb_levels = levels_for(&mut levels_cache, &entry.path);
+            let (rgb_ifd, rgb_scale) =
+                select_overview_level(&rgb_levels, min_scale_m, radius_m, GPU_SAFE_PX as u32);
+
+            // Land cover: pick the overview whose scale sits closest to the
+            // chosen RGB scale so the nearest-resampling in extract_color_window
+            // is ~1:1.
+            let lc_entry = tiles_overlapping_wgs84(&lc_index, lat, lon, radius_m)
+                .first()
+                .map(|&i| &lc_index[i]);
+            let (lc_path, lc_ifd) = match lc_entry {
+                Some(e) => {
+                    let lc_levels = levels_for(&mut levels_cache, &e.path);
+                    let ifd = lc_levels
+                        .iter()
+                        .min_by(|a, b| {
+                            (a.1 - rgb_scale)
+                                .abs()
+                                .partial_cmp(&(b.1 - rgb_scale).abs())
+                                .unwrap_or(std::cmp::Ordering::Equal)
+                        })
+                        .map(|&(i, _)| i);
+                    (Some(e.path.clone()), ifd)
+                }
+                None => (None, None),
+            };
+
+            let t0 = std::time::Instant::now();
+            match dem_io::extract_color_window(
+                &entry.path,
+                lc_path.as_deref(),
+                centre,
+                radius_m,
+                rgb_ifd,
+                lc_ifd,
+            ) {
+                Ok(window) => {
+                    let mips = render_gpu::gen_rgba_mip_bytes(
+                        &window.rgba,
+                        window.georef.cols,
+                        window.georef.rows,
+                    );
+                    eprintln!(
+                        "[ortho-{label}] {}×{} at {:.1} m/px  ({:.2?})",
+                        window.georef.cols,
+                        window.georef.rows,
+                        window.georef.dx_meters,
+                        t0.elapsed()
+                    );
+                    if worker_tx
+                        .send(ColorData {
+                            window,
+                            mips,
+                            centre_lat: lat,
+                            centre_lon: lon,
+                        })
+                        .is_err()
+                    {
+                        break;
+                    }
+                }
+                Err(e) => eprintln!("[ortho-{label}] window failed: {e}"),
+            }
+        }
+    });
+
+    // last centre (0, 0) guarantees the first drift check fires immediately.
+    StreamingTier::new(tx, rx, 0.0, 0.0, drift_m / M_PER_DEG)
+}
+
 /// Persistent state for BEV multi-tier streaming mode.
 pub(super) struct BevBaseState {
     pub(super) base: StreamingTier, // wide window, low resolution (IFD-2/1)
     pub(super) close: StreamingTier, // close window, 5 m/px (IFD-0)
     pub(super) fine: Option<StreamingTier>, // fine window, 1 m/px (1m tile IFD-0); None if no 1m tiles available
+    /// Ortho albedo streamers (fine + close windows); None when no ortho mosaic
+    /// is configured or its file is missing.
+    pub(super) color_fine: Option<StreamingTier<ColorData>>,
+    pub(super) color_close: Option<StreamingTier<ColorData>>,
 }
 
 impl BevBaseState {
@@ -243,10 +451,14 @@ impl BevBaseState {
         fine_index: Arc<super::tile_index::TileIndex>,
         close_index: Arc<super::tile_index::TileIndex>,
         base_index: Arc<super::tile_index::TileIndex>,
+        surface_index: Arc<super::tile_index::TileIndex>,
+        ortho_index: Arc<super::tile_index::TileIndex>,
+        lc_index: Arc<super::tile_index::TileIndex>,
         cam_lat: f64,
         cam_lon: f64,
         lat_rad: f32,
         radii: TierRadii,
+        ortho: OrthoRadii,
         hm: &Arc<Heightmap>,
         scene: &mut GpuScene,
     ) -> Self {
@@ -463,6 +675,7 @@ impl BevBaseState {
             let (hm1m_tx, hm1m_worker_rx) = mpsc::sync_channel::<(f64, f64)>(1);
             let (hm1m_worker_tx, hm1m_rx) = mpsc::channel::<TierData>();
             let fine_idx = Arc::clone(&fine_index);
+            let surface_idx = Arc::clone(&surface_index);
             let lat_rad_1m = lat_rad;
             let recent_5m_w = recent_5m_fine;
             std::thread::spawn(move || {
@@ -500,6 +713,21 @@ impl BevBaseState {
                         && let Some(ref close_hm) = *g
                     {
                         dem_io::fill_nodata_from_base(&mut raw1m, close_hm);
+                    }
+                    // DSM overlay: composite trees/buildings over the bare-earth
+                    // DTM wherever surface tiles cover this window. Normals,
+                    // shadows and the bicubic march then all see the composite,
+                    // so the canopy gets geometry and self-shadowing for free.
+                    for &si in &tiles_overlapping_wgs84(&surface_idx, lat, lon, fine_radius_m) {
+                        let e = &surface_idx[si];
+                        let Ok((set, snt)) = dem_io::crs::from_wgs84(lat, lon, &e.crs_proj4)
+                        else {
+                            continue;
+                        };
+                        if let Ok(dsm) = extract_window(&e.path, (set, snt), fine_radius_m, e.ifd)
+                        {
+                            dem_io::composite_surface_over(&mut raw1m, &dsm, 6);
+                        }
                     }
                     dem_io::clamp_nodata_to_sea(&mut raw1m);
                     let hm1m = Arc::new(raw1m);
@@ -544,6 +772,31 @@ impl BevBaseState {
         let effective_base_threshold = radii.base_drift_m.min(base_half_m * 0.5);
         let base_drift_deg = effective_base_threshold / M_PER_DEG;
 
+        // Ortho albedo streamers — only when an ortho mosaic actually resolved.
+        // (Land cover alone does nothing: material codes ride the ortho window.)
+        let (color_fine, color_close) = if ortho_index.is_empty() {
+            (None, None)
+        } else {
+            (
+                Some(spawn_color_worker(
+                    Arc::clone(&ortho_index),
+                    Arc::clone(&lc_index),
+                    ortho.fine_radius_m,
+                    ortho.fine_min_scale_m,
+                    ortho.fine_drift_m,
+                    "fine",
+                )),
+                Some(spawn_color_worker(
+                    ortho_index,
+                    lc_index,
+                    ortho.close_radius_m,
+                    ortho.close_min_scale_m,
+                    ortho.close_drift_m,
+                    "close",
+                )),
+            )
+        };
+
         BevBaseState {
             base: StreamingTier::new(base_tx, base_rx, cam_lat, cam_lon, base_drift_deg),
             close: StreamingTier::new(
@@ -554,6 +807,8 @@ impl BevBaseState {
                 effective_close_threshold / M_PER_DEG,
             ),
             fine,
+            color_fine,
+            color_close,
         }
     }
 }
@@ -716,6 +971,61 @@ mod tests {
         assert!(hi.fine_radius_m >= mid.fine_radius_m && mid.fine_radius_m >= lo.fine_radius_m);
     }
 
+    // ortho_radii
+
+    #[test]
+    fn ortho_radii_are_internally_ordered() {
+        for class in [VramClass::Low, VramClass::Mid, VramClass::High] {
+            let o = ortho_radii(class);
+            assert!(
+                o.fine_radius_m < o.close_radius_m,
+                "{class:?}: fine ortho window must sit inside the close one"
+            );
+            assert!(
+                o.fine_min_scale_m < o.close_min_scale_m,
+                "{class:?}: fine window must target finer texels"
+            );
+            // A drift ≥ radius would let the camera exit before a reload fires.
+            assert!(o.fine_drift_m < o.fine_radius_m, "{class:?} fine drift");
+            assert!(o.close_drift_m < o.close_radius_m, "{class:?} close drift");
+            // The selected window must fit GPU_SAFE_PX at the target scale.
+            assert!(
+                (o.fine_radius_m * 2.0 / o.fine_min_scale_m) as usize <= GPU_SAFE_PX,
+                "{class:?}: fine ortho window exceeds the GPU texture cap"
+            );
+            assert!(
+                (o.close_radius_m * 2.0 / o.close_min_scale_m) as usize <= GPU_SAFE_PX,
+                "{class:?}: close ortho window exceeds the GPU texture cap"
+            );
+        }
+    }
+
+    // select_overview_level
+
+    #[test]
+    fn select_overview_level_keeps_mask_filtered_ifd_indices() {
+        // Levels as ifd_overview_levels reports them for the BEV RGB mosaic:
+        // IFD 1 is a transparency mask, so the pyramid jumps 0 → 2.
+        let levels = [
+            (0usize, 0.2),
+            (2, 0.4),
+            (3, 0.8),
+            (4, 1.6),
+            (5, 3.2),
+            (6, 6.4),
+        ];
+        // Fine ortho (≥0.75 m, 2 km radius): 0.8 m level → IFD 3, not index 2.
+        assert_eq!(select_overview_level(&levels, 0.75, 2_000.0, 8192), (3, 0.8));
+        // Close ortho (≥6 m, 14 km radius): 6.4 m level → IFD 6.
+        assert_eq!(select_overview_level(&levels, 6.0, 14_000.0, 8192), (6, 6.4));
+        // Nothing fits → coarsest level.
+        assert_eq!(
+            select_overview_level(&levels, 0.2, 1.0e9, 8192),
+            (6, 6.4),
+            "fall through to the coarsest pair"
+        );
+    }
+
     // select_ifd
 
     #[test]
@@ -764,6 +1074,122 @@ mod tests {
         let hm = proj_hm(100, 100);
         let out = cap_to_gpu_limit(hm, 50.0, -50.0);
         assert_eq!((out.rows, out.cols), (100, 100));
+    }
+
+    // cross_crs_world_origin / cross_crs_world_origin_and_extent
+
+    /// Projected heightmap with an explicit CRS + origin (1 m/px square).
+    fn crs_proj(proj4: &str, ox: f64, oy: f64, cols: usize, rows: usize) -> Heightmap {
+        let mut hm = proj_hm(rows, cols);
+        hm.crs_proj4 = proj4.to_string();
+        hm.crs_origin_x = ox;
+        hm.crs_origin_y = oy;
+        hm
+    }
+
+    /// Geographic heightmap (deg/px) with an explicit lon/lat origin.
+    fn crs_geo(lon0: f64, lat0: f64, dscale: f64, cols: usize, rows: usize) -> Heightmap {
+        let mut hm = proj_hm(rows, cols);
+        hm.crs_proj4 = "+proj=longlat +datum=WGS84 +no_defs".to_string();
+        hm.crs_origin_x = lon0;
+        hm.crs_origin_y = lat0;
+        hm.origin_lon = lon0;
+        hm.origin_lat = lat0;
+        hm.dx_deg = dscale;
+        hm.dy_deg = dscale;
+        hm.dx_meters = dscale * M_PER_DEG * lat0.to_radians().cos();
+        hm.dy_meters = dscale * M_PER_DEG;
+        hm
+    }
+
+    #[test]
+    fn cross_crs_same_crs_is_pure_offset() {
+        // Identical CRS → no projection: origin is the metre delta of the
+        // top-left corners (X right, Y down), extent is cols·dx / rows·dy, rot 0.
+        let utm = "+proj=utm +zone=32 +datum=WGS84 +units=m +no_defs";
+        let base = crs_proj(utm, 620_000.0, 5_240_000.0, 2000, 2000);
+        let mut hm = crs_proj(utm, 630_000.0, 5_235_000.0, 1000, 800);
+        hm.dx_meters = 2.0;
+        hm.dy_meters = 2.0;
+
+        let (ox, oy) = cross_crs_world_origin(&hm, &base);
+        assert_eq!((ox, oy), (10_000.0, 5_000.0), "metre offset of TL corners");
+
+        let (ox2, oy2, ex, ey, rot) = cross_crs_world_origin_and_extent(&hm, &base);
+        assert_eq!((ox2, oy2), (10_000.0, 5_000.0));
+        assert_eq!(ex, 2000.0, "extent_x = cols·dx");
+        assert_eq!(ey, 1600.0, "extent_y = rows·dy");
+        assert_eq!(rot, 0.0, "no meridian convergence within one CRS");
+    }
+
+    #[test]
+    fn cross_crs_projected_over_geographic_base_is_finite_and_sized() {
+        // 1 km UTM-32N window placed over a geographic (lon/lat) base — the
+        // geographic-base branch (cos-scaled metres + meridian rotation).
+        let base = crs_geo(11.4, 47.4, 0.000_27, 3000, 3000);
+        let hm = crs_proj(
+            "+proj=utm +zone=32 +datum=WGS84 +units=m +no_defs",
+            630_000.0,
+            5_235_000.0,
+            1000,
+            1000,
+        );
+        let (ox, oy, ex, ey, rot) = cross_crs_world_origin_and_extent(&hm, &base);
+        for v in [ox, oy, ex, ey, rot] {
+            assert!(v.is_finite(), "all outputs finite, got {v}");
+        }
+        // 1000 px @ 1 m projected into the base stays ~1 km within ±40 %.
+        assert!((600.0..1400.0).contains(&ex), "extent_x ≈ 1 km, got {ex}");
+        assert!((600.0..1400.0).contains(&ey), "extent_y ≈ 1 km, got {ey}");
+        // Meridian convergence between UTM-32N and lon/lat near 11.4°E is small.
+        assert!(rot.abs() < 0.3, "rotation small, got {rot} rad");
+    }
+
+    #[test]
+    fn cross_crs_projected_over_projected_base_is_finite_and_sized() {
+        // 1 km EPSG:3035 (LAEA) window over a UTM-32N base — the projected-base
+        // branch (from_wgs84 back into the base CRS).
+        let base = crs_proj(
+            "+proj=utm +zone=32 +datum=WGS84 +units=m +no_defs",
+            620_000.0,
+            5_240_000.0,
+            2000,
+            2000,
+        );
+        let hm = crs_proj(
+            "+proj=laea +lat_0=52 +lon_0=10 +x_0=4321000 +y_0=3210000 \
+             +ellps=GRS80 +towgs84=0,0,0 +units=m +no_defs",
+            4_430_000.0,
+            2_695_000.0,
+            1000,
+            1000,
+        );
+        let (ox, oy, ex, ey, rot) = cross_crs_world_origin_and_extent(&hm, &base);
+        for v in [ox, oy, ex, ey, rot] {
+            assert!(v.is_finite(), "all outputs finite, got {v}");
+        }
+        assert!((600.0..1400.0).contains(&ex), "extent_x ≈ 1 km, got {ex}");
+        assert!((600.0..1400.0).contains(&ey), "extent_y ≈ 1 km, got {ey}");
+        assert!(rot.abs() < 0.3, "rotation small, got {rot} rad");
+    }
+
+    #[test]
+    fn cross_crs_world_origin_geographic_base_branch() {
+        // Same geographic-base path for the origin-only helper.
+        let base = crs_geo(11.4, 47.4, 0.000_27, 3000, 3000);
+        let hm = crs_proj(
+            "+proj=utm +zone=32 +datum=WGS84 +units=m +no_defs",
+            630_000.0,
+            5_235_000.0,
+            1000,
+            1000,
+        );
+        let (ox, oy) = cross_crs_world_origin(&hm, &base);
+        // The metre offset is finite and on the order of the inter-origin
+        // distance (tens of km), i.e. the projection actually ran rather than
+        // returning the (0, 0) parse-failure fallback.
+        assert!(ox.is_finite() && oy.is_finite());
+        assert!(ox.abs() > 1.0 || oy.abs() > 1.0, "non-degenerate offset");
     }
 
     #[test]
@@ -855,5 +1281,169 @@ mod tests {
     fn try_recv_returns_none_when_idle() {
         let mut t = streaming_tier(0.0, 0.0, 100.0);
         assert!(t.try_recv().is_none());
+    }
+
+    /// Offscreen end-to-end render of the DSM + ortho pipeline against the real
+    /// Tirol tiles: DTM window + DSM composite as geometry, RGB ortho + land
+    /// cover as albedo, placed with the production `cross_crs_world_origin_and_extent`,
+    /// rendered through the real shader, read back, and saved to
+    /// `/tmp/offscreen_dsm_ortho.png` for visual inspection.
+    ///
+    /// Skips when the multi-GB local tiles (gitignored) or a GPU adapter are
+    /// absent, so CI stays green. Run with:
+    /// `cargo test --release --bin dem_renderer offscreen -- --nocapture`
+    #[test]
+    fn offscreen_dsm_ortho_render_smoke() {
+        let tiles = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tiles");
+        let dtm = tiles.join("big_size/CRS3035RES50000mN2650000E4450000.tif");
+        let dsm = tiles.join("big_size/ALS_DSM_CRS3035RES50000mN2650000E4450000.tif");
+        let rgb = tiles.join("color/2019470_Mosaik_RGB.tif");
+        let lc = tiles.join("color/2022470_Mosaik_LC.tif");
+        if ![&dtm, &dsm, &rgb, &lc].iter().all(|p| p.exists()) {
+            eprintln!("skipping — local Tirol tiles not present");
+            return;
+        }
+
+        // Mayrhofen valley: inside DSM, ortho and land-cover coverage.
+        let (lat, lon) = (47.16, 11.86);
+        let radius = 2_000.0;
+        let (width, height) = (800u32, 600u32);
+
+        // Geometry: DTM window with the DSM surface composited over it — the
+        // exact sequence the fine worker runs.
+        let proj4 = dem_io::crs::tile_proj4(&dtm).expect("DTM CRS");
+        let (e, n) = dem_io::crs::from_wgs84(lat, lon, &proj4).expect("project");
+        let mut hm = extract_window(&dtm, (e, n), radius, 0).expect("DTM window");
+        let dsm_win = extract_window(&dsm, (e, n), radius, 0).expect("DSM window");
+        dem_io::composite_surface_over(&mut hm, &dsm_win, 6);
+        dem_io::clamp_nodata_to_sea(&mut hm);
+        let normals = terrain::compute_normals_vector_par(&hm);
+        let shadow = terrain::compute_shadow_vector_par_with_azimuth(
+            &hm,
+            180.0_f32.to_radians(),
+            45.0_f32.to_radians(),
+            200.0,
+        );
+        let ao = vec![1.0f32; hm.rows * hm.cols];
+
+        let ctx = render_gpu::GpuContext::new();
+        let mut scene = GpuScene::new(ctx, &hm, &normals, &shadow, &ao, width, height);
+
+        // Albedo: real ortho + land cover window, placed with the production
+        // placement function (georef stub → world rect over this heightmap).
+        let rgb_proj4 = dem_io::crs::tile_proj4(&rgb).expect("RGB CRS");
+        let centre = dem_io::crs::from_wgs84(lat, lon, &rgb_proj4).expect("project ortho");
+        let levels = dem_io::ifd_overview_levels(&rgb).expect("RGB levels");
+        let (rgb_ifd, rgb_scale) = select_overview_level(&levels, 0.75, radius, 8192);
+        let lc_levels = dem_io::ifd_overview_levels(&lc).expect("LC levels");
+        let lc_ifd = lc_levels
+            .iter()
+            .min_by(|a, b| {
+                (a.1 - rgb_scale)
+                    .abs()
+                    .partial_cmp(&(b.1 - rgb_scale).abs())
+                    .unwrap()
+            })
+            .map(|&(i, _)| i);
+        let win = dem_io::extract_color_window(&rgb, Some(&lc), centre, radius, rgb_ifd, lc_ifd)
+            .expect("color window");
+        let mips = render_gpu::gen_rgba_mip_bytes(&win.rgba, win.georef.cols, win.georef.rows);
+        let (ox, oy, ex, ey, rot) = cross_crs_world_origin_and_extent(&win.georef, &hm);
+        scene.upload_ortho_fine(
+            ox,
+            oy,
+            rot,
+            ex,
+            ey,
+            win.georef.cols as u32,
+            win.georef.rows as u32,
+            &win.rgba,
+            &mips,
+        );
+
+        // Camera 400 m above the valley floor, pitched down toward the north.
+        let cam_x = (e - hm.crs_origin_x) as f32;
+        let cam_y = (hm.crs_origin_y - n) as f32;
+        let gi = (cam_y as usize).min(hm.rows - 1) * hm.cols + (cam_x as usize).min(hm.cols - 1);
+        let ground = hm.data[gi];
+        let origin = [cam_x, cam_y, ground + 400.0];
+        let look_at = [cam_x, cam_y - 900.0, ground];
+
+        let ctx = scene.get_gpu_ctx().clone();
+        let mut enc = ctx
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
+        scene.dispatch_frame(
+            &mut enc,
+            origin,
+            look_at,
+            70.0,
+            width as f32 / height as f32,
+            [0.3, -0.5, 0.8],
+            1.0,      // step_m
+            20_000.0, // t_max
+            0,        // ao_mode off
+            1,        // shadows on
+            0,        // fog off — keep colors unmixed for the assertions
+            2,        // vat Mid
+            0,        // lod Ultra
+            0.0,      // no bicubic
+            0,        // align viz off
+            1,        // ortho_mode ON
+        );
+        // Readback: copy the BGRA output into a mappable staging buffer.
+        let out_size = (width * height * 4) as u64;
+        let staging = ctx.device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("offscreen_staging"),
+            size: out_size,
+            usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        enc.copy_buffer_to_buffer(scene.get_output_buffer(), 0, &staging, 0, out_size);
+        ctx.queue.submit([enc.finish()]);
+        let slice = staging.slice(..);
+        slice.map_async(wgpu::MapMode::Read, |r| r.expect("map"));
+        let _ = ctx.device.poll(wgpu::PollType::Wait {
+            submission_index: None,
+            timeout: None,
+        });
+        let bgra = slice.get_mapped_range().to_vec();
+        staging.unmap();
+
+        // BGRA → RGBA and save for human inspection.
+        let mut rgba_img = vec![0u8; bgra.len()];
+        for (dst, src) in rgba_img.chunks_exact_mut(4).zip(bgra.chunks_exact(4)) {
+            dst[0] = src[2];
+            dst[1] = src[1];
+            dst[2] = src[0];
+            dst[3] = 255;
+        }
+        image::RgbaImage::from_raw(width, height, rgba_img.clone())
+            .expect("image dims")
+            .save("/tmp/offscreen_dsm_ortho.png")
+            .expect("save png");
+        eprintln!("offscreen render saved to /tmp/offscreen_dsm_ortho.png");
+
+        // Sanity: the frame must contain terrain (not all sky) and the terrain
+        // must carry ortho color variety (not the flat procedural ramp, whose
+        // greens/grays are far less diverse than a photo mosaic).
+        let n_px = (width * height) as usize;
+        let sky = rgba_img
+            .chunks_exact(4)
+            .filter(|p| p[2] > p[0] + 30 && p[2] > 120)
+            .count();
+        assert!(
+            sky < n_px * 3 / 4,
+            "frame is mostly sky — camera placement or march broken ({sky}/{n_px})"
+        );
+        let mut distinct = std::collections::HashSet::new();
+        for p in rgba_img.chunks_exact(4) {
+            distinct.insert((p[0] >> 3, p[1] >> 3, p[2] >> 3));
+        }
+        assert!(
+            distinct.len() > 300,
+            "terrain colors too uniform ({}) — ortho albedo likely not applied",
+            distinct.len()
+        );
     }
 }
