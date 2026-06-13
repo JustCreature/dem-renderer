@@ -733,18 +733,29 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
                 let a1h = apply_convergence_1m(lx1, ly1);
                 let fine_uv = vec2<f32>(a1h.x / cam.hm1m_extent_x, a1h.y / cam.hm1m_extent_y);
 
-                // Within smooth_radius: derive normal analytically from bicubic gradient
-                // (C1-continuous → no slope discontinuities at cell boundaries).
-                // Outside: fall back to the pre-computed Rg16Snorm normal texture.
+                // Raw per-texel Sobel normal (sharp; computed on the DSM-over-DTM
+                // composite so building walls and canopy edges keep their steps).
+                let n1_rg = textureSampleLevel(hm1m_normal_tex, hm1m_normal_samp, fine_uv, 0.0).rg;
+                let n1_raw = normalize(vec3<f32>(n1_rg.x, n1_rg.y, sqrt(max(0.0, 1.0 - dot(n1_rg, n1_rg)))));
+
+                // Within smooth_radius: derive a C1-continuous normal from the
+                // bicubic gradient (no slope discontinuities on natural terrain).
+                // BUT Catmull-Rom rounds sharp steps into hills, which turns the
+                // DSM's buildings and trees into melted bumps. Blend back to the
+                // raw normal where the gradient is wall-steep so man-made / canopy
+                // edges stay crisp while gentle terrain stays smooth.
                 let dist_to_cam_hit = length(pos.xy - cam.origin.xy);
                 var n1: vec3<f32>;
                 if dist_to_cam_hit < cam.smooth_radius_m {
                     let hg1 = sample_h_grad_bicubic_1m(a1h.x, a1h.y);
                     // surface normal from gradient: N = normalize(-dh/dlx, -dh/dly, 1)
-                    n1 = normalize(vec3<f32>(-hg1.y, -hg1.z, 1.0));
+                    let n_smooth = normalize(vec3<f32>(-hg1.y, -hg1.z, 1.0));
+                    // world slope magnitude (m/m): ~0.3–0.8 alpine, ≫2 at a wall.
+                    let slope = length(vec2<f32>(hg1.y, hg1.z));
+                    let sharp = smoothstep(1.0, 2.5, slope);
+                    n1 = normalize(mix(n_smooth, n1_raw, sharp));
                 } else {
-                    let n1_rg = textureSampleLevel(hm1m_normal_tex, hm1m_normal_samp, fine_uv, 0.0).rg;
-                    n1 = normalize(vec3<f32>(n1_rg.x, n1_rg.y, sqrt(max(0.0, 1.0 - dot(n1_rg, n1_rg)))));
+                    n1 = n1_raw;
                 }
 
                 let dx1 = cam.hm1m_extent_x / f32(cam.hm1m_cols);
@@ -883,17 +894,26 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
             if oc.weight > 0.0 {
                 let mip_c = min(mip_o, f32(textureNumLevels(ortho_close_tex) - 1u));
                 let s = textureSampleLevel(ortho_close_tex, ortho_close_samp, oc.uv, mip_c);
-                albedo = mix(albedo, s.rgb * 255.0, oc.weight);
-                material = mix(material, s.a, oc.weight);
-                ortho_w = max(ortho_w, oc.weight);
+                // The BEV mosaic fills areas with no photo coverage with pure
+                // black; without a gate those drape as a black hole on the
+                // terrain. Real ortho pixels are essentially never near-black,
+                // so fade the drape out by luminance and let the procedural
+                // colour show through where the mosaic has no data.
+                let cover = smoothstep(2.0, 16.0, dot(s.rgb * 255.0, vec3<f32>(0.299, 0.587, 0.114)));
+                let w = oc.weight * cover;
+                albedo = mix(albedo, s.rgb * 255.0, w);
+                material = mix(material, s.a, w);
+                ortho_w = max(ortho_w, w);
             }
             let ofs = ortho_fine_sample_at(pos.x, pos.y);
             if ofs.weight > 0.0 {
                 let mip_f = min(mip_o, f32(textureNumLevels(ortho_fine_tex) - 1u));
                 let s = textureSampleLevel(ortho_fine_tex, ortho_fine_samp, ofs.uv, mip_f);
-                albedo = mix(albedo, s.rgb * 255.0, ofs.weight);
-                material = mix(material, s.a, ofs.weight);
-                ortho_w = max(ortho_w, ofs.weight);
+                let cover = smoothstep(2.0, 16.0, dot(s.rgb * 255.0, vec3<f32>(0.299, 0.587, 0.114)));
+                let w = ofs.weight * cover;
+                albedo = mix(albedo, s.rgb * 255.0, w);
+                material = mix(material, s.a, w);
+                ortho_w = max(ortho_w, w);
             }
         }
 
