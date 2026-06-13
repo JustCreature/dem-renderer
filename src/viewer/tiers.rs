@@ -1076,6 +1076,122 @@ mod tests {
         assert_eq!((out.rows, out.cols), (100, 100));
     }
 
+    // cross_crs_world_origin / cross_crs_world_origin_and_extent
+
+    /// Projected heightmap with an explicit CRS + origin (1 m/px square).
+    fn crs_proj(proj4: &str, ox: f64, oy: f64, cols: usize, rows: usize) -> Heightmap {
+        let mut hm = proj_hm(rows, cols);
+        hm.crs_proj4 = proj4.to_string();
+        hm.crs_origin_x = ox;
+        hm.crs_origin_y = oy;
+        hm
+    }
+
+    /// Geographic heightmap (deg/px) with an explicit lon/lat origin.
+    fn crs_geo(lon0: f64, lat0: f64, dscale: f64, cols: usize, rows: usize) -> Heightmap {
+        let mut hm = proj_hm(rows, cols);
+        hm.crs_proj4 = "+proj=longlat +datum=WGS84 +no_defs".to_string();
+        hm.crs_origin_x = lon0;
+        hm.crs_origin_y = lat0;
+        hm.origin_lon = lon0;
+        hm.origin_lat = lat0;
+        hm.dx_deg = dscale;
+        hm.dy_deg = dscale;
+        hm.dx_meters = dscale * M_PER_DEG * lat0.to_radians().cos();
+        hm.dy_meters = dscale * M_PER_DEG;
+        hm
+    }
+
+    #[test]
+    fn cross_crs_same_crs_is_pure_offset() {
+        // Identical CRS → no projection: origin is the metre delta of the
+        // top-left corners (X right, Y down), extent is cols·dx / rows·dy, rot 0.
+        let utm = "+proj=utm +zone=32 +datum=WGS84 +units=m +no_defs";
+        let base = crs_proj(utm, 620_000.0, 5_240_000.0, 2000, 2000);
+        let mut hm = crs_proj(utm, 630_000.0, 5_235_000.0, 1000, 800);
+        hm.dx_meters = 2.0;
+        hm.dy_meters = 2.0;
+
+        let (ox, oy) = cross_crs_world_origin(&hm, &base);
+        assert_eq!((ox, oy), (10_000.0, 5_000.0), "metre offset of TL corners");
+
+        let (ox2, oy2, ex, ey, rot) = cross_crs_world_origin_and_extent(&hm, &base);
+        assert_eq!((ox2, oy2), (10_000.0, 5_000.0));
+        assert_eq!(ex, 2000.0, "extent_x = cols·dx");
+        assert_eq!(ey, 1600.0, "extent_y = rows·dy");
+        assert_eq!(rot, 0.0, "no meridian convergence within one CRS");
+    }
+
+    #[test]
+    fn cross_crs_projected_over_geographic_base_is_finite_and_sized() {
+        // 1 km UTM-32N window placed over a geographic (lon/lat) base — the
+        // geographic-base branch (cos-scaled metres + meridian rotation).
+        let base = crs_geo(11.4, 47.4, 0.000_27, 3000, 3000);
+        let hm = crs_proj(
+            "+proj=utm +zone=32 +datum=WGS84 +units=m +no_defs",
+            630_000.0,
+            5_235_000.0,
+            1000,
+            1000,
+        );
+        let (ox, oy, ex, ey, rot) = cross_crs_world_origin_and_extent(&hm, &base);
+        for v in [ox, oy, ex, ey, rot] {
+            assert!(v.is_finite(), "all outputs finite, got {v}");
+        }
+        // 1000 px @ 1 m projected into the base stays ~1 km within ±40 %.
+        assert!((600.0..1400.0).contains(&ex), "extent_x ≈ 1 km, got {ex}");
+        assert!((600.0..1400.0).contains(&ey), "extent_y ≈ 1 km, got {ey}");
+        // Meridian convergence between UTM-32N and lon/lat near 11.4°E is small.
+        assert!(rot.abs() < 0.3, "rotation small, got {rot} rad");
+    }
+
+    #[test]
+    fn cross_crs_projected_over_projected_base_is_finite_and_sized() {
+        // 1 km EPSG:3035 (LAEA) window over a UTM-32N base — the projected-base
+        // branch (from_wgs84 back into the base CRS).
+        let base = crs_proj(
+            "+proj=utm +zone=32 +datum=WGS84 +units=m +no_defs",
+            620_000.0,
+            5_240_000.0,
+            2000,
+            2000,
+        );
+        let hm = crs_proj(
+            "+proj=laea +lat_0=52 +lon_0=10 +x_0=4321000 +y_0=3210000 \
+             +ellps=GRS80 +towgs84=0,0,0 +units=m +no_defs",
+            4_430_000.0,
+            2_695_000.0,
+            1000,
+            1000,
+        );
+        let (ox, oy, ex, ey, rot) = cross_crs_world_origin_and_extent(&hm, &base);
+        for v in [ox, oy, ex, ey, rot] {
+            assert!(v.is_finite(), "all outputs finite, got {v}");
+        }
+        assert!((600.0..1400.0).contains(&ex), "extent_x ≈ 1 km, got {ex}");
+        assert!((600.0..1400.0).contains(&ey), "extent_y ≈ 1 km, got {ey}");
+        assert!(rot.abs() < 0.3, "rotation small, got {rot} rad");
+    }
+
+    #[test]
+    fn cross_crs_world_origin_geographic_base_branch() {
+        // Same geographic-base path for the origin-only helper.
+        let base = crs_geo(11.4, 47.4, 0.000_27, 3000, 3000);
+        let hm = crs_proj(
+            "+proj=utm +zone=32 +datum=WGS84 +units=m +no_defs",
+            630_000.0,
+            5_235_000.0,
+            1000,
+            1000,
+        );
+        let (ox, oy) = cross_crs_world_origin(&hm, &base);
+        // The metre offset is finite and on the order of the inter-origin
+        // distance (tens of km), i.e. the projection actually ran rather than
+        // returning the (0, 0) parse-failure fallback.
+        assert!(ox.is_finite() && oy.is_finite());
+        assert!(ox.abs() > 1.0 || oy.abs() > 1.0, "non-degenerate offset");
+    }
+
     #[test]
     fn cap_crops_oversized_axis_around_camera() {
         // 8200 px wide (over the 8192 limit), 4 px tall (under it).

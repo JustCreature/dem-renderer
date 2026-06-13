@@ -246,6 +246,40 @@ fn declared_gdal_nodata_value_maps_to_nodata() {
 }
 
 #[test]
+fn ifd_overview_levels_enumerates_a_multi_ifd_pyramid() {
+    // The overview cache is a multi-IFD GeoTIFF with no transparency-mask IFDs,
+    // so ifd_overview_levels must return one (ifd, scale) pair per level with
+    // contiguous indices and ascending scales. (The mask-skip branch needs a
+    // real BEV ortho and is covered by the gated local_big_tiles suite.)
+    let dir = tempfile::tempdir().unwrap();
+    let src = dir.path().join("src.tif");
+    let (cols, rows) = (96, 96);
+    write_min_geotiff(
+        &src,
+        cols,
+        rows,
+        (2.0, 2.0),
+        (4_400_000.0, 2_700_000.0),
+        &projected_dir(3035),
+        &ramp(cols, rows),
+    );
+    let cache = ensure_overview_cache(&src, |_, _| {})
+        .expect("cache build")
+        .expect("sub-5m source needs a cache");
+
+    let levels = dem_io::ifd_overview_levels(&cache).expect("walk IFDs");
+    assert!(levels.len() >= 2, "multi-IFD pyramid expected, got {levels:?}");
+    assert_eq!(levels[0].0, 0, "first level is IFD 0");
+    for (i, &(ifd, scale)) in levels.iter().enumerate() {
+        assert_eq!(ifd, i, "no mask IFDs → contiguous indices");
+        assert!(scale > 0.0, "positive pixel scale");
+    }
+    for pair in levels.windows(2) {
+        assert!(pair[1].1 > pair[0].1, "scales increase down the pyramid");
+    }
+}
+
+#[test]
 fn no_cache_built_for_coarse_single_ifd_source() {
     // A ≥20 m/px source can be served directly by base-tier select_ifd, so
     // ensure_overview_cache must short-circuit to None (no wasted .tmp file).
