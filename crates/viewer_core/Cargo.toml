@@ -1,0 +1,22 @@
+[package]
+name = "viewer_core"
+version = "0.1.0"
+edition = "2024"
+
+[lib]
+name = "viewer_core"
+path = "src/lib.rs"
+
+[dependencies]
+dem_io = { path = "../dem_io" }
+terrain = { path = "../terrain" }
+render_gpu = { path = "../render_gpu" }
+wgpu = "29.0.3"
+winit = "0.30"
+glyphon = { git = "https://github.com/grovesNL/glyphon", branch = "main" }
+bytemuck = { version = "1", features = ["derive"] }
+half = { version = "2", features = ["bytemuck"] }
+rayon = "1.12.0"
+# Drop-in `Instant` that uses std natively and `performance.now()` on wasm.
+# Keeps the viewer logic free of the std::time::Instant wasm panic.
+web-time = "1"
