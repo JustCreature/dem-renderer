@@ -1,0 +1,7 @@
+# Scoped to web/ only — the native app keeps building on stable. Nightly + rust-src are
+# required because the SharedArrayBuffer thread pool needs std rebuilt with atomics
+# (-Z build-std, configured in .cargo/config.toml).
+[toolchain]
+channel = "nightly"
+components = ["rust-src"]
+targets = ["wasm32-unknown-unknown"]

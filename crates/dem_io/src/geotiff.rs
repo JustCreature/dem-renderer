@@ -1,4 +1,5 @@
 use std::fs::File;
+use std::io::{Read, Seek};
 use std::path::Path;
 use tiff::decoder::{Decoder, DecodingResult, Limits};
 use tiff::tags::Tag;
@@ -29,7 +30,18 @@ pub fn geotiff_pixel_scale(path: &Path) -> f64 {
 /// via proj4wkt (WKT from tag 34737) or crs-definitions (EPSG fallback).
 /// No hardcoded CRS knowledge — works for any EPSG-registered projection.
 pub fn parse_geotiff_auto(path: &Path) -> Result<Heightmap, DemError> {
-    let crs_data = crs::read_geo_key_data(path)?;
+    let file = File::open(path)?;
+    parse_geotiff_auto_reader(std::io::BufReader::new(file))
+}
+
+/// Reader-based variant of [`parse_geotiff_auto`] for callers that hold the GeoTIFF
+/// bytes in memory rather than on disk (e.g. a browser file picker handing back a
+/// `Cursor<Vec<u8>>`). CRS GeoKeys and pixel data are read from the same decoder so the
+/// byte source is consumed exactly once. Behaviour is identical to the path variant.
+pub fn parse_geotiff_auto_reader<R: Read + Seek>(reader: R) -> Result<Heightmap, DemError> {
+    let mut decoder = Decoder::new(reader)?.with_limits(Limits::unlimited());
+
+    let crs_data = crs::read_geo_key_data_from_decoder(&mut decoder)?;
     let proj4 = crs::proj4_from_keys(&crs_data)?;
     // For files whose CRS is encoded as inline GeoKeys (HMA mosaics, etc.) there
     // is no single EPSG code that captures the projection. We still need a u32
@@ -39,9 +51,6 @@ pub fn parse_geotiff_auto(path: &Path) -> Result<Heightmap, DemError> {
         .projected_epsg
         .or(crs_data.geographic_epsg)
         .unwrap_or(0);
-
-    let file = File::open(path)?;
-    let mut decoder = Decoder::new(std::io::BufReader::new(file))?.with_limits(Limits::unlimited());
 
     let (cols, rows) = decoder.dimensions()?;
 

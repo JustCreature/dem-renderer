@@ -1,5 +1,6 @@
 use std::collections::BTreeMap;
 use std::fs::File;
+use std::io::{Read, Seek};
 use std::path::Path;
 use tiff::decoder::Decoder;
 use tiff::tags::Tag;
@@ -373,7 +374,15 @@ pub(crate) fn read_geo_key_data(path: &Path) -> Result<GeoKeyData, DemError> {
     let file = File::open(path)?;
     let mut decoder =
         Decoder::new(std::io::BufReader::new(file)).map_err(|e| DemError::from(e.to_string()))?;
+    read_geo_key_data_from_decoder(&mut decoder)
+}
 
+/// Reader-based variant of [`read_geo_key_data`]. Lets the GeoTIFF parse path read the
+/// CRS GeoKeys and the image from a single decoder (one byte source) — required for the
+/// in-memory (`Cursor<Vec<u8>>`) wasm path where there is no file to re-open.
+pub(crate) fn read_geo_key_data_from_decoder<R: Read + Seek>(
+    decoder: &mut Decoder<R>,
+) -> Result<GeoKeyData, DemError> {
     let raw = decoder
         .get_tag(Tag::Unknown(34735))
         .and_then(|v| v.into_u32_vec())

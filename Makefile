@@ -66,7 +66,8 @@ generate_windows_icon:
 # compiled from crates.io; rustup ships llvm-tools as a component.
 setup-local:
 	rustup component add llvm-tools-preview
-	cargo install cargo-llvm-cov
+	rustup toolchain install nightly -c rust-src -t wasm32-unknown-unknown
+	cargo install cargo-llvm-cov trunk
 	@command -v jq >/dev/null 2>&1 || brew install jq
 
 # Mirrors the `coverage` job in .github/workflows/main.yml. The `report`
