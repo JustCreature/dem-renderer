@@ -4,6 +4,7 @@ members = [
     "crates/terrain",
     "crates/render_gpu",
     "crates/profiling",
+    "crates/viewer_core",
 ]
 resolver = "2"
 
