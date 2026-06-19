@@ -1,0 +1,33 @@
+# Applies only when cargo/Trunk is invoked from web/ (cargo reads config from the
+# invocation cwd upward). Native builds at the repo root are unaffected.
+
+[target.wasm32-unknown-unknown]
+rustflags = [
+    # SharedArrayBuffer threads: std must be built with atomics + shared memory, and so
+    # must every crate. wasm-bindgen-rayon and std::thread depend on these.
+    "-C", "target-feature=+atomics,+bulk-memory,+mutable-globals",
+    # This toolchain does not auto-configure wasm threading from +atomics, so spell it out:
+    #  --shared-memory + --import-memory + --max-memory  → one SharedArrayBuffer that every
+    #    worker instantiation imports (so threads actually share memory);
+    #  --export=__heap_base → wasm-bindgen needs this global exported to lay out per-thread
+    #    stacks ("failed to find __heap_base for injecting thread id" without it).
+    "-C", "link-arg=--shared-memory",
+    "-C", "link-arg=--import-memory",
+    "-C", "link-arg=--max-memory=4294967296",
+    # wasm-bindgen's threading transform needs the heap base + the TLS symbols exported to
+    # set up per-thread stacks and thread-local storage. Missing any one aborts with
+    # "failed to find <symbol>".
+    "-C", "link-arg=--export=__heap_base",
+    "-C", "link-arg=--export=__wasm_init_tls",
+    "-C", "link-arg=--export=__tls_size",
+    "-C", "link-arg=--export=__tls_align",
+    "-C", "link-arg=--export=__tls_base",
+]
+
+[unstable]
+# Rebuild std (with the atomics target-feature above) instead of using the prebuilt
+# non-atomic std. Requires the nightly toolchain + rust-src component.
+build-std = ["std", "panic_abort"]
+
+[build]
+target = "wasm32-unknown-unknown"

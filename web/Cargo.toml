@@ -1,0 +1,53 @@
+[package]
+name = "dem-renderer-web"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+# cdylib is what wasm-bindgen/Trunk consume. This crate is intentionally OUTSIDE the
+# workspace (see root Cargo.toml `exclude`) so it builds standalone under its own nightly
+# toolchain + build-std config (rust-toolchain.toml / .cargo/config.toml in this dir).
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+# Reuse the existing engine crates unchanged — only their scalar code paths are active on
+# wasm32 (AVX2/NEON are #[cfg]-gated off in `terrain`).
+dem_io = { path = "../crates/dem_io" }
+terrain = { path = "../crates/terrain" }
+render_gpu = { path = "../crates/render_gpu" }
+
+# Keep these in lockstep with the root workspace versions.
+wgpu = "29.0.3"
+winit = "0.30"
+bytemuck = { version = "1", features = ["derive"] }
+half = { version = "2", features = ["bytemuck"] }
+
+# Browser glue.
+wasm-bindgen = "0.2"
+wasm-bindgen-futures = "0.4"
+console_error_panic_hook = "0.1"
+console_log = "1"
+log = "0.4"
+js-sys = "0.3"
+# A native <input type="file"> (declared in index.html) opens the picker through the
+# browser itself — no synthetic .click(), so no user-activation loss (which is why rfd's
+# spawned-future dialog was silently suppressed).
+web-sys = { version = "0.3", features = [
+    "Window", "Document", "Element", "EventTarget",
+    "HtmlInputElement", "FileList", "File", "Blob",
+    "Performance",                          # wall clock for frame dt
+    "HtmlCanvasElement", "HtmlElement",     # make the canvas focusable for keyboard input
+] }
+rayon = "1"                          # rayon::spawn the load onto the pool below
+# no-bundler: Trunk has no JS bundler, so the worker must import the real (hashed) module
+# URL passed through `mainJS` and self-spawn from import.meta.url. Without this feature the
+# default worker does `import('../../..')` (bundler package-resolution), which in a browser
+# resolves to the site root and returns index.html → "Failed to fetch dynamically imported
+# module".
+wasm-bindgen-rayon = { version = "1.3", features = ["no-bundler"] }
+
+# NOTE: getrandom is intentionally absent — `cargo tree` confirms nothing in this crate's
+# wasm dependency graph needs it. If a future dep does, add
+# `getrandom = { version = "0.3", features = ["wasm_js"] }` here and the matching
+# `--cfg getrandom_backend="wasm_js"` rustflag in .cargo/config.toml.

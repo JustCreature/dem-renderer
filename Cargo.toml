@@ -5,6 +5,10 @@ members = [
     "crates/render_gpu",
     "crates/profiling",
 ]
+# The browser PoC builds standalone from web/ under its own nightly toolchain and
+# `build-std` config (see web/.cargo/config.toml). Excluding it keeps native
+# `cargo build --workspace` / CI from ever compiling it for the host target.
+exclude = ["web"]
 resolver = "2"
 
 [package]

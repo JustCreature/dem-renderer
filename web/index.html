@@ -1,0 +1,76 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>DEM Renderer (web)</title>
+
+  <!-- Cross-origin isolation for SharedArrayBuffer. GitHub Pages cannot send COOP/COEP
+         headers, so this service worker re-injects them and reloads once. It also covers
+         local `trunk serve`. Must load before the wasm module. -->
+  <script src="coi-serviceworker.js"></script>
+
+  <!-- The wasm app. The initializer calls initThreadPool() once the module is ready.
+       data-wasm-opt="0" disables the wasm-opt pass: on a SharedArrayBuffer build (shared
+       memory + atomics + bulk-memory) it is slow and can mishandle the threaded module.
+       It is only a size optimization — re-enable later with the threads features on. -->
+  <link data-trunk rel="rust" data-initializer="initializer.js" data-wasm-opt="0" />
+  <link data-trunk rel="copy-file" href="coi-serviceworker.js" />
+
+  <style>
+    html,
+    body {
+      margin: 0;
+      height: 100%;
+      background: #0a0d12;
+      color: #c9d1d9;
+      font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    }
+
+    #open {
+      position: fixed;
+      top: 12px;
+      left: 12px;
+      z-index: 1;
+      padding: 8px 14px;
+      font: inherit;
+      font-size: 13px;
+      color: #e6edf3;
+      background: #1b2330;
+      border: 1px solid #30363d;
+      border-radius: 6px;
+      cursor: pointer;
+    }
+
+    #open:hover {
+      background: #232d3d;
+    }
+
+    #file {
+      display: none;
+    }
+
+    #hint {
+      position: fixed;
+      top: 48px;
+      left: 12px;
+      font-size: 13px;
+      opacity: 0.85;
+      pointer-events: none;
+    }
+
+    canvas {
+      display: block;
+    }
+  </style>
+</head>
+
+<body>
+  <label id="open" for="file">Open GeoTIFF…</label>
+  <input id="file" type="file" accept=".tif,.tiff" />
+  <div id="hint">Pick a geographic GeoTIFF (large tiles are auto-cropped). &nbsp; WASD move
+    · Space/C up/down · Shift boost · left-drag to look.</div>
+</body>
+
+</html>

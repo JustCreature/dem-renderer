@@ -1,0 +1,12 @@
+# Local dev server. The coi-serviceworker in index.html provides cross-origin isolation
+# both here and on GitHub Pages, but setting the headers directly avoids the SW's one-time
+# reload during `trunk serve`.
+[serve]
+headers = { "Cross-Origin-Opener-Policy" = "same-origin", "Cross-Origin-Embedder-Policy" = "require-corp" }
+
+[build]
+# For a GitHub Pages *project* site the app is served from /<repo>/, so build with:
+#   trunk build --release --public-url /<repo-name>/
+# (or uncomment and set it here). Leave unset for local dev / user-or-org root sites.
+# public_url = "/dem-renderer/"
+target = "index.html"
